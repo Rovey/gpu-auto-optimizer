@@ -24,7 +24,7 @@ This project is for users who want better performance-per-watt without manually 
 
 ```bat
 git clone <your-repo-url>
-cd 22_auto-optimize-gpu
+cd <repo-folder>
 install.bat
 ```
 
