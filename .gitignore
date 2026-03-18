@@ -205,3 +205,11 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Project-local runtime artifacts
+optimizer_config.json
+logs/
+
+# Local editor/integration metadata
+.vscode/
+.github/hooks/
