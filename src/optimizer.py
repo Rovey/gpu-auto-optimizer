@@ -97,6 +97,7 @@ class GPUOptimizer:
         self._voltage_offset_mv = 0
         self._power_limit_pct   = 100
         self._baseline_core_mhz = 0
+        self._baseline_mem_mhz  = 0
 
         # Ceiling temperature – use profile limit or GPU's own thermal limit
         self._temp_ceiling = min(
@@ -127,6 +128,7 @@ class GPUOptimizer:
         self._emit("Measuring baseline…", 1, 10)
         baseline = self._measure_under_load(duration_sec=20)
         self._baseline_core_mhz = baseline.core_clock_mhz
+        self._baseline_mem_mhz  = baseline.mem_clock_mhz
         result.baseline_boost_mhz = baseline.boost_clock_mhz or baseline.core_clock_mhz
         result.baseline_temp_c    = baseline.temp_c
         result.baseline_power_w   = baseline.power_w
@@ -287,20 +289,29 @@ class GPUOptimizer:
                 )
                 break
             ok = test.passed
-            m  = self._monitor.read_once()
+
+            # Check clock verification using the UNDER-LOAD snapshots from the
+            # stability test itself (not a post-test idle read).
+            if ok and mid > 0 and test.snapshots:
+                load_clocks = [s.core_clock_mhz for s in test.snapshots
+                               if s.gpu_util_pct >= 80 and s.core_clock_mhz > 0]
+                if load_clocks:
+                    avg_load_clock = sum(load_clocks) / len(load_clocks)
+                    if avg_load_clock <= self._baseline_core_mhz + 10:
+                        m = self._monitor.read_once()
+                        self._emit(
+                            f"Core search: +{mid} MHz applied but clock unchanged "
+                            f"(avg {avg_load_clock:.0f} vs baseline {self._baseline_core_mhz}) "
+                            f"— backend may have failed",
+                            3, 10, m,
+                        )
+                        break
+
+            m = self._monitor.read_once()
             self._emit(
                 f"Core search: testing +{mid} MHz -> {'PASS' if ok else 'FAIL'}",
                 3, 10, m,
             )
-
-            if ok and mid > 0:
-                load_m = self._monitor.read_once()
-                if load_m.core_clock_mhz <= self._baseline_core_mhz + 10:
-                    self._emit(
-                        f"Core search: +{mid} MHz applied but clock unchanged — backend may have failed",
-                        3, 10, load_m,
-                    )
-                    break
 
             if ok:
                 best = mid
@@ -348,20 +359,12 @@ class GPUOptimizer:
                 )
                 break
             ok = test.passed
-            m  = self._monitor.read_once()
+
+            m = self._monitor.read_once()
             self._emit(
                 f"Mem search: testing +{mid} MHz -> {'PASS' if ok else 'FAIL'}",
                 5, 10, m,
             )
-
-            if ok and mid > 0:
-                load_m = self._monitor.read_once()
-                if load_m.mem_clock_mhz <= self._baseline_core_mhz + 10:
-                    self._emit(
-                        f"Mem search: +{mid} MHz applied but clock unchanged — backend may have failed",
-                        5, 10, load_m,
-                    )
-                    break
 
             if ok:
                 best = mid
@@ -520,7 +523,7 @@ class GPUOptimizer:
     def _require_valid_stress_load(self) -> None:
         """Fail fast if no usable stress backend or sustained GPU load is unavailable."""
         preflight = self._stability_test_with_retries(duration_sec=30, retries_on_low_load=2)
-        if preflight.failure_reason and "No usable GPU stress backend" in preflight.failure_reason:
+        if preflight.failure_reason:
             raise RuntimeError(preflight.failure_reason)
         if not preflight.valid_load:
             reason = preflight.load_note or (
