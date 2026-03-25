@@ -1,7 +1,7 @@
 """
 Direct NVIDIA API (NVAPI) backend via ctypes.
-Supports: core clock offsets, memory clock offsets, voltage/VF-curve offsets,
-          power limits, thermal limits.
+Supports: core clock offsets, memory clock offsets, voltage offsets,
+          power limits, thermal limits.  Includes read-back verification.
 
 Works on all NVIDIA consumer GPUs (GeForce GTX/RTX) on Windows.
 Requires administrator privileges and nvapi64.dll to be present (ships with drivers).
@@ -39,18 +39,13 @@ _NVAPI_INITIALIZE              = 0x0150E828
 _NVAPI_UNLOAD                  = 0x0D22BDD7
 _NVAPI_ERROR                   = 0xCEEE8D8C
 _NVAPI_ENUM_PHYSICAL_GPUS      = 0xE5AC921F
-_NVAPI_GPU_GET_FULL_NAME        = 0xCEEE8D8C  # 0xCEEBE66E actually
-_NVAPI_GPU_GET_FULL_NAME2       = 0xCEEBE66E
+_NVAPI_GPU_GET_FULL_NAME        = 0xCEEBE66E
 _NVAPI_GPU_GET_PSTATE20         = 0x6FF81213
 _NVAPI_GPU_SET_PSTATE20         = 0x0FCBC455
 _NVAPI_GPU_GET_THERMAL_SETTINGS = 0xE3640A56
 _NVAPI_GPU_SET_COOLING_INFO     = 0x0D6E6B0E  # unofficial – set thermal limit
 _NVAPI_GPU_GET_COOLER_SETTINGS  = 0xDA141340
 _NVAPI_GPU_SET_COOLER_LEVELS    = 0x891FA0AE
-
-# VF curve (Turing / Ampere / Ada – unofficial)
-_NVAPI_GPU_GET_VFP_CURVE        = 0x5021B616
-_NVAPI_GPU_SET_VFP_CURVE        = 0x4B708361
 
 # ---------------------------------------------------------------------------
 # Domain / P-state constants
@@ -126,28 +121,6 @@ class NV_GPU_PERF_PSTATES20_INFO_V1(ctypes.Structure):
 
 
 _PSTATE20_VERSION_V1 = ctypes.sizeof(NV_GPU_PERF_PSTATES20_INFO_V1) | (1 << 16)
-
-
-# VF curve point (Turing/Ampere unofficial structure)
-class NV_GPU_VFP_CURVE_ENTRY(ctypes.Structure):
-    _pack_   = 4
-    _fields_ = [
-        ("voltage_uV",     ctypes.c_uint32),   # voltage in µV
-        ("freq_kHz",       ctypes.c_uint32),   # frequency in kHz
-    ]
-
-_MAX_VFP_POINTS = 80
-
-class NV_GPU_VFP_CURVE(ctypes.Structure):
-    _pack_   = 4
-    _fields_ = [
-        ("version",        ctypes.c_uint32),
-        ("flags",          ctypes.c_uint32),
-        ("numPoints",      ctypes.c_uint32),
-        ("points",         NV_GPU_VFP_CURVE_ENTRY * _MAX_VFP_POINTS),
-    ]
-
-_VFP_CURVE_VERSION = ctypes.sizeof(NV_GPU_VFP_CURVE) | (1 << 16)
 
 
 # ---------------------------------------------------------------------------
@@ -313,37 +286,6 @@ class _NVAPILoader:
         rc = fn(handle, ctypes.byref(info))
         return rc == NVAPI_OK
 
-    def get_vfp_curve(self, gpu_index: int) -> Optional[NV_GPU_VFP_CURVE]:
-        """Read the voltage-frequency curve (Turing / Ampere / Ada only)."""
-        fn = self._get_func(
-            _NVAPI_GPU_GET_VFP_CURVE, ctypes.c_int32,
-            [ctypes.c_void_p, ctypes.POINTER(NV_GPU_VFP_CURVE)],
-        )
-        if fn is None:
-            return None
-        handle = self.gpu_handle(gpu_index)
-        if handle is None:
-            return None
-
-        curve         = NV_GPU_VFP_CURVE()
-        curve.version = _VFP_CURVE_VERSION
-        rc = fn(handle, ctypes.byref(curve))
-        return curve if rc == NVAPI_OK else None
-
-    def set_vfp_curve(self, gpu_index: int, curve: NV_GPU_VFP_CURVE) -> bool:
-        """Write a modified voltage-frequency curve."""
-        fn = self._get_func(
-            _NVAPI_GPU_SET_VFP_CURVE, ctypes.c_int32,
-            [ctypes.c_void_p, ctypes.POINTER(NV_GPU_VFP_CURVE)],
-        )
-        if fn is None:
-            return False
-        handle = self.gpu_handle(gpu_index)
-        if handle is None:
-            return False
-        rc = fn(handle, ctypes.byref(curve))
-        return rc == NVAPI_OK
-
 
 # ---------------------------------------------------------------------------
 # Backend class
@@ -421,6 +363,19 @@ class NVAPIBackend(GPUBackend):
         else:
             notes.append("NVAPI PState20 set failed (needs admin / OC unlock?)")
 
+        # --- Read-back verification ---
+        verified = False
+        if ok:
+            readback = self.verify(gpu_index)
+            if readback is not None:
+                core_ok = abs(readback["core_offset_khz"] - core_khz) <= 1000
+                mem_ok  = abs(readback["mem_offset_khz"]  - mem_khz)  <= 1000
+                volt_ok = abs(readback["volt_offset_uv"]  - volt_uv)  <= 1000
+                if core_ok and mem_ok and volt_ok:
+                    verified = True
+                else:
+                    notes.append("WARNING: Read-back verification failed")
+
         return AppliedSettings(
             core_offset_mhz   = core_offset_mhz   if ok else 0,
             mem_offset_mhz    = mem_offset_mhz    if ok else 0,
@@ -429,6 +384,7 @@ class NVAPIBackend(GPUBackend):
             thermal_limit_c   = thermal_limit_c,
             success           = ok,
             notes             = "; ".join(notes),
+            verified          = verified,
         )
 
     def reset(self, gpu_index: int) -> bool:
@@ -436,40 +392,19 @@ class NVAPIBackend(GPUBackend):
         return self._loader.set_pstate20(gpu_index, 0, 0, 0)
 
     # ------------------------------------------------------------------
-    # VF-curve undervolt helpers (public for optimizer)
+    # Read-back verification
     # ------------------------------------------------------------------
 
-    def flatten_vf_curve(
-        self,
-        gpu_index:           int,
-        target_freq_mhz:     int,
-        voltage_ceiling_mv:  int,
-    ) -> bool:
-        """
-        Set all VF curve points above `voltage_ceiling_mv` to `target_freq_mhz`.
-        This is the classic "undervolt" that keeps max boost but at lower voltage.
-        e.g. target 1900 MHz at 900 mV instead of 1025 mV.
-        """
-        curve = self._loader.get_vfp_curve(gpu_index)
-        if curve is None:
-            return False
-
-        ceiling_uv = voltage_ceiling_mv * 1000
-        target_khz = target_freq_mhz    * 1000
-
-        for i in range(curve.numPoints):
-            if curve.points[i].voltage_uV >= ceiling_uv:
-                curve.points[i].freq_kHz = target_khz
-
-        return self._loader.set_vfp_curve(gpu_index, curve)
-
-    def get_vf_curve_info(self, gpu_index: int) -> Optional[list[tuple[int, int]]]:
-        """Return list of (voltage_mV, freq_MHz) pairs, or None."""
-        curve = self._loader.get_vfp_curve(gpu_index)
-        if curve is None:
+    def verify(self, gpu_index: int) -> dict | None:
+        """Read back P-state20 and return actual offsets, or None on failure."""
+        if not self.is_available():
             return None
-        return [
-            (curve.points[i].voltage_uV // 1000, curve.points[i].freq_kHz // 1000)
-            for i in range(curve.numPoints)
-            if curve.points[i].freq_kHz > 0
-        ]
+        info = self._loader.get_pstate20(gpu_index)
+        if info is None:
+            return None
+        p0 = info.pstates[0]
+        return {
+            "core_offset_khz": p0.clocks[0].freqDelta_value,
+            "mem_offset_khz":  p0.clocks[1].freqDelta_value,
+            "volt_offset_uv":  p0.baseVoltages[0].voltDelta_value,
+        }
