@@ -42,11 +42,6 @@ def _infer_nvidia_arch(name: str) -> str:
     return "Unknown"
 
 
-def _supports_voltage_curve(arch: str) -> bool:
-    """Turing and newer support the VF (voltage/frequency) curve editor."""
-    return arch in ("Turing", "Ampere", "Ada Lovelace")
-
-
 # ---------------------------------------------------------------------------
 # Data class
 # ---------------------------------------------------------------------------
@@ -82,9 +77,6 @@ def detect_gpus() -> List[GPUInfo]:
 
     if _NVML_AVAILABLE:
         gpus.extend(_detect_nvidia())
-
-    # AMD – placeholder; extend in future
-    # gpus.extend(_detect_amd())
 
     if not gpus:
         # Last-resort: parse nvidia-smi output
@@ -144,7 +136,7 @@ def _detect_nvidia() -> List[GPUInfo]:
                 driver_version=driver,
                 uuid=uuid,
                 supports_oc=True,
-                supports_uv=_supports_voltage_curve(arch),
+                supports_uv=arch in ("Turing", "Ampere", "Ada Lovelace"),
                 supports_mem_oc=True,
                 _handle=handle,
             )
@@ -199,7 +191,7 @@ def _detect_via_nvidia_smi() -> List[GPUInfo]:
                 driver_version=driver,
                 uuid=uuid,
                 supports_oc=True,
-                supports_uv=_supports_voltage_curve(arch),
+                supports_uv=arch in ("Turing", "Ampere", "Ada Lovelace"),
                 supports_mem_oc=True,
             )
             gpus.append(gpu)

@@ -18,6 +18,7 @@ class AppliedSettings:
     thermal_limit_c:   int   = 83
     success:           bool  = True
     notes:             str   = ""
+    verified:          bool  = False
 
 
 class GPUBackend(ABC):
@@ -57,3 +58,8 @@ class GPUBackend(ABC):
 
     def supports_mem_oc(self, gpu_index: int) -> bool:    # noqa: ARG002
         return False
+
+    def verify(self, gpu_index: int) -> dict | None:     # noqa: ARG002
+        """Read back applied offsets. Returns dict with core_offset_khz,
+        mem_offset_khz, volt_offset_uv or None if unsupported."""
+        return None

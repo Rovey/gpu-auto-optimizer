@@ -1,31 +1,29 @@
 """
-GPU stability testing.
+GPU stability testing — CuPy-only with computation correctness verification.
 
-Test strategy (in priority order):
-  1. CuPy matrix multiply loop   (if `cupy` installed)
-  2. FurMark (if present at common paths)
-  3. Unigine Heaven (if present)
-  4. Fallback: instruct user to run any GPU workload while monitoring
+Stress strategy:
+  CuPy matrix multiply loop with preallocated buffers.
+  Periodic correctness checks compare GPU matmul results against CPU (NumPy).
 
-During the test, pynvml / nvidia-smi is polled to detect:
-  - Driver Timeout Detection & Recovery (TDR) – process crash / GPU reappears
+During the test, pynvml is polled to detect:
+  - Driver Timeout Detection & Recovery (TDR) — process crash / GPU reappears
   - Temperature exceeding hard ceiling
   - ECC memory errors (uncorrected)
   - Persistent clock throttling
-  - Significant clock drop  (>150 MHz below expected boost)
+  - Significant clock drop (>150 MHz below expected boost)
 """
 from __future__ import annotations
 
 import os
 import shutil
-import subprocess
-import sys
 import threading
 import time
 import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, List, Optional
+
+import numpy as np
 
 from .monitor import GPUMonitor, GPUMetrics
 
@@ -37,32 +35,34 @@ except ImportError:
 
 
 # ---------------------------------------------------------------------------
-# Known stress-tool paths
+# Correctness verification (pure function — no CuPy dependency)
 # ---------------------------------------------------------------------------
 
-_FURMARK_PATHS = [
-    r"C:\Program Files (x86)\Geeks3D\FurMark\FurMark.exe",
-    r"C:\Program Files\Geeks3D\FurMark\FurMark.exe",
-    r"C:\Program Files (x86)\Geeks3D\FurMark 2\FurMark2.exe",
-]
-
-_HEAVEN_PATHS = [
-    r"C:\Program Files (x86)\Unigine\Heaven Benchmark 4.0\Heaven.exe",
-    r"C:\Program Files\Unigine\Heaven Benchmark 4.0\Heaven.exe",
-    r"C:\Program Files (x86)\Unigine\Superposition Benchmark 1.x\Superposition.exe",
-]
-
-_AUTO_CUPY_ATTEMPTED = False
+def _verify_correctness(cpu_result: np.ndarray, gpu_result: np.ndarray) -> bool:
+    """Compare GPU result against CPU reference. Returns True if they match."""
+    return bool(np.allclose(cpu_result, gpu_result, rtol=1e-3))
 
 
-def _find_stress_tool() -> Optional[Path]:
-    for p in [*_FURMARK_PATHS, *_HEAVEN_PATHS]:
-        if Path(p).exists():
-            return Path(p)
-    winsat = shutil.which("winsat")
-    if winsat:
-        return Path(winsat)
-    return None
+def _check_computation_correctness(cp, device_idx: int) -> bool:
+    """
+    Create 64x64 random float32 matrices on CPU, copy to GPU, compute matmul,
+    copy result back, and verify against CPU reference via _verify_correctness.
+    Returns True if the GPU result matches the CPU result.
+    """
+    # Generate on CPU
+    a_cpu = np.random.random((64, 64)).astype(np.float32)
+    b_cpu = np.random.random((64, 64)).astype(np.float32)
+    cpu_result = a_cpu @ b_cpu
+
+    # Compute on GPU
+    with cp.cuda.Device(device_idx):
+        a_gpu = cp.asarray(a_cpu)
+        b_gpu = cp.asarray(b_cpu)
+        c_gpu = cp.matmul(a_gpu, b_gpu)
+        cp.cuda.Stream.null.synchronize()
+        gpu_result = cp.asnumpy(c_gpu)
+
+    return _verify_correctness(cpu_result, gpu_result)
 
 
 # ---------------------------------------------------------------------------
@@ -71,23 +71,24 @@ def _find_stress_tool() -> Optional[Path]:
 
 @dataclass
 class StabilityResult:
-    passed:           bool  = False
-    duration_sec:     float = 0.0
-    max_temp_c:       float = 0.0
-    min_clock_mhz:    int   = 0
-    max_clock_mhz:    int   = 0
-    avg_clock_mhz:    float = 0.0
-    ecc_errors:       int   = 0
-    tdr_detected:     bool  = False   # driver reset
-    thermal_throttle: bool  = False
-    power_throttle:   bool  = False
-    avg_gpu_util_pct: float = 0.0
-    max_gpu_util_pct: int   = 0
-    valid_load:       bool  = True
-    stress_backend:   str   = ""
-    load_note:        str   = ""
-    failure_reason:   str   = ""
-    snapshots:        List[GPUMetrics] = field(default_factory=list)
+    passed:             bool  = False
+    duration_sec:       float = 0.0
+    max_temp_c:         float = 0.0
+    min_clock_mhz:      int   = 0
+    max_clock_mhz:      int   = 0
+    avg_clock_mhz:      float = 0.0
+    ecc_errors:         int   = 0
+    tdr_detected:       bool  = False   # driver reset
+    thermal_throttle:   bool  = False
+    power_throttle:     bool  = False
+    avg_gpu_util_pct:   float = 0.0
+    max_gpu_util_pct:   int   = 0
+    valid_load:         bool  = True
+    correctness_passed: bool  = True
+    stress_backend:     str   = ""
+    load_note:          str   = ""
+    failure_reason:     str   = ""
+    snapshots:          List[GPUMetrics] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -123,17 +124,23 @@ class StabilityTester:
 
     def run(self, duration_sec: float) -> StabilityResult:
         """
-        Auto-select the best available stress method and run for `duration_sec`.
+        Run CuPy stress workload for `duration_sec`.
         Returns StabilityResult with pass/fail + telemetry.
         """
-        # Try CuPy first (most controllable)
-        cupy_available = self._cupy_available()
+        result = StabilityResult()
+
+        # CuPy is the only supported backend — fail immediately if unavailable.
+        if not self._cupy_available():
+            result.passed = False
+            result.failure_reason = (
+                "CuPy is required but not available. "
+                "Run the installer to set up CuPy with the correct CUDA version."
+            )
+            return result
 
         monitor   = GPUMonitor(self._idx, poll_interval_sec=0.4)
-        result    = StabilityResult()
         snapshots: List[GPUMetrics] = []
         abort_event = threading.Event()
-        backend_used = ""
 
         # --- Monitoring thread ----------------------------------------
         def _monitor_thread() -> None:
@@ -143,7 +150,7 @@ class StabilityTester:
 
                 if m.temp_c >= self._ceil:
                     result.failure_reason  = (
-                        f"Temperature ceiling exceeded: {m.temp_c:.0f} °C ≥ {self._ceil} °C"
+                        f"Temperature ceiling exceeded: {m.temp_c:.0f} \u00b0C \u2265 {self._ceil} \u00b0C"
                     )
                     result.tdr_detected    = False
                     abort_event.set()
@@ -159,29 +166,10 @@ class StabilityTester:
         mon_thread = threading.Thread(target=_monitor_thread, daemon=True)
         mon_thread.start()
 
-        # --- Stress workload -----------------------------------------
+        # --- Stress workload (CuPy only) ------------------------------
         start = time.time()
         try:
-            if cupy_available:
-                backend_used = "cupy"
-                try:
-                    self._stress_cupy(duration_sec, abort_event, start)
-                except Exception:
-                    # CuPy import may succeed while runtime DLLs are missing.
-                    # Fall back to external tools instead of failing the test.
-                    tool = _find_stress_tool()
-                    if tool:
-                        backend_used = tool.name.lower()
-                        self._stress_external(tool, duration_sec, abort_event)
-                    else:
-                        self._stress_fallback(duration_sec, abort_event, start)
-            else:
-                tool = _find_stress_tool()
-                if tool:
-                    backend_used = tool.name.lower()
-                    self._stress_external(tool, duration_sec, abort_event)
-                else:
-                    self._stress_fallback(duration_sec, abort_event, start)
+            self._stress_cupy(duration_sec, abort_event, start, result)
         except Exception as exc:
             if not result.failure_reason:
                 result.failure_reason = f"Stress workload exception: {exc}"
@@ -193,7 +181,7 @@ class StabilityTester:
 
         # --- Aggregate results ----------------------------------------
         result.duration_sec = elapsed
-        result.stress_backend = backend_used
+        result.stress_backend = "cupy"
         result.snapshots    = snapshots
 
         if snapshots:
@@ -243,114 +231,40 @@ class StabilityTester:
             not result.tdr_detected
             and not result.failure_reason
             and result.ecc_errors == 0
+            and result.correctness_passed
             and elapsed >= duration_sec * 0.9   # completed at least 90 % of duration
         )
         return result
 
     # ------------------------------------------------------------------
-    # Stress backends
+    # Stress backend
     # ------------------------------------------------------------------
 
     def _cupy_available(self) -> bool:
-        global _AUTO_CUPY_ATTEMPTED
         self._configure_cuda_path_env()
 
-        def _probe() -> bool:
-            try:
-                with warnings.catch_warnings():
-                    warnings.filterwarnings(
-                        "ignore",
-                        message="CUDA path could not be detected.*",
-                        category=UserWarning,
-                    )
-                    import cupy as cp
-                with cp.cuda.Device(self._idx):
-                    x = cp.arange(16, dtype=cp.float32)
-                    _ = x * x
-                    cp.cuda.Stream.null.synchronize()
-                return True
-            except Exception:
-                return False
-
-        if _probe():
-            return True
-
-        if not _AUTO_CUPY_ATTEMPTED:
-            _AUTO_CUPY_ATTEMPTED = True
-            self._attempt_auto_install_cupy()
-            return _probe()
-
-        return False
-
-    def _detect_cuda_major_from_driver(self) -> Optional[str]:
         try:
-            out = subprocess.check_output(
-                ["nvidia-smi", "-q"],
-                stderr=subprocess.DEVNULL,
-                text=True,
-                encoding="utf-8",
-                errors="ignore",
-            )
-        except Exception:
-            return None
-
-        for line in out.splitlines():
-            if "CUDA Version" in line:
-                val = line.split(":", 1)[-1].strip()
-                major = val.split(".", 1)[0]
-                if major.isdigit():
-                    return major
-        return None
-
-    def _attempt_auto_install_cupy(self) -> None:
-        cuda_major = self._detect_cuda_major_from_driver()
-        pkgs: List[str] = []
-        if cuda_major == "13":
-            pkgs = ["cupy-cuda13x", "cupy-cuda12x"]
-        elif cuda_major == "12":
-            pkgs = ["cupy-cuda12x"]
-        elif cuda_major == "11":
-            pkgs = ["cupy-cuda11x"]
-
-        if not pkgs:
-            return
-
-        try:
-            from rich.console import Console
-            Console().print(
-                f"[yellow]CuPy not found. Auto-installing a compatible package for CUDA {cuda_major}.x...[/yellow]"
-            )
-        except Exception:
-            print("CuPy not found. Auto-installing a compatible package...")
-
-        for pkg in pkgs:
-            if self._pip_install(pkg):
-                # CuPy may require additional NVIDIA runtime DLL packages
-                # (varies by wheel/platform).
-                self._pip_install("nvidia-cuda-nvrtc")
-                self._pip_install("nvidia-curand")
-                self._pip_install("nvidia-cublas")
-                return
-
-    def _pip_install(self, package: str) -> bool:
-        base = [sys.executable, "-m", "pip", "install", package]
-        for cmd in (base, [*base[:4], "--break-system-packages", *base[4:]]):
-            try:
-                subprocess.check_call(
-                    cmd,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
+            with warnings.catch_warnings():
+                warnings.filterwarnings(
+                    "ignore",
+                    message="CUDA path could not be detected.*",
+                    category=UserWarning,
                 )
-                return True
-            except Exception:
-                continue
-        return False
+                import cupy as cp
+            with cp.cuda.Device(self._idx):
+                x = cp.arange(16, dtype=cp.float32)
+                _ = x * x
+                cp.cuda.Stream.null.synchronize()
+            return True
+        except Exception:
+            return False
 
     def _stress_cupy(
         self,
         duration_sec: float,
         abort: threading.Event,
         start:  float,
+        result: StabilityResult,
     ) -> None:
         with warnings.catch_warnings():
             warnings.filterwarnings(
@@ -390,12 +304,27 @@ class StabilityTester:
                 raise RuntimeError("Unable to allocate stable CuPy stress buffers")
 
             a, b, c = _alloc_gemm_buffers()
+            last_correctness_check = start
             while not abort.is_set() and (time.time() - start) < duration_sec:
                 # Run multiple GEMMs per cycle with preallocated output.
                 cp.matmul(a, b, out=c)
                 cp.matmul(c, a, out=b)
                 cp.cuda.Stream.null.synchronize()
+
                 elapsed = time.time() - start
+
+                # Periodic correctness check every 5 seconds
+                if elapsed - (last_correctness_check - start) >= 5.0:
+                    last_correctness_check = time.time()
+                    if not _check_computation_correctness(cp, self._idx):
+                        result.correctness_passed = False
+                        result.failure_reason = (
+                            "GPU computation correctness check failed "
+                            "(memory instability detected)"
+                        )
+                        abort.set()
+                        return
+
                 if self._cb:
                     mon = GPUMonitor(self._idx)
                     self._cb(elapsed, duration_sec, mon.read_once())
@@ -425,70 +354,3 @@ class StabilityTester:
             if (c / "bin").exists():
                 os.environ["CUDA_PATH"] = str(c)
                 return
-
-    def _stress_external(
-        self,
-        tool:         Path,
-        duration_sec: float,
-        abort:        threading.Event,
-    ) -> None:
-        """Launch an external tool (FurMark / Heaven) and wait."""
-        name = tool.name.lower()
-        if "furmark" in name:
-            # FurMark CLI: /nogui /msaa=8 /xtreme_burning /benchmark /max_time=N
-            max_ms  = int(duration_sec * 1000)
-            cmd     = [str(tool), "/nogui", f"/max_time={max_ms}",
-                       "/xtreme_burning", "/width=1280", "/height=720"]
-        elif "winsat" in name:
-            cmd = [str(tool), "dwm"]
-        else:
-            cmd     = [str(tool)]
-
-        proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        deadline = time.time() + duration_sec
-        while time.time() < deadline and not abort.is_set():
-            if proc.poll() is not None:
-                if "winsat" in name:
-                    try:
-                        proc = subprocess.Popen(
-                            cmd,
-                            stdout=subprocess.DEVNULL,
-                            stderr=subprocess.DEVNULL,
-                        )
-                    except Exception:
-                        break
-                else:
-                    break
-            time.sleep(0.5)
-        if proc.poll() is None:
-            proc.terminate()
-            try:
-                proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-
-    def _stress_fallback(
-        self,
-        duration_sec: float,
-        abort:        threading.Event,
-        start:        float,
-    ) -> None:
-        """
-        No external tool available and no working CuPy runtime.
-        Optimisation should not proceed without validated stress load.
-        """
-        try:
-            from rich.console import Console
-            Console().print(
-                "\n[red]No usable GPU stress backend available, including built-in WinSAT. "
-                "Aborting because optimisation requires validated GPU load.[/red]"
-            )
-        except ImportError:
-            print(
-                "No usable GPU stress backend available, including built-in WinSAT."
-            )
-
-        raise RuntimeError(
-            "No usable GPU stress backend available. "
-            "Automatic backend setup failed."
-        )

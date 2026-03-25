@@ -22,7 +22,9 @@ Each step is validated by StabilityTester; failure → roll back + halve step.
 """
 from __future__ import annotations
 
+import threading
 import time
+import warnings
 from dataclasses import dataclass, field
 from typing import Callable, List, Optional, Tuple
 
@@ -33,7 +35,6 @@ from .stability import StabilityTester, StabilityResult
 from .backends.base import GPUBackend, AppliedSettings
 from .backends.nvidia_smi import NvidiaSMIBackend
 from .backends.nvapi import NVAPIBackend
-from .backends.afterburner import AfterburnerBackend
 
 
 # ---------------------------------------------------------------------------
@@ -44,7 +45,6 @@ def _best_backend(gpu: GPUInfo) -> GPUBackend:
     """Return the highest-priority available backend for this GPU."""
     candidates: List[GPUBackend] = [
         NVAPIBackend(),
-        AfterburnerBackend(),
         NvidiaSMIBackend(),
     ]
     available = [b for b in candidates if b.is_available()]
@@ -88,11 +88,16 @@ class GPUOptimizer:
         self._monitor  = GPUMonitor(gpu.index, poll_interval_sec=0.3)
         self._progress = progress_cb
 
+        # Cancel mechanism
+        self._cancel_event = threading.Event()
+
         # Working state
         self._core_offset_mhz   = 0
         self._mem_offset_mhz    = 0
         self._voltage_offset_mv = 0
         self._power_limit_pct   = 100
+        self._baseline_core_mhz = 0
+        self._baseline_mem_mhz  = 0
 
         # Ceiling temperature – use profile limit or GPU's own thermal limit
         self._temp_ceiling = min(
@@ -101,8 +106,12 @@ class GPUOptimizer:
         )
 
     # ------------------------------------------------------------------
-    # Public entry point
+    # Public API
     # ------------------------------------------------------------------
+
+    def cancel(self) -> None:
+        """Signal the optimizer to stop at the next safe checkpoint."""
+        self._cancel_event.set()
 
     def run(self) -> GPUOptimizationResult:
         result = GPUOptimizationResult(
@@ -117,7 +126,9 @@ class GPUOptimizer:
 
         # --- Baseline ---------------------------------------------------
         self._emit("Measuring baseline…", 1, 10)
-        baseline = self._measure(duration_sec=20)
+        baseline = self._measure_under_load(duration_sec=20)
+        self._baseline_core_mhz = baseline.core_clock_mhz
+        self._baseline_mem_mhz  = baseline.mem_clock_mhz
         result.baseline_boost_mhz = baseline.boost_clock_mhz or baseline.core_clock_mhz
         result.baseline_temp_c    = baseline.temp_c
         result.baseline_power_w   = baseline.power_w
@@ -133,7 +144,8 @@ class GPUOptimizer:
         # --- Final verification -----------------------------------------
         self._emit("Final verification…", 9, 10)
         self._apply()
-        final = self._stability_test_with_retries(duration_sec=self._profile["test_duration_sec"])
+        final_dur = max(300, self._profile["test_duration_sec"] * 2)
+        final = self._stability_test_with_retries(duration_sec=final_dur)
         result.stability_passed = final.passed or not final.valid_load
         if final.valid_load and not final.passed:
             # Roll back one step on final fail
@@ -150,7 +162,7 @@ class GPUOptimizer:
                 "Final verification was inconclusive due to low GPU load."
             ).strip()
 
-        achieved = self._measure(duration_sec=15)
+        achieved = self._measure_under_load(duration_sec=20)
         result.achieved_boost_mhz = achieved.boost_clock_mhz or achieved.core_clock_mhz
         result.achieved_temp_c    = achieved.temp_c
         result.achieved_power_w   = achieved.power_w
@@ -252,9 +264,12 @@ class GPUOptimizer:
         lo, hi    = 0, limit
         best      = 0
         passes    = self._profile["test_passes"]
-        test_dur  = max(20, self._profile["test_duration_sec"] // passes)
+        test_dur  = max(30, self._profile["test_duration_sec"] // passes)
 
         while lo <= hi:
+            if self._cancel_event.is_set():
+                break
+
             mid = (lo + hi) // 2
             # Round to nearest 25 MHz
             mid = (mid // 25) * 25
@@ -274,7 +289,25 @@ class GPUOptimizer:
                 )
                 break
             ok = test.passed
-            m  = self._monitor.read_once()
+
+            # Check clock verification using the UNDER-LOAD snapshots from the
+            # stability test itself (not a post-test idle read).
+            if ok and mid > 0 and test.snapshots:
+                load_clocks = [s.core_clock_mhz for s in test.snapshots
+                               if s.gpu_util_pct >= 80 and s.core_clock_mhz > 0]
+                if load_clocks:
+                    avg_load_clock = sum(load_clocks) / len(load_clocks)
+                    if avg_load_clock <= self._baseline_core_mhz + 10:
+                        m = self._monitor.read_once()
+                        self._emit(
+                            f"Core search: +{mid} MHz applied but clock unchanged "
+                            f"(avg {avg_load_clock:.0f} vs baseline {self._baseline_core_mhz}) "
+                            f"— backend may have failed",
+                            3, 10, m,
+                        )
+                        break
+
+            m = self._monitor.read_once()
             self._emit(
                 f"Core search: testing +{mid} MHz -> {'PASS' if ok else 'FAIL'}",
                 3, 10, m,
@@ -300,10 +333,13 @@ class GPUOptimizer:
 
         lo, hi   = 0, limit
         best     = 0
-        test_dur = max(15, self._profile["test_duration_sec"] // self._profile["test_passes"])
+        test_dur = max(30, self._profile["test_duration_sec"] // self._profile["test_passes"])
         step     = 100  # memory steps in 100 MHz
 
         while lo <= hi:
+            if self._cancel_event.is_set():
+                break
+
             mid = ((lo + hi) // 2 // step) * step
             if mid == lo and lo > 0:
                 mid = lo
@@ -323,7 +359,8 @@ class GPUOptimizer:
                 )
                 break
             ok = test.passed
-            m  = self._monitor.read_once()
+
+            m = self._monitor.read_once()
             self._emit(
                 f"Mem search: testing +{mid} MHz -> {'PASS' if ok else 'FAIL'}",
                 5, 10, m,
@@ -349,7 +386,7 @@ class GPUOptimizer:
         if limit >= 0:
             return 0
 
-        test_dur = max(20, self._profile["test_duration_sec"] // self._profile["test_passes"])
+        test_dur = max(30, self._profile["test_duration_sec"] // self._profile["test_passes"])
         step     = 25   # 25 mV steps
         # Search in discrete 25 mV step indices to avoid negative-floor rounding
         # traps (e.g. repeatedly choosing -125 mV forever).
@@ -357,6 +394,9 @@ class GPUOptimizer:
         best           = 0
 
         while lo_idx <= hi_idx:
+            if self._cancel_event.is_set():
+                break
+
             mid_idx = (lo_idx + hi_idx) // 2
             mid = mid_idx * step
 
@@ -405,6 +445,8 @@ class GPUOptimizer:
         step     = 5
 
         for reduction_pct in range(step, abs(min_delta) + step, step):
+            if self._cancel_event.is_set():
+                break
             candidate = best_pct - reduction_pct
             self._power_limit_pct = candidate
             self._apply()
@@ -434,7 +476,7 @@ class GPUOptimizer:
 
     def _apply(self) -> AppliedSettings:
         """Apply current working settings via the chosen backend."""
-        return self._backend.apply(
+        result = self._backend.apply(
             gpu_index         = self._gpu.index,
             core_offset_mhz   = self._core_offset_mhz,
             mem_offset_mhz    = self._mem_offset_mhz,
@@ -442,6 +484,18 @@ class GPUOptimizer:
             power_limit_pct   = self._power_limit_pct,
             thermal_limit_c   = self._profile["thermal_limit_max_c"],
         )
+        if not result.success:
+            raise RuntimeError(f"Backend apply failed: {result.notes}")
+        has_oc_offsets = (
+            self._core_offset_mhz != 0
+            or self._mem_offset_mhz != 0
+            or self._voltage_offset_mv != 0
+        )
+        if has_oc_offsets and not result.verified:
+            raise RuntimeError(
+                f"Settings verification failed — offsets may not have been applied. {result.notes}"
+            )
+        return result
 
     def _stability_test(self, duration_sec: float) -> StabilityResult:
         tester = StabilityTester(
@@ -469,7 +523,7 @@ class GPUOptimizer:
     def _require_valid_stress_load(self) -> None:
         """Fail fast if no usable stress backend or sustained GPU load is unavailable."""
         preflight = self._stability_test_with_retries(duration_sec=30, retries_on_low_load=2)
-        if preflight.failure_reason and "No usable GPU stress backend" in preflight.failure_reason:
+        if preflight.failure_reason:
             raise RuntimeError(preflight.failure_reason)
         if not preflight.valid_load:
             reason = preflight.load_note or (
@@ -479,6 +533,40 @@ class GPUOptimizer:
 
     def _measure(self, duration_sec: float) -> GPUMetrics:
         return sample_average(self._monitor, duration_sec)
+
+    def _measure_under_load(self, duration_sec: float) -> GPUMetrics:
+        """Measure GPU metrics while running a stress workload."""
+        abort = threading.Event()
+
+        def _stress_worker():
+            try:
+                with warnings.catch_warnings():
+                    warnings.filterwarnings(
+                        "ignore",
+                        message="CUDA path could not be detected.*",
+                        category=UserWarning,
+                    )
+                    import cupy as cp
+                with cp.cuda.Device(self._gpu.index):
+                    a = cp.random.random((4096, 4096), dtype=cp.float32)
+                    b = cp.random.random((4096, 4096), dtype=cp.float32)
+                    c = cp.empty((4096, 4096), dtype=cp.float32)
+                    while not abort.is_set():
+                        cp.matmul(a, b, out=c)
+                        cp.cuda.Stream.null.synchronize()
+            except Exception:
+                pass
+
+        t = threading.Thread(target=_stress_worker, daemon=True)
+        t.start()
+        time.sleep(10)  # thermal ramp-up
+
+        from .monitor import sample_average_under_load
+        result = sample_average_under_load(self._monitor, duration_sec)
+
+        abort.set()
+        t.join(timeout=5)
+        return result
 
     def _emit(
         self,
@@ -504,19 +592,3 @@ class GPUOptimizer:
         r.stability_passed   = False
         r.notes              = "Partial: optimization was interrupted before final verification."
         return r
-
-
-# ---------------------------------------------------------------------------
-# Multi-GPU helper
-# ---------------------------------------------------------------------------
-
-def optimize_all_gpus(
-    gpus:        List[GPUInfo],
-    risk_level:  RiskLevel,
-    progress_cb: Optional[ProgressCB] = None,
-) -> List[GPUOptimizationResult]:
-    results = []
-    for gpu in gpus:
-        opt = GPUOptimizer(gpu, risk_level, progress_cb)
-        results.append(opt.run())
-    return results

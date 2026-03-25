@@ -7,7 +7,8 @@ import json
 import os
 from dataclasses import dataclass, field, asdict
 from enum import Enum
-from typing import Optional
+from shutil import copy2
+from dataclasses import fields as dataclass_fields
 
 
 # ---------------------------------------------------------------------------
@@ -136,42 +137,116 @@ class GPUOptimizationResult:
 
 
 @dataclass
+class BootApplyState:
+    consecutive_failures:  int   = 0
+    disabled:              bool  = False
+    gpu_uuid:              str   = ""
+    driver_version:        str   = ""
+    last_apply_time:       str   = ""
+    last_apply_result:     str   = ""
+    boot_log:              list  = field(default_factory=list)
+
+
+@dataclass
 class UserConfig:
     risk_level:            str   = RiskLevel.BALANCED.value
     auto_apply_on_boot:    bool  = False
-    stability_test_tool:   str   = "auto"   # auto | furmark | heaven | cupy | none
     save_profiles:         bool  = True
     max_temp_limit_c:      int   = 90       # hard safety ceiling
-    fan_curve_enabled:     bool  = False
+    boot_apply:            BootApplyState = field(default_factory=BootApplyState)
     per_gpu_results:       dict  = field(default_factory=dict)
+
+
+# ---------------------------------------------------------------------------
+# Application directories
+# ---------------------------------------------------------------------------
+
+_OLD_CONFIG_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "optimizer_config.json",
+)
+
+
+def get_app_dir() -> str:
+    """Return the root application data directory (%LOCALAPPDATA%/GPUOptimizer)."""
+    return os.path.join(os.environ.get("LOCALAPPDATA", ""), "GPUOptimizer")
+
+
+def get_config_dir() -> str:
+    """Return the configuration directory."""
+    return os.path.join(get_app_dir(), "config")
+
+
+def get_log_dir() -> str:
+    """Return the log directory."""
+    return os.path.join(get_app_dir(), "logs")
+
+
+def _default_config_path() -> str:
+    return os.path.join(get_config_dir(), "optimizer_config.json")
 
 
 # ---------------------------------------------------------------------------
 # Persistence
 # ---------------------------------------------------------------------------
 
-_CONFIG_PATH = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "optimizer_config.json",
-)
+_BOOT_LOG_MAX = 20
 
 
-def load_config() -> UserConfig:
-    if os.path.exists(_CONFIG_PATH):
+def load_config(path: str = "") -> UserConfig:
+    """Load a UserConfig from *path* (defaults to the standard config location).
+
+    Returns a default ``UserConfig`` when the file does not exist or cannot be
+    parsed.
+    """
+    path = path or _default_config_path()
+    if os.path.exists(path):
         try:
-            with open(_CONFIG_PATH, "r", encoding="utf-8") as fh:
+            with open(path, "r", encoding="utf-8") as fh:
                 data = json.load(fh)
-            return UserConfig(**data)
+            # Strip unknown keys (e.g. removed fields from legacy configs)
+            valid_user_fields = {f.name for f in dataclass_fields(UserConfig)}
+            boot_raw = data.pop("boot_apply", None)
+            data = {k: v for k, v in data.items() if k in valid_user_fields}
+
+            if isinstance(boot_raw, dict):
+                valid_boot_fields = {f.name for f in dataclass_fields(BootApplyState)}
+                boot_raw = {k: v for k, v in boot_raw.items() if k in valid_boot_fields}
+                cfg = UserConfig(**data, boot_apply=BootApplyState(**boot_raw))
+            else:
+                cfg = UserConfig(**data)
+            return cfg
         except Exception:
             pass
     return UserConfig()
 
 
-def save_config(cfg: UserConfig) -> None:
-    with open(_CONFIG_PATH, "w", encoding="utf-8") as fh:
+def save_config(cfg: UserConfig, path: str = "") -> None:
+    """Serialize *cfg* to JSON at *path* (defaults to the standard config location)."""
+    path = path or _default_config_path()
+    # Ensure parent directory exists
+    parent = os.path.dirname(path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    # Trim boot log to last N entries
+    cfg.boot_apply.boot_log = cfg.boot_apply.boot_log[-_BOOT_LOG_MAX:]
+    with open(path, "w", encoding="utf-8") as fh:
         json.dump(asdict(cfg), fh, indent=2)
 
 
-def save_result(cfg: UserConfig, result: GPUOptimizationResult) -> None:
+def save_result(cfg: UserConfig, result: GPUOptimizationResult, path: str = "") -> None:
+    """Persist *result* into *cfg* and write to disk."""
     cfg.per_gpu_results[result.gpu_name] = asdict(result)
-    save_config(cfg)
+    save_config(cfg, path)
+
+
+# ---------------------------------------------------------------------------
+# Migration
+# ---------------------------------------------------------------------------
+
+def migrate_config_if_needed() -> None:
+    """Copy the legacy project-root config to the new location if needed."""
+    new_path = _default_config_path()
+    if os.path.exists(_OLD_CONFIG_PATH) and not os.path.exists(new_path):
+        os.makedirs(os.path.dirname(new_path), exist_ok=True)
+        copy2(_OLD_CONFIG_PATH, new_path)
