@@ -59,3 +59,20 @@ def test_save_and_load_roundtrip(tmp_path):
     assert loaded.risk_level == "performance"
     assert loaded.auto_apply_on_boot is True
     assert loaded.per_gpu_results["GPU0"]["core_offset_mhz"] == 100
+
+def test_load_legacy_config_with_removed_fields(tmp_path):
+    """Legacy configs with stability_test_tool/fan_curve_enabled should load without error."""
+    path = tmp_path / "config.json"
+    legacy_data = {
+        "risk_level": "balanced",
+        "auto_apply_on_boot": False,
+        "stability_test_tool": "auto",
+        "fan_curve_enabled": False,
+        "save_profiles": True,
+        "max_temp_limit_c": 90,
+        "per_gpu_results": {"MyGPU": {"core_offset_mhz": 50}},
+    }
+    path.write_text(json.dumps(legacy_data))
+    cfg = load_config(str(path))
+    assert cfg.risk_level == "balanced"
+    assert cfg.per_gpu_results["MyGPU"]["core_offset_mhz"] == 50

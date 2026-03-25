@@ -8,7 +8,7 @@ import os
 from dataclasses import dataclass, field, asdict
 from enum import Enum
 from shutil import copy2
-from typing import Optional
+from dataclasses import fields as dataclass_fields
 
 
 # ---------------------------------------------------------------------------
@@ -204,10 +204,14 @@ def load_config(path: str = "") -> UserConfig:
         try:
             with open(path, "r", encoding="utf-8") as fh:
                 data = json.load(fh)
-            # Reconstruct nested BootApplyState from dict
+            # Strip unknown keys (e.g. removed fields from legacy configs)
+            valid_user_fields = {f.name for f in dataclass_fields(UserConfig)}
             boot_raw = data.pop("boot_apply", None)
+            data = {k: v for k, v in data.items() if k in valid_user_fields}
+
             if isinstance(boot_raw, dict):
-                boot_raw.get("boot_log", [])  # ensure key exists
+                valid_boot_fields = {f.name for f in dataclass_fields(BootApplyState)}
+                boot_raw = {k: v for k, v in boot_raw.items() if k in valid_boot_fields}
                 cfg = UserConfig(**data, boot_apply=BootApplyState(**boot_raw))
             else:
                 cfg = UserConfig(**data)
