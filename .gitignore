@@ -213,3 +213,4 @@ logs/
 # Local editor/integration metadata
 .vscode/
 .github/hooks/
+.claude
