@@ -56,6 +56,9 @@ class GPUMetrics:
     is_thermal_limit:  bool  = False
     is_power_limit:    bool  = False
 
+    # Sampling metadata
+    samples_used:      int   = 0
+
 
 # Throttle-reason bit flags (pynvml constants)
 _THROTTLE_THERMAL = 0x0000000000000008
@@ -277,4 +280,50 @@ def sample_average(monitor: GPUMonitor, duration_sec: float) -> GPUMetrics:
     ref.is_throttling   = any(s.is_throttling for s in samples)
     ref.is_thermal_limit = any(s.is_thermal_limit for s in samples)
     ref.is_power_limit   = any(s.is_power_limit  for s in samples)
+    return ref
+
+
+# ---------------------------------------------------------------------------
+# Convenience: sample under load only
+# ---------------------------------------------------------------------------
+
+def sample_average_under_load(
+    monitor: GPUMonitor,
+    duration_sec: float,
+    min_util_pct: int = 80,
+) -> GPUMetrics:
+    """
+    Poll monitor for `duration_sec`, discard samples where gpu_util_pct < min_util_pct,
+    return averaged metrics from only the under-load samples.
+    If no samples meet the threshold, return the raw average with samples_used=0.
+    """
+    all_samples: list[GPUMetrics] = []
+    deadline = time.time() + duration_sec
+    while time.time() < deadline:
+        m = monitor.read_once()
+        all_samples.append(m)
+        time.sleep(0.5)
+
+    if not all_samples:
+        return GPUMetrics(gpu_index=monitor._index)
+
+    qualifying = [s for s in all_samples if s.gpu_util_pct >= min_util_pct]
+    samples = qualifying if qualifying else all_samples
+
+    def _avg(attr: str) -> float:
+        vals = [getattr(s, attr) for s in samples]
+        return sum(vals) / len(vals)
+
+    ref = samples[-1]
+    ref.core_clock_mhz = int(_avg("core_clock_mhz"))
+    ref.mem_clock_mhz = int(_avg("mem_clock_mhz"))
+    ref.temp_c = _avg("temp_c")
+    ref.power_w = _avg("power_w")
+    ref.fan_speed_pct = int(_avg("fan_speed_pct"))
+    ref.gpu_util_pct = int(_avg("gpu_util_pct"))
+    ref.ecc_errors = max(s.ecc_errors for s in samples)
+    ref.is_throttling = any(s.is_throttling for s in samples)
+    ref.is_thermal_limit = any(s.is_thermal_limit for s in samples)
+    ref.is_power_limit = any(s.is_power_limit for s in samples)
+    ref.samples_used = len(qualifying)
     return ref
