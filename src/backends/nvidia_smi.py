@@ -65,8 +65,7 @@ class NvidiaSMIBackend(GPUBackend):
         applied = AppliedSettings()
         notes   = []
 
-        # --- Power limit via pynvml (preferred) or nvidia-smi -----------
-        power_applied = False
+        # --- Power limit via pynvml ---
         if _NVML:
             try:
                 pynvml.nvmlInit()
@@ -80,20 +79,14 @@ class NvidiaSMIBackend(GPUBackend):
 
                 pynvml.nvmlDeviceSetPowerManagementLimit(h, target_mw)
                 applied.power_limit_pct = power_limit_pct
-                power_applied = True
+                applied.verified = True
                 notes.append(f"Power limit set to {target_mw // 1000} W via pynvml")
             except Exception as exc:
                 notes.append(f"pynvml power limit failed: {exc}")
-
-        if not power_applied:
-            # Try nvidia-smi -pl (requires admin, but worth trying)
-            rc, _, err = _run_smi(f"-i {gpu_index}", f"-pl {power_limit_pct}")
-            if rc == 0:
-                applied.power_limit_pct = power_limit_pct
-                notes.append("Power limit set via nvidia-smi")
-            else:
-                notes.append(f"nvidia-smi power limit skipped ({err})")
                 applied.success = False
+        else:
+            notes.append("pynvml not available, cannot set power limit")
+            applied.success = False
 
         applied.thermal_limit_c   = thermal_limit_c   # tracked, may not apply
         applied.core_offset_mhz   = 0                 # not supported
