@@ -626,29 +626,36 @@ class GPUOptimizer:
     # ------------------------------------------------------------------
 
     def _apply(self) -> AppliedSettings:
-        """Apply current working settings via the chosen backend."""
-        kwargs = dict(
-            gpu_index         = self._gpu.index,
-            core_offset_mhz   = self._core_offset_mhz,
-            mem_offset_mhz    = self._mem_offset_mhz,
-            voltage_offset_mv = self._voltage_offset_mv,
-            power_limit_pct   = self._power_limit_pct,
-            thermal_limit_c   = self._profile["thermal_limit_max_c"],
-        )
-        # Pass V/F curve fields if backend supports them
+        """Apply current working settings via the chosen backend.
+
+        NOTE: V/F curve settings are applied directly via apply_vf_lock()
+        in _search_optimal_vf_point, NOT here. This method only handles
+        memory offsets, power limits, and PState20 core offsets.
+        """
         from .backends.nvapi_vfcurve import NVAPIVFCurveBackend
         if isinstance(self._backend, NVAPIVFCurveBackend):
-            kwargs["target_voltage_mv"] = self._target_voltage_mv
-            kwargs["target_freq_mhz"]  = self._target_freq_mhz
-
-        result = self._backend.apply(**kwargs)
+            # V/F backend: only apply memory + power (V/F curve is set separately)
+            result = self._backend.apply(
+                gpu_index       = self._gpu.index,
+                mem_offset_mhz  = self._mem_offset_mhz,
+                power_limit_pct = self._power_limit_pct,
+                thermal_limit_c = self._profile["thermal_limit_max_c"],
+            )
+        else:
+            result = self._backend.apply(
+                gpu_index         = self._gpu.index,
+                core_offset_mhz   = self._core_offset_mhz,
+                mem_offset_mhz    = self._mem_offset_mhz,
+                voltage_offset_mv = self._voltage_offset_mv,
+                power_limit_pct   = self._power_limit_pct,
+                thermal_limit_c   = self._profile["thermal_limit_max_c"],
+            )
         if not result.success:
             raise RuntimeError(f"Backend apply failed: {result.notes}")
         has_oc_offsets = (
             self._core_offset_mhz != 0
             or self._mem_offset_mhz != 0
             or self._voltage_offset_mv != 0
-            or self._target_voltage_mv != 0
         )
         if has_oc_offsets and not result.verified:
             raise RuntimeError(
