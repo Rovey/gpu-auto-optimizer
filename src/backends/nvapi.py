@@ -297,19 +297,26 @@ class NVAPIBackend(GPUBackend):
         if not self.is_available():
             return AppliedSettings(success=False, notes="NVAPI not available")
 
+        # NOTE: thermal_limit_c is tracked in AppliedSettings but not applied to
+        # hardware via NVAPI. It is enforced as a software ceiling by the
+        # StabilityTester during optimization. Hardware thermal limits are
+        # managed by the GPU's own firmware.
         notes: list[str] = []
 
         # --- Apply power limit via pynvml ---
         try:
             import pynvml
             pynvml.nvmlInit()
-            h         = pynvml.nvmlDeviceGetHandleByIndex(gpu_index)
-            default_mw = pynvml.nvmlDeviceGetPowerManagementDefaultLimit(h)
-            min_mw, max_mw = pynvml.nvmlDeviceGetPowerManagementLimitConstraints(h)
-            target_mw = int(default_mw * power_limit_pct / 100)
-            target_mw = max(min_mw, min(max_mw, target_mw))
-            pynvml.nvmlDeviceSetPowerManagementLimit(h, target_mw)
-            notes.append(f"Power limit → {target_mw // 1000} W")
+            try:
+                h         = pynvml.nvmlDeviceGetHandleByIndex(gpu_index)
+                default_mw = pynvml.nvmlDeviceGetPowerManagementDefaultLimit(h)
+                min_mw, max_mw = pynvml.nvmlDeviceGetPowerManagementLimitConstraints(h)
+                target_mw = int(default_mw * power_limit_pct / 100)
+                target_mw = max(min_mw, min(max_mw, target_mw))
+                pynvml.nvmlDeviceSetPowerManagementLimit(h, target_mw)
+                notes.append(f"Power limit → {target_mw // 1000} W")
+            finally:
+                pynvml.nvmlShutdown()
         except Exception as e:
             notes.append(f"Power limit skipped ({e})")
 

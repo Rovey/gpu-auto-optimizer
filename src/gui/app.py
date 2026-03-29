@@ -144,8 +144,9 @@ class GPUOptimizerApp:
         from ..backends.nvidia_smi import NvidiaSMIBackend
 
         backends = [NVAPIBackend(), NvidiaSMIBackend()]
+        gpu_index = self._monitor._index if self._monitor else 0
         for b in sorted(backends, key=lambda x: -x.priority):
-            if b.is_available() and b.reset(0):
+            if b.is_available() and b.reset(gpu_index):
                 self._tray.show_notification(
                     "GPU Optimizer", f"GPU reset via {b.name}"
                 )

@@ -19,23 +19,20 @@ except ImportError:
 # Architecture helpers
 # ---------------------------------------------------------------------------
 
-# Maps NVIDIA device ID prefix → architecture name + generation
-_NVIDIA_ARCH_MAP: dict[tuple[int, int], str] = {
-    # (pci_device_id_upper_nibble range check is impractical; use name matching)
-}
-
 def _infer_nvidia_arch(name: str) -> str:
     """Best-effort architecture detection from GPU name string."""
     name_up = name.upper()
-    if any(x in name_up for x in ("40", "4090", "4080", "4070", "4060", "4050", "RTX 40")):
+    if any(x in name_up for x in ("RTX 50", "5090", "5080", "5070", "5060")):
+        return "Blackwell"
+    if any(x in name_up for x in ("RTX 40", "4090", "4080", "4070", "4060", "4050")):
         return "Ada Lovelace"
-    if any(x in name_up for x in ("3090", "3080", "3070", "3060", "3050", "RTX 30")):
+    if any(x in name_up for x in ("RTX 30", "3090", "3080", "3070", "3060", "3050")):
         return "Ampere"
-    if any(x in name_up for x in ("2080", "2070", "2060", "2050", "RTX 20")):
+    if any(x in name_up for x in ("RTX 20", "2080", "2070", "2060")):
         return "Turing"
-    if any(x in name_up for x in ("1080", "1070", "1060", "1050", "GTX 10")):
+    if any(x in name_up for x in ("GTX 10", "1080", "1070", "1060", "1050")):
         return "Pascal"
-    if any(x in name_up for x in ("980", "970", "960", "950", "GTX 9")):
+    if any(x in name_up for x in ("GTX 9", "980", "970", "960", "950")):
         return "Maxwell"
     if "TITAN" in name_up:
         return "Ampere/Turing/Pascal"
@@ -136,7 +133,7 @@ def _detect_nvidia() -> List[GPUInfo]:
                 driver_version=driver,
                 uuid=uuid,
                 supports_oc=True,
-                supports_uv=arch in ("Turing", "Ampere", "Ada Lovelace"),
+                supports_uv=arch in ("Turing", "Ampere", "Ada Lovelace", "Blackwell"),
                 supports_mem_oc=True,
                 _handle=handle,
             )
@@ -191,7 +188,7 @@ def _detect_via_nvidia_smi() -> List[GPUInfo]:
                 driver_version=driver,
                 uuid=uuid,
                 supports_oc=True,
-                supports_uv=arch in ("Turing", "Ampere", "Ada Lovelace"),
+                supports_uv=arch in ("Turing", "Ampere", "Ada Lovelace", "Blackwell"),
                 supports_mem_oc=True,
             )
             gpus.append(gpu)

@@ -434,11 +434,10 @@ class GPUOptimizer:
     def _tune_power_limit(self, baseline: GPUMetrics) -> int:
         """Reduce power limit as far as possible without losing >2 % performance."""
         min_delta, max_delta = self._profile["power_limit_delta_pct"]
-        # First try raising slightly for overclock headroom
-        for delta in range(max_delta, -1, -5):
-            self._power_limit_pct = 100 + delta
-            self._apply()
-            time.sleep(0.5)
+        # Start at elevated power limit for overclock headroom
+        self._power_limit_pct = 100 + max_delta
+        self._apply()
+        time.sleep(0.5)
 
         # Now reduce until performance drops >2 %
         best_pct = self._power_limit_pct

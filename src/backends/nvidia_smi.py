@@ -69,18 +69,21 @@ class NvidiaSMIBackend(GPUBackend):
         if _NVML:
             try:
                 pynvml.nvmlInit()
-                h = pynvml.nvmlDeviceGetHandleByIndex(gpu_index)
+                try:
+                    h = pynvml.nvmlDeviceGetHandleByIndex(gpu_index)
 
-                default_mw = pynvml.nvmlDeviceGetPowerManagementDefaultLimit(h)
-                min_mw, max_mw = pynvml.nvmlDeviceGetPowerManagementLimitConstraints(h)
+                    default_mw = pynvml.nvmlDeviceGetPowerManagementDefaultLimit(h)
+                    min_mw, max_mw = pynvml.nvmlDeviceGetPowerManagementLimitConstraints(h)
 
-                target_mw = int(default_mw * power_limit_pct / 100)
-                target_mw = max(min_mw, min(max_mw, target_mw))
+                    target_mw = int(default_mw * power_limit_pct / 100)
+                    target_mw = max(min_mw, min(max_mw, target_mw))
 
-                pynvml.nvmlDeviceSetPowerManagementLimit(h, target_mw)
-                applied.power_limit_pct = power_limit_pct
-                applied.verified = True
-                notes.append(f"Power limit set to {target_mw // 1000} W via pynvml")
+                    pynvml.nvmlDeviceSetPowerManagementLimit(h, target_mw)
+                    applied.power_limit_pct = power_limit_pct
+                    applied.verified = True
+                    notes.append(f"Power limit set to {target_mw // 1000} W via pynvml")
+                finally:
+                    pynvml.nvmlShutdown()
             except Exception as exc:
                 notes.append(f"pynvml power limit failed: {exc}")
                 applied.success = False
@@ -88,6 +91,8 @@ class NvidiaSMIBackend(GPUBackend):
             notes.append("pynvml not available, cannot set power limit")
             applied.success = False
 
+        # NOTE: thermal_limit_c is tracked but not applied to hardware.
+        # Enforced as a software ceiling by StabilityTester during optimization.
         applied.thermal_limit_c   = thermal_limit_c   # tracked, may not apply
         applied.core_offset_mhz   = 0                 # not supported
         applied.mem_offset_mhz    = 0
@@ -99,10 +104,13 @@ class NvidiaSMIBackend(GPUBackend):
         if _NVML:
             try:
                 pynvml.nvmlInit()
-                h           = pynvml.nvmlDeviceGetHandleByIndex(gpu_index)
-                default_mw  = pynvml.nvmlDeviceGetPowerManagementDefaultLimit(h)
-                pynvml.nvmlDeviceSetPowerManagementLimit(h, default_mw)
-                return True
+                try:
+                    h           = pynvml.nvmlDeviceGetHandleByIndex(gpu_index)
+                    default_mw  = pynvml.nvmlDeviceGetPowerManagementDefaultLimit(h)
+                    pynvml.nvmlDeviceSetPowerManagementLimit(h, default_mw)
+                    return True
+                finally:
+                    pynvml.nvmlShutdown()
             except Exception:
                 pass
         return False

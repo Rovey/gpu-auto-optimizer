@@ -305,10 +305,11 @@ class StabilityTester:
 
             a, b, c = _alloc_gemm_buffers()
             last_correctness_check = start
+            cb_monitor = GPUMonitor(self._idx) if self._cb else None
             while not abort.is_set() and (time.time() - start) < duration_sec:
                 # Run multiple GEMMs per cycle with preallocated output.
                 cp.matmul(a, b, out=c)
-                cp.matmul(c, a, out=b)
+                cp.matmul(b, a, out=c)
                 cp.cuda.Stream.null.synchronize()
 
                 elapsed = time.time() - start
@@ -325,9 +326,8 @@ class StabilityTester:
                         abort.set()
                         return
 
-                if self._cb:
-                    mon = GPUMonitor(self._idx)
-                    self._cb(elapsed, duration_sec, mon.read_once())
+                if self._cb and cb_monitor:
+                    self._cb(elapsed, duration_sec, cb_monitor.read_once())
 
     def _configure_cuda_path_env(self) -> None:
         """Best-effort CUDA toolkit discovery to avoid noisy CuPy path warnings."""

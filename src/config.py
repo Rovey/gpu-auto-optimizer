@@ -169,7 +169,10 @@ _OLD_CONFIG_PATH = os.path.join(
 
 def get_app_dir() -> str:
     """Return the root application data directory (%LOCALAPPDATA%/GPUOptimizer)."""
-    return os.path.join(os.environ.get("LOCALAPPDATA", ""), "GPUOptimizer")
+    local_app = os.environ.get("LOCALAPPDATA")
+    if not local_app:
+        local_app = os.path.join(os.path.expanduser("~"), "AppData", "Local")
+    return os.path.join(local_app, "GPUOptimizer")
 
 
 def get_config_dir() -> str:
@@ -216,8 +219,18 @@ def load_config(path: str = "") -> UserConfig:
             else:
                 cfg = UserConfig(**data)
             return cfg
-        except Exception:
-            pass
+        except json.JSONDecodeError as exc:
+            import logging
+            logging.getLogger(__name__).warning(
+                "Config file %s is corrupted (JSON parse error: %s). Using defaults.",
+                path, exc,
+            )
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning(
+                "Failed to load config from %s: %s. Using defaults.",
+                path, exc,
+            )
     return UserConfig()
 
 

@@ -71,7 +71,16 @@ class DashboardScreen(ttk.Frame):
 
         # Applied settings
         if cfg.per_gpu_results:
-            last_result = list(cfg.per_gpu_results.values())[-1]
+            # Find result for current GPU, fall back to last entry
+            last_result = None
+            if self._monitor is not None:
+                gpu_idx = self._monitor._index
+                for val in cfg.per_gpu_results.values():
+                    if isinstance(val, dict) and val.get("gpu_index") == gpu_idx:
+                        last_result = val
+                        break
+            if last_result is None:
+                last_result = list(cfg.per_gpu_results.values())[-1]
             self._offset_display.update(last_result)
             self._no_results_label.pack_forget()
             self._offset_display.pack(fill="both", expand=True, padx=10, pady=10)

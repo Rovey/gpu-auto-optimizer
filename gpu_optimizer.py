@@ -29,6 +29,9 @@ def main():
     if not _is_admin():
         _request_admin_and_relaunch()
 
+    from src.config import migrate_config_if_needed
+    migrate_config_if_needed()
+
     from src.gui.app import GPUOptimizerApp
     app = GPUOptimizerApp()
     app.run()

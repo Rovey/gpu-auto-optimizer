@@ -176,13 +176,11 @@ def _detect_cuda_version() -> str | None:
 
 def _cupy_package_for_cuda(cuda_major: str | None) -> str | None:
     """Return the correct CuPy pip package name for the CUDA version."""
-    if cuda_major == "13":
-        return "cupy-cuda13x"
-    elif cuda_major == "12":
-        return "cupy-cuda12x"
-    elif cuda_major == "11":
-        return "cupy-cuda11x"
-    return None
+    mapping = {
+        "12": "cupy-cuda12x",
+        "11": "cupy-cuda11x",
+    }
+    return mapping.get(cuda_major)
 
 
 def _create_shortcuts(pythonw_exe: Path, script: Path, install_dir: Path) -> None:

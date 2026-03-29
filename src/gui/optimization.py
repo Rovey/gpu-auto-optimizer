@@ -73,7 +73,10 @@ class OptimizationScreen(ttk.Frame):
 
                 gpus = detect_gpus()
                 if not gpus:
-                    self.after(0, lambda: self._on_error("No NVIDIA GPUs detected."))
+                    try:
+                        self.after(0, lambda: self._on_error("No NVIDIA GPUs detected."))
+                    except RuntimeError:
+                        pass
                     return
 
                 gpu = gpus[0]  # optimize first GPU
@@ -81,9 +84,20 @@ class OptimizationScreen(ttk.Frame):
                 result = self._optimizer.run()
                 cfg = load_config()
                 save_result(cfg, result)
-                self.after(0, lambda: self._on_complete(result))
+                try:
+                    self.after(0, lambda: self._on_complete(result))
+                except RuntimeError:
+                    pass
             except Exception as exc:
-                self.after(0, lambda e=str(exc): self._on_error(e))
+                import logging
+                import traceback
+                logging.getLogger(__name__).error(
+                    "Optimization failed:\n%s", traceback.format_exc()
+                )
+                try:
+                    self.after(0, lambda e=str(exc): self._on_error(e))
+                except RuntimeError:
+                    pass
 
         self._optimizer_thread = threading.Thread(target=_run, daemon=True)
         self._optimizer_thread.start()

@@ -269,18 +269,24 @@ def sample_average(monitor: GPUMonitor, duration_sec: float) -> GPUMetrics:
         vals = [getattr(s, attr) for s in samples]
         return sum(vals) / len(vals)
 
-    ref = samples[-1]
-    ref.core_clock_mhz  = int(_avg("core_clock_mhz"))
-    ref.mem_clock_mhz   = int(_avg("mem_clock_mhz"))
-    ref.temp_c          = _avg("temp_c")
-    ref.power_w         = _avg("power_w")
-    ref.fan_speed_pct   = int(_avg("fan_speed_pct"))
-    ref.gpu_util_pct    = int(_avg("gpu_util_pct"))
-    ref.ecc_errors      = max(s.ecc_errors for s in samples)
-    ref.is_throttling   = any(s.is_throttling for s in samples)
-    ref.is_thermal_limit = any(s.is_thermal_limit for s in samples)
-    ref.is_power_limit   = any(s.is_power_limit  for s in samples)
-    return ref
+    return GPUMetrics(
+        gpu_index=samples[-1].gpu_index,
+        timestamp=samples[-1].timestamp,
+        core_clock_mhz=int(_avg("core_clock_mhz")),
+        mem_clock_mhz=int(_avg("mem_clock_mhz")),
+        temp_c=_avg("temp_c"),
+        power_w=_avg("power_w"),
+        power_limit_w=samples[-1].power_limit_w,
+        fan_speed_pct=int(_avg("fan_speed_pct")),
+        gpu_util_pct=int(_avg("gpu_util_pct")),
+        mem_util_pct=int(_avg("mem_util_pct")),
+        mem_used_mb=samples[-1].mem_used_mb,
+        mem_total_mb=samples[-1].mem_total_mb,
+        ecc_errors=max(s.ecc_errors for s in samples),
+        is_throttling=any(s.is_throttling for s in samples),
+        is_thermal_limit=any(s.is_thermal_limit for s in samples),
+        is_power_limit=any(s.is_power_limit for s in samples),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -314,16 +320,22 @@ def sample_average_under_load(
         vals = [getattr(s, attr) for s in samples]
         return sum(vals) / len(vals)
 
-    ref = samples[-1]
-    ref.core_clock_mhz = int(_avg("core_clock_mhz"))
-    ref.mem_clock_mhz = int(_avg("mem_clock_mhz"))
-    ref.temp_c = _avg("temp_c")
-    ref.power_w = _avg("power_w")
-    ref.fan_speed_pct = int(_avg("fan_speed_pct"))
-    ref.gpu_util_pct = int(_avg("gpu_util_pct"))
-    ref.ecc_errors = max(s.ecc_errors for s in samples)
-    ref.is_throttling = any(s.is_throttling for s in samples)
-    ref.is_thermal_limit = any(s.is_thermal_limit for s in samples)
-    ref.is_power_limit = any(s.is_power_limit for s in samples)
-    ref.samples_used = len(qualifying)
-    return ref
+    return GPUMetrics(
+        gpu_index=samples[-1].gpu_index,
+        timestamp=samples[-1].timestamp,
+        core_clock_mhz=int(_avg("core_clock_mhz")),
+        mem_clock_mhz=int(_avg("mem_clock_mhz")),
+        temp_c=_avg("temp_c"),
+        power_w=_avg("power_w"),
+        power_limit_w=samples[-1].power_limit_w,
+        fan_speed_pct=int(_avg("fan_speed_pct")),
+        gpu_util_pct=int(_avg("gpu_util_pct")),
+        mem_util_pct=int(_avg("mem_util_pct")),
+        mem_used_mb=samples[-1].mem_used_mb,
+        mem_total_mb=samples[-1].mem_total_mb,
+        ecc_errors=max(s.ecc_errors for s in samples),
+        is_throttling=any(s.is_throttling for s in samples),
+        is_thermal_limit=any(s.is_thermal_limit for s in samples),
+        is_power_limit=any(s.is_power_limit for s in samples),
+        samples_used=len(qualifying),
+    )
