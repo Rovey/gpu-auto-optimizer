@@ -41,6 +41,7 @@ RISK_PROFILES: dict[RiskLevel, dict] = {
         # Stability test
         "test_duration_sec":      30,
         "test_passes":            2,
+        "voltage_min_mv":         0,
     },
     RiskLevel.BALANCED: {
         "label":                  "BALANCED",
@@ -61,6 +62,7 @@ RISK_PROFILES: dict[RiskLevel, dict] = {
         "thermal_limit_max_c":    87,
         "test_duration_sec":      60,
         "test_passes":            3,
+        "voltage_min_mv":         800,
     },
     RiskLevel.PERFORMANCE: {
         "label":                  "PERFORMANCE",
@@ -83,6 +85,7 @@ RISK_PROFILES: dict[RiskLevel, dict] = {
         "thermal_limit_max_c":    90,
         "test_duration_sec":      120,
         "test_passes":            5,
+        "voltage_min_mv":         725,
     },
     RiskLevel.EXTREME: {
         "label":                  "EXTREME",
@@ -106,6 +109,7 @@ RISK_PROFILES: dict[RiskLevel, dict] = {
         "thermal_limit_max_c":    93,
         "test_duration_sec":      180,
         "test_passes":            8,
+        "voltage_min_mv":         650,
     },
 }
 
@@ -125,6 +129,8 @@ class GPUOptimizationResult:
     voltage_offset_mv:     int   = 0
     power_limit_pct:       int   = 100
     thermal_limit_c:       int   = 83
+    target_voltage_mv:     int   = 0    # V/F curve lock voltage (0 = not used)
+    target_freq_mhz:       int   = 0    # frequency at locked voltage
     # Measured outcomes
     baseline_boost_mhz:    int   = 0
     achieved_boost_mhz:    int   = 0

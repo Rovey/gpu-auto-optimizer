@@ -16,6 +16,8 @@ class AppliedSettings:
     voltage_offset_mv: int   = 0
     power_limit_pct:   int   = 100
     thermal_limit_c:   int   = 83
+    target_voltage_mv: int   = 0     # V/F curve lock voltage (0 = not used)
+    target_freq_mhz:   int   = 0     # frequency at locked voltage
     success:           bool  = True
     notes:             str   = ""
     verified:          bool  = False
