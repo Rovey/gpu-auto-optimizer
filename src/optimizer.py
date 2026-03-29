@@ -35,6 +35,7 @@ from .stability import StabilityTester, StabilityResult
 from .backends.base import GPUBackend, AppliedSettings
 from .backends.nvidia_smi import NvidiaSMIBackend
 from .backends.nvapi import NVAPIBackend
+from .backends.nvapi_vfcurve import NVAPIVFCurveBackend
 
 
 # ---------------------------------------------------------------------------
@@ -44,6 +45,7 @@ from .backends.nvapi import NVAPIBackend
 def _best_backend(gpu: GPUInfo) -> GPUBackend:
     """Return the highest-priority available backend for this GPU."""
     candidates: List[GPUBackend] = [
+        NVAPIVFCurveBackend(),
         NVAPIBackend(),
         NvidiaSMIBackend(),
     ]
@@ -96,6 +98,9 @@ class GPUOptimizer:
         self._mem_offset_mhz    = 0
         self._voltage_offset_mv = 0
         self._power_limit_pct   = 100
+        # V/F curve state (when using NVAPIVFCurveBackend)
+        self._target_voltage_mv = 0
+        self._target_freq_mhz  = 0
         self._baseline_core_mhz = 0
         self._baseline_mem_mhz  = 0
 
@@ -170,6 +175,8 @@ class GPUOptimizer:
         result.mem_offset_mhz     = self._mem_offset_mhz
         result.voltage_offset_mv  = self._voltage_offset_mv
         result.power_limit_pct    = self._power_limit_pct
+        result.target_voltage_mv  = self._target_voltage_mv
+        result.target_freq_mhz   = self._target_freq_mhz
 
         self._emit("Done!", 10, 10)
         return result
@@ -223,31 +230,49 @@ class GPUOptimizer:
         result:   GPUOptimizationResult,
         baseline: GPUMetrics,
     ) -> GPUOptimizationResult:
+        backend_supports_vf  = (
+            self._backend.supports_voltage(self._gpu.index)
+            and self._profile.get("voltage_min_mv", 0) > 0
+        )
         backend_supports_oc  = self._backend.supports_core_oc(self._gpu.index)
         backend_supports_uv  = (
-            self._backend.supports_voltage(self._gpu.index)
+            not backend_supports_vf  # only use old UV if no V/F curve
+            and self._backend.supports_voltage(self._gpu.index)
             and self._gpu.supports_uv
         )
         backend_supports_mem = self._backend.supports_mem_oc(self._gpu.index)
 
-        # Phase 2: Core OC
-        if backend_supports_oc:
-            self._emit("Phase 2/5 - Core clock search...", 2, 10)
-            self._core_offset_mhz = self._binary_search_core()
+        if backend_supports_vf:
+            # V/F curve path: search for optimal voltage-frequency point
+            self._emit("Phase 2/4 - V/F curve undervolt search...", 2, 10)
+            voltage_mv, freq_mhz = self._search_optimal_vf_point(baseline)
+            self._target_voltage_mv = voltage_mv
+            self._target_freq_mhz  = freq_mhz
 
-        # Phase 3: Memory OC
-        if backend_supports_mem:
-            self._emit("Phase 3/5 - Memory clock search...", 4, 10)
-            self._mem_offset_mhz = self._binary_search_mem()
+            # Memory OC via PState20
+            if backend_supports_mem or hasattr(self._backend, '_loader'):
+                self._emit("Phase 3/4 - Memory clock search...", 5, 10)
+                self._mem_offset_mhz = self._binary_search_mem()
 
-        # Phase 4: Undervolt
-        if backend_supports_uv:
-            self._emit("Phase 4/5 - Undervolt search...", 6, 10)
-            self._voltage_offset_mv = self._binary_search_voltage()
+            # Power limit tuning
+            self._emit("Phase 4/4 - Power limit tuning...", 7, 10)
+            self._power_limit_pct = self._tune_power_limit(baseline)
+        else:
+            # PState20 fallback path (existing behavior)
+            if backend_supports_oc:
+                self._emit("Phase 2/5 - Core clock search...", 2, 10)
+                self._core_offset_mhz = self._binary_search_core()
 
-        # Phase 5: Power limit tuning
-        self._emit("Phase 5/5 - Power limit tuning...", 7, 10)
-        self._power_limit_pct = self._tune_power_limit(baseline)
+            if backend_supports_mem:
+                self._emit("Phase 3/5 - Memory clock search...", 4, 10)
+                self._mem_offset_mhz = self._binary_search_mem()
+
+            if backend_supports_uv:
+                self._emit("Phase 4/5 - Undervolt search...", 6, 10)
+                self._voltage_offset_mv = self._binary_search_voltage()
+
+            self._emit("Phase 5/5 - Power limit tuning...", 7, 10)
+            self._power_limit_pct = self._tune_power_limit(baseline)
 
         return result
 
@@ -431,6 +456,133 @@ class GPUOptimizer:
         self._apply()
         return safe
 
+    def _search_optimal_vf_point(self, baseline: GPUMetrics) -> tuple[int, int]:
+        """Find the lowest stable voltage for the GPU's natural boost frequency.
+
+        Returns (voltage_mv, frequency_mhz).
+        """
+        from .backends.nvapi_vfcurve import NVAPIVFCurveBackend
+
+        backend = self._backend
+        if not isinstance(backend, NVAPIVFCurveBackend):
+            return (0, 0)
+
+        # Read current V/F curve
+        curve = backend.read_vf_curve(self._gpu.index)
+        if not curve:
+            return (0, 0)
+
+        # Target frequency = baseline boost clock (what GPU naturally achieves)
+        target_freq_mhz = baseline.core_clock_mhz or baseline.boost_clock_mhz
+        target_freq_khz = target_freq_mhz * 1000
+
+        # Voltage search range
+        voltage_min_mv = self._profile.get("voltage_min_mv", 800)
+        # Find the stock voltage for our target frequency (highest V/F point
+        # whose base freq is <= target)
+        stock_voltage_mv = 1050  # conservative default
+        for p in reversed(curve):
+            if p.base_freq_khz <= target_freq_khz:
+                stock_voltage_mv = p.voltage_mv
+                break
+
+        # Get available voltage steps from the curve
+        voltage_steps = sorted(set(
+            p.voltage_mv for p in curve
+            if voltage_min_mv <= p.voltage_mv <= stock_voltage_mv
+        ))
+        if not voltage_steps:
+            return (0, 0)
+
+        # Binary search: find lowest voltage that sustains target_freq
+        lo, hi = 0, len(voltage_steps) - 1
+        best_voltage_mv = stock_voltage_mv
+        test_dur = max(30, self._profile["test_duration_sec"] // self._profile["test_passes"])
+
+        while lo <= hi:
+            if self._cancel_event.is_set():
+                break
+
+            mid = (lo + hi) // 2
+            candidate_mv = voltage_steps[mid]
+
+            # Apply V/F lock at candidate voltage
+            ok = backend.apply_vf_lock(
+                self._gpu.index,
+                target_voltage_uv=candidate_mv * 1000,
+                target_freq_khz=target_freq_khz,
+            )
+            if not ok:
+                m = self._monitor.read_once()
+                self._emit(
+                    f"V/F search: {target_freq_mhz} MHz @ {candidate_mv} mV -> APPLY FAILED",
+                    3, 10, m,
+                )
+                lo = mid + 1
+                continue
+
+            time.sleep(1.5)
+            test = self._stability_test_with_retries(duration_sec=test_dur)
+
+            if not test.valid_load:
+                m = self._monitor.read_once()
+                self._emit(
+                    f"V/F search: {target_freq_mhz} MHz @ {candidate_mv} mV -> INVALID (low load)",
+                    3, 10, m,
+                )
+                break
+
+            passed = test.passed
+            m = self._monitor.read_once()
+            self._emit(
+                f"V/F search: {target_freq_mhz} MHz @ {candidate_mv} mV -> {'PASS' if passed else 'FAIL'}",
+                3, 10, m,
+            )
+
+            if passed:
+                best_voltage_mv = candidate_mv
+                hi = mid - 1  # try lower voltage
+            else:
+                lo = mid + 1  # need more voltage
+
+        # Safety margin: use one voltage step above the absolute minimum found
+        safe_voltage_mv = best_voltage_mv
+        for i, v in enumerate(voltage_steps):
+            if v == best_voltage_mv and i + 1 < len(voltage_steps):
+                safe_voltage_mv = voltage_steps[i + 1]
+                break
+
+        # Optional: try pushing frequency +25/+50 MHz at the safe voltage
+        final_freq_mhz = target_freq_mhz
+        for bump in [50, 25]:
+            if self._cancel_event.is_set():
+                break
+            candidate_freq = target_freq_mhz + bump
+            ok = backend.apply_vf_lock(
+                self._gpu.index,
+                target_voltage_uv=safe_voltage_mv * 1000,
+                target_freq_khz=candidate_freq * 1000,
+            )
+            if ok:
+                time.sleep(1.5)
+                test = self._stability_test_with_retries(duration_sec=test_dur)
+                if test.passed and test.valid_load:
+                    final_freq_mhz = candidate_freq
+                    m = self._monitor.read_once()
+                    self._emit(
+                        f"V/F boost: {candidate_freq} MHz @ {safe_voltage_mv} mV -> PASS",
+                        4, 10, m,
+                    )
+                    break
+
+        # Apply final settings
+        backend.apply_vf_lock(
+            self._gpu.index,
+            target_voltage_uv=safe_voltage_mv * 1000,
+            target_freq_khz=final_freq_mhz * 1000,
+        )
+        return (safe_voltage_mv, final_freq_mhz)
+
     def _tune_power_limit(self, baseline: GPUMetrics) -> int:
         """Reduce power limit as far as possible without losing >2 % performance."""
         min_delta, max_delta = self._profile["power_limit_delta_pct"]
@@ -475,7 +627,7 @@ class GPUOptimizer:
 
     def _apply(self) -> AppliedSettings:
         """Apply current working settings via the chosen backend."""
-        result = self._backend.apply(
+        kwargs = dict(
             gpu_index         = self._gpu.index,
             core_offset_mhz   = self._core_offset_mhz,
             mem_offset_mhz    = self._mem_offset_mhz,
@@ -483,12 +635,20 @@ class GPUOptimizer:
             power_limit_pct   = self._power_limit_pct,
             thermal_limit_c   = self._profile["thermal_limit_max_c"],
         )
+        # Pass V/F curve fields if backend supports them
+        from .backends.nvapi_vfcurve import NVAPIVFCurveBackend
+        if isinstance(self._backend, NVAPIVFCurveBackend):
+            kwargs["target_voltage_mv"] = self._target_voltage_mv
+            kwargs["target_freq_mhz"]  = self._target_freq_mhz
+
+        result = self._backend.apply(**kwargs)
         if not result.success:
             raise RuntimeError(f"Backend apply failed: {result.notes}")
         has_oc_offsets = (
             self._core_offset_mhz != 0
             or self._mem_offset_mhz != 0
             or self._voltage_offset_mv != 0
+            or self._target_voltage_mv != 0
         )
         if has_oc_offsets and not result.verified:
             raise RuntimeError(
