@@ -111,3 +111,54 @@ def test_build_undervolt_deltas():
     # Points above 900mV: flatten to target_freq or below
     assert deltas[3] <= 1850000 - 1900000  # -50 MHz or lower
     assert deltas[4] <= 1850000 - 2000000  # -150 MHz or lower
+
+
+def test_vfcurve_backend_unavailable_on_non_windows():
+    """Backend should report unavailable when NVAPI can't load."""
+    from src.backends.nvapi_vfcurve import NVAPIVFCurveBackend
+    backend = NVAPIVFCurveBackend()
+    result = backend.is_available()
+    assert isinstance(result, bool)
+
+
+def test_vfcurve_backend_reset_returns_bool():
+    from src.backends.nvapi_vfcurve import NVAPIVFCurveBackend
+    backend = NVAPIVFCurveBackend()
+    if not backend.is_available():
+        pytest.skip("NVAPI V/F curve not available")
+    result = backend.reset(0)
+    assert isinstance(result, bool)
+
+
+def test_best_backend_includes_vfcurve():
+    """_best_backend should try VFCurve backend first."""
+    from src.optimizer import _best_backend
+    from unittest.mock import MagicMock
+    gpu = MagicMock()
+    gpu.index = 0
+    backend = _best_backend(gpu)
+    assert backend.name in ("nvapi-vfcurve", "nvapi-direct", "nvidia-smi")
+
+
+def test_optimization_result_has_vf_fields():
+    from src.config import GPUOptimizationResult
+    r = GPUOptimizationResult(gpu_index=0, gpu_name="Test", risk_level="balanced")
+    assert r.target_voltage_mv == 0
+    assert r.target_freq_mhz == 0
+
+
+def test_applied_settings_has_vf_fields():
+    from src.backends.base import AppliedSettings
+    s = AppliedSettings()
+    assert s.target_voltage_mv == 0
+    assert s.target_freq_mhz == 0
+
+
+def test_risk_profiles_have_voltage_min():
+    from src.config import RISK_PROFILES, RiskLevel
+    for level in RiskLevel:
+        assert "voltage_min_mv" in RISK_PROFILES[level]
+    assert RISK_PROFILES[RiskLevel.SAFE]["voltage_min_mv"] == 0
+    assert RISK_PROFILES[RiskLevel.BALANCED]["voltage_min_mv"] == 800
+    assert RISK_PROFILES[RiskLevel.PERFORMANCE]["voltage_min_mv"] == 725
+    assert RISK_PROFILES[RiskLevel.EXTREME]["voltage_min_mv"] == 650

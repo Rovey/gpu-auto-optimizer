@@ -113,14 +113,32 @@ def _apply_on_boot() -> None:
     backend = _best_backend(gpu)
 
     try:
-        result = backend.apply(
-            gpu_index=gpu.index,
-            core_offset_mhz=saved.get("core_offset_mhz", 0),
-            mem_offset_mhz=saved.get("mem_offset_mhz", 0),
-            voltage_offset_mv=saved.get("voltage_offset_mv", 0),
-            power_limit_pct=saved.get("power_limit_pct", 100),
-            thermal_limit_c=saved.get("thermal_limit_c", 83),
-        )
+        target_voltage_mv = saved.get("target_voltage_mv", 0)
+        target_freq_mhz = saved.get("target_freq_mhz", 0)
+
+        # Check if this was a V/F curve result
+        from .backends.nvapi_vfcurve import NVAPIVFCurveBackend
+        if target_voltage_mv > 0 and isinstance(backend, NVAPIVFCurveBackend):
+            # V/F curve path: re-apply curve at saved voltage/frequency
+            result = backend.apply(
+                gpu_index=gpu.index,
+                mem_offset_mhz=saved.get("mem_offset_mhz", 0),
+                power_limit_pct=saved.get("power_limit_pct", 100),
+                thermal_limit_c=saved.get("thermal_limit_c", 83),
+                target_voltage_mv=target_voltage_mv,
+                target_freq_mhz=target_freq_mhz,
+            )
+        else:
+            # PState20 fallback path
+            result = backend.apply(
+                gpu_index=gpu.index,
+                core_offset_mhz=saved.get("core_offset_mhz", 0),
+                mem_offset_mhz=saved.get("mem_offset_mhz", 0),
+                voltage_offset_mv=saved.get("voltage_offset_mv", 0),
+                power_limit_pct=saved.get("power_limit_pct", 100),
+                thermal_limit_c=saved.get("thermal_limit_c", 83),
+            )
+
         if result.success:
             log.info("Boot-apply succeeded: %s", result.notes)
             record_boot_result(cfg, True, result.notes)
