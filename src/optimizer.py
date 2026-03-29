@@ -652,15 +652,19 @@ class GPUOptimizer:
             )
         if not result.success:
             raise RuntimeError(f"Backend apply failed: {result.notes}")
-        has_oc_offsets = (
-            self._core_offset_mhz != 0
-            or self._mem_offset_mhz != 0
-            or self._voltage_offset_mv != 0
-        )
-        if has_oc_offsets and not result.verified:
-            raise RuntimeError(
-                f"Settings verification failed — offsets may not have been applied. {result.notes}"
+        # Verification check: only for PState20 backend where we have read-back.
+        # V/F curve backend verifies its own curve in _search_optimal_vf_point;
+        # memory via PState20 has no read-back in the V/F path.
+        if not isinstance(self._backend, NVAPIVFCurveBackend):
+            has_oc_offsets = (
+                self._core_offset_mhz != 0
+                or self._mem_offset_mhz != 0
+                or self._voltage_offset_mv != 0
             )
+            if has_oc_offsets and not result.verified:
+                raise RuntimeError(
+                    f"Settings verification failed — offsets may not have been applied. {result.notes}"
+                )
         return result
 
     def _stability_test(self, duration_sec: float) -> StabilityResult:
