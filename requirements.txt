@@ -6,3 +6,17 @@ sv-ttk>=2.0
 pystray>=0.19.0
 Pillow>=9.0.0
 winotify>=1.0.0; sys_platform == "win32"
+
+# GPU stress backend (CUDA 12 build) + bundled runtime libraries.
+# These pull the CUDA runtime DLLs as pip wheels — no system CUDA toolkit needed.
+# Verified working on RTX 4070 / driver 610 (Ada). For a CUDA 11 GPU, swap the
+# cu12 packages for their cu11 equivalents.
+cupy-cuda12x>=14.0
+nvidia-cuda-runtime-cu12
+nvidia-cublas-cu12
+nvidia-cufft-cu12
+nvidia-curand-cu12
+nvidia-cusolver-cu12
+nvidia-cusparse-cu12
+nvidia-cuda-nvrtc-cu12
+nvidia-nvjitlink-cu12
