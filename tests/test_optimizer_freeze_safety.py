@@ -69,3 +69,31 @@ def test_vf_search_avoids_a_previously_hung_voltage(tmp_path):
     # The voltages it DID try were completed (not left as new hangs).
     hung_after = SearchJournal(tmp_path / "journal.json").analyze().hung_values("vf_voltage")
     assert hung_after == [850.0]
+
+
+def test_core_search_avoids_a_previously_hung_offset(tmp_path):
+    journal = SearchJournal(tmp_path / "journal.json")
+    journal.begin("core", 200.0)   # a prior run froze the PC at +200 MHz core
+
+    applied = []
+    opt = object.__new__(GPUOptimizer)
+    opt._gpu = SimpleNamespace(index=0, name="Fake")
+    opt._profile = {"core_offset_mhz_max": 300, "test_passes": 1, "test_duration_sec": 30}
+    opt._monitor = SimpleNamespace(read_once=_metrics)
+    opt._journal = journal
+    opt._progress = None
+    opt._cancel_event = threading.Event()
+    opt._baseline_core_mhz = 2000
+
+    def fake_apply():
+        applied.append(opt._core_offset_mhz)
+        return SimpleNamespace(success=True, verified=True, notes="")
+
+    opt._apply = fake_apply
+    opt._stability_test_with_retries = lambda duration_sec: _passing_stability()
+
+    opt._binary_search_core()
+
+    assert applied, "search should have tried at least one offset"
+    # +200 and anything higher (more aggressive) must never be applied during search.
+    assert all(o < 200 for o in applied)

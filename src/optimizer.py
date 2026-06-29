@@ -317,6 +317,11 @@ class GPUOptimizer:
         passes    = self._profile["test_passes"]
         test_dur  = max(30, self._profile["test_duration_sec"] // passes)
 
+        # Freeze-safety: stay below any core offset that previously hung the PC.
+        hung_core = self._journal.analyze().hung_values("core")
+        if hung_core:
+            hi = min(hi, int(min(hung_core)) - 25)
+
         while lo <= hi:
             if self._cancel_event.is_set():
                 break
@@ -327,12 +332,15 @@ class GPUOptimizer:
             if mid == 0 and lo > 0:
                 break
 
+            # Journal BEFORE the risky apply (a hang leaves this uncompleted).
+            seq = self._journal.begin("core", mid)
             self._core_offset_mhz = mid
             self._apply()
             time.sleep(1.0)
 
             test = self._stability_test_with_retries(duration_sec=test_dur)
             if not test.valid_load:
+                self._journal.complete(seq, passed=False, note="inconclusive load")
                 m  = self._monitor.read_once()
                 self._emit(
                     f"Core search: testing +{mid} MHz -> INVALID (low load)",
@@ -349,6 +357,7 @@ class GPUOptimizer:
                 if load_clocks:
                     avg_load_clock = sum(load_clocks) / len(load_clocks)
                     if avg_load_clock <= self._baseline_core_mhz + 10:
+                        self._journal.complete(seq, passed=False, note="no clock change")
                         m = self._monitor.read_once()
                         self._emit(
                             f"Core search: +{mid} MHz applied but clock unchanged "
@@ -358,6 +367,7 @@ class GPUOptimizer:
                         )
                         break
 
+            self._journal.complete(seq, passed=ok)
             m = self._monitor.read_once()
             self._emit(
                 f"Core search: testing +{mid} MHz -> {'PASS' if ok else 'FAIL'}",
@@ -387,6 +397,11 @@ class GPUOptimizer:
         test_dur = max(30, self._profile["test_duration_sec"] // self._profile["test_passes"])
         step     = 100  # memory steps in 100 MHz
 
+        # Freeze-safety: stay below any memory offset that previously hung the PC.
+        hung_mem = self._journal.analyze().hung_values("mem")
+        if hung_mem:
+            hi = min(hi, int(min(hung_mem)) - step)
+
         while lo <= hi:
             if self._cancel_event.is_set():
                 break
@@ -397,12 +412,14 @@ class GPUOptimizer:
             if mid < 0:
                 break
 
+            seq = self._journal.begin("mem", mid)
             self._mem_offset_mhz = mid
             self._apply()
             time.sleep(1.0)
 
             test = self._stability_test_with_retries(duration_sec=test_dur)
             if not test.valid_load:
+                self._journal.complete(seq, passed=False, note="inconclusive load")
                 m  = self._monitor.read_once()
                 self._emit(
                     f"Mem search: testing +{mid} MHz -> INVALID (low load)",
@@ -411,6 +428,7 @@ class GPUOptimizer:
                 break
             ok = test.passed
 
+            self._journal.complete(seq, passed=ok)
             m = self._monitor.read_once()
             self._emit(
                 f"Mem search: testing +{mid} MHz -> {'PASS' if ok else 'FAIL'}",
