@@ -18,6 +18,8 @@ add_library(core STATIC
   src/core/vfcurve.cpp
   src/core/undervolt.hpp
   src/core/undervolt.cpp
+  src/core/ab_profile.hpp
+  src/core/ab_profile.cpp
 )
 target_include_directories(core PUBLIC src)
 
@@ -28,6 +30,7 @@ add_executable(core_tests
   tests/test_vfcurve_codec.cpp
   tests/test_vfcurve.cpp
   tests/test_undervolt.cpp
+  tests/test_ab_profile.cpp
 )
 target_link_libraries(core_tests PRIVATE core doctest)
 add_test(NAME core_tests COMMAND core_tests)
