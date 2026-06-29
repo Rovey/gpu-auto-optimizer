@@ -22,6 +22,7 @@ Each step is validated by StabilityTester; failure → roll back + halve step.
 """
 from __future__ import annotations
 
+import os
 import threading
 import time
 import warnings
@@ -82,6 +83,7 @@ class GPUOptimizer:
         gpu:         GPUInfo,
         risk_level:  RiskLevel = RiskLevel.BALANCED,
         progress_cb: Optional[ProgressCB] = None,
+        journal:     Optional["SearchJournal"] = None,
     ) -> None:
         self._gpu      = gpu
         self._risk     = risk_level
@@ -89,6 +91,14 @@ class GPUOptimizer:
         self._backend  = _best_backend(gpu)
         self._monitor  = GPUMonitor(gpu.index, poll_interval_sec=0.3)
         self._progress = progress_cb
+
+        # Crash-safe search journal: survives a hard freeze so the next run
+        # avoids whatever setting hung the machine.
+        if journal is None:
+            from .search_journal import SearchJournal
+            from .config import get_config_dir
+            journal = SearchJournal(os.path.join(get_config_dir(), "optimize_journal.json"))
+        self._journal = journal
 
         # Cancel mechanism
         self._cancel_event = threading.Event()
@@ -124,6 +134,22 @@ class GPUOptimizer:
             gpu_name   = self._gpu.name,
             risk_level = self._risk.value,
         )
+
+        # --- Crash recovery: did a previous run freeze the machine? ----
+        prior = self._journal.analyze()
+        hung_v = prior.hung_values("vf_voltage")
+        hung_c = prior.hung_values("core")
+        hung_m = prior.hung_values("mem")
+        if hung_v or hung_c or hung_m:
+            self._emit(
+                "Recovered from a previous freeze — avoiding the setting(s) that hung: "
+                + ", ".join(filter(None, [
+                    f"{min(hung_v):.0f} mV undervolt" if hung_v else "",
+                    f"+{int(max(hung_c))} MHz core" if hung_c else "",
+                    f"+{int(max(hung_m))} MHz mem" if hung_m else "",
+                ])),
+                0, 10,
+            )
 
         self._emit("Resetting to stock…", 0, 10)
         self._backend.reset(self._gpu.index)
@@ -491,6 +517,12 @@ class GPUOptimizer:
             p.voltage_mv for p in curve
             if voltage_min_mv <= p.voltage_mv <= stock_voltage_mv
         ))
+        # Freeze-safety: never revisit a voltage that previously hung the PC, nor
+        # any lower (more aggressive) one. Raise the floor above the highest hang.
+        hung_v = self._journal.analyze().hung_values("vf_voltage")
+        if hung_v:
+            floor = max(hung_v)
+            voltage_steps = [v for v in voltage_steps if v > floor]
         if not voltage_steps:
             return (0, 0)
 
@@ -506,6 +538,11 @@ class GPUOptimizer:
             mid = (lo + hi) // 2
             candidate_mv = voltage_steps[mid]
 
+            # Journal BEFORE the risky apply. If this voltage hangs the GPU, the
+            # process dies right here — the entry stays "applying" and the next
+            # launch blacklists it. (Durably fsync'd inside begin().)
+            seq = self._journal.begin("vf_voltage", candidate_mv)
+
             # Apply V/F lock at candidate voltage
             ok = backend.apply_vf_lock(
                 self._gpu.index,
@@ -513,6 +550,7 @@ class GPUOptimizer:
                 target_freq_khz=target_freq_khz,
             )
             if not ok:
+                self._journal.complete(seq, passed=False, note="apply failed")
                 m = self._monitor.read_once()
                 self._emit(
                     f"V/F search: {target_freq_mhz} MHz @ {candidate_mv} mV -> APPLY FAILED",
@@ -525,6 +563,7 @@ class GPUOptimizer:
             test = self._stability_test_with_retries(duration_sec=test_dur)
 
             if not test.valid_load:
+                self._journal.complete(seq, passed=False, note="inconclusive load")
                 m = self._monitor.read_once()
                 self._emit(
                     f"V/F search: {target_freq_mhz} MHz @ {candidate_mv} mV -> INVALID (low load)",
@@ -533,9 +572,26 @@ class GPUOptimizer:
                 break
 
             passed = test.passed
+            # A voltage that survives stability but lets the clock COLLAPSE is
+            # over-undervolted: it trades performance for power. A real undervolt
+            # holds the target clock at lower voltage. Only accept this voltage if
+            # the under-load clock stays within ~3 % of target (use the loaded
+            # snapshots from the stability test, ignoring idle/low-util samples).
+            clock_note = ""
+            if passed and test.snapshots:
+                load_clocks = [s.core_clock_mhz for s in test.snapshots
+                               if s.gpu_util_pct >= 80 and s.core_clock_mhz > 0]
+                if load_clocks:
+                    avg_clock = sum(load_clocks) / len(load_clocks)
+                    if avg_clock < target_freq_mhz * 0.97:
+                        passed = False
+                        clock_note = f" (clock dropped to {avg_clock:.0f} MHz)"
+            # Test completed without freezing — record the verdict.
+            self._journal.complete(seq, passed=passed, note=clock_note.strip())
             m = self._monitor.read_once()
             self._emit(
-                f"V/F search: {target_freq_mhz} MHz @ {candidate_mv} mV -> {'PASS' if passed else 'FAIL'}",
+                f"V/F search: {target_freq_mhz} MHz @ {candidate_mv} mV -> "
+                f"{'PASS' if passed else 'FAIL'}{clock_note}",
                 3, 10, m,
             )
 
