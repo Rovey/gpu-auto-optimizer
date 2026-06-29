@@ -37,8 +37,12 @@ add_test(NAME core_tests COMMAND core_tests)
 # real-profile fixture is opened relative to the source root
 set_tests_properties(core_tests PROPERTIES WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 
-add_library(core_hw STATIC src/hw/nvml.hpp src/hw/nvml.cpp)
+add_library(core_hw STATIC
+  src/hw/nvml.hpp src/hw/nvml.cpp
+  src/hw/afterburner.hpp src/hw/afterburner.cpp
+)
 target_include_directories(core_hw PUBLIC src)
+target_link_libraries(core_hw PUBLIC core)
 
 add_executable(nvml_probe src/tools/nvml_probe_main.cpp)
 target_link_libraries(nvml_probe PRIVATE core_hw)
