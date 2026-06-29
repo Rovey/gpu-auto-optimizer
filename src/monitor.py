@@ -82,12 +82,7 @@ class GPUMonitor:
         self._thread: Optional[threading.Thread] = None
         self._callbacks: List[Callable[[GPUMetrics], None]] = []
 
-        if _NVML_AVAILABLE:
-            try:
-                pynvml.nvmlInit()
-                self._handle = pynvml.nvmlDeviceGetHandleByIndex(gpu_index)
-            except Exception:
-                self._handle = None
+        self._acquire_handle()
 
     # ------------------------------------------------------------------
     # Public API
@@ -142,8 +137,37 @@ class GPUMonitor:
             return self._read_nvml()
         return self._read_smi()
 
+    def _acquire_handle(self) -> bool:
+        """(Re)initialise NVML and fetch the device handle. Returns success.
+        NVML handles are process-global and get invalidated whenever ANY code
+        calls nvmlShutdown, so the monitor must be able to re-acquire on demand."""
+        if not _NVML_AVAILABLE:
+            self._handle = None
+            return False
+        try:
+            pynvml.nvmlInit()
+            self._handle = pynvml.nvmlDeviceGetHandleByIndex(self._index)
+            return True
+        except Exception:
+            self._handle = None
+            return False
+
     def _read_nvml(self) -> GPUMetrics:
-        h = self._handle
+        try:
+            return self._read_nvml_fields(self._handle)
+        except OSError:
+            # The cached handle was invalidated by another component's
+            # nvmlShutdown (surfaces as an OSError access violation). Re-acquire
+            # once and retry; if that still fails, degrade gracefully instead of
+            # crashing the optimization run.
+            if self._acquire_handle():
+                try:
+                    return self._read_nvml_fields(self._handle)
+                except OSError:
+                    pass
+            return GPUMetrics(gpu_index=self._index)
+
+    def _read_nvml_fields(self, h) -> GPUMetrics:
         m = GPUMetrics(gpu_index=self._index)
 
         try:
