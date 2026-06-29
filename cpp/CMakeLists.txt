@@ -46,3 +46,6 @@ target_link_libraries(core_hw PUBLIC core)
 
 add_executable(nvml_probe src/tools/nvml_probe_main.cpp)
 target_link_libraries(nvml_probe PRIVATE core_hw)
+
+add_executable(abctl_spike src/tools/abctl_spike_main.cpp)
+target_link_libraries(abctl_spike PRIVATE core_hw core)
