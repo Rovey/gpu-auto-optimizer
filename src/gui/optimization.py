@@ -153,6 +153,13 @@ class OptimizationScreen(ttk.Frame):
         self._clear()
         self._state = "complete"
 
+        # Push the fresh result to the Results screen so it shows THIS run (not the
+        # stale entry loaded at startup, possibly from another GPU/machine).
+        if self._app is not None:
+            res_screen = self._app._screens.get("results")
+            if res_screen is not None:
+                res_screen.show_result(result)
+
         ttk.Label(self, text="Optimization Complete!", font=("Segoe UI", 16, "bold")).pack(pady=(20, 10))
 
         info = ttk.Frame(self)

@@ -44,7 +44,7 @@ class GPUOptimizerApp:
         self.register_screen("optimization", optimization)
 
         results = ResultsScreen(self.content_frame)
-        results.load_from_config(self._config)
+        results.load_from_config(self._config, gpus[0].name if gpus else None)
         self.register_screen("results", results)
 
         settings = SettingsScreen(self.content_frame, self._config, save_config)

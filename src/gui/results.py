@@ -6,6 +6,20 @@ from tkinter import ttk
 from typing import Optional
 
 
+def select_result_for_gpu(per_gpu_results: dict, gpu_name: Optional[str] = None):
+    """Pick the saved result matching the current GPU; fall back to the most recent.
+
+    `values()[-1]` alone is GPU-agnostic and insertion-order fragile — it can surface a
+    stale result from a different machine (live bug: an old RTX 2060 SUPER entry showing
+    on an RTX 4070). Match the current GPU name first.
+    """
+    if not per_gpu_results:
+        return None
+    if gpu_name and gpu_name in per_gpu_results:
+        return per_gpu_results[gpu_name]
+    return list(per_gpu_results.values())[-1]
+
+
 class ResultsScreen(ttk.Frame):
     """Shows optimization results with before/after comparison."""
 
@@ -106,11 +120,11 @@ class ResultsScreen(ttk.Frame):
         notes = getattr(r, 'notes', '')
         self._notes_label.configure(text=notes if notes else "")
 
-    def load_from_config(self, config) -> None:
-        """Load last result from config, if available."""
-        if config.per_gpu_results:
-            last = list(config.per_gpu_results.values())[-1]
-            self.show_result(last)
+    def load_from_config(self, config, gpu_name: Optional[str] = None) -> None:
+        """Load the saved result for the current GPU (by name), if available."""
+        r = select_result_for_gpu(config.per_gpu_results, gpu_name)
+        if r is not None:
+            self.show_result(r)
         else:
             self._show_no_results()
 
