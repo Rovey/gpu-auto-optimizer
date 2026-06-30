@@ -84,6 +84,11 @@ def test_core_search_avoids_a_previously_hung_offset(tmp_path):
     opt._progress = None
     opt._cancel_event = threading.Event()
     opt._baseline_core_mhz = 2000
+    # Working backend: the applied offset always reads back (models a power-limited card
+    # where the load clock does NOT rise but the offset is genuinely applied).
+    opt._backend = SimpleNamespace(
+        verify=lambda idx: {"core_offset_khz": opt._core_offset_mhz * 1000}
+    )
 
     def fake_apply():
         applied.append(opt._core_offset_mhz)

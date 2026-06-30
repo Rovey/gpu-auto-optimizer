@@ -50,6 +50,27 @@ from .backends.nvapi_vfcurve import NVAPIVFCurveBackend
 ENABLE_VF_CURVE_UNDERVOLT = False
 
 
+def _core_offset_applied(backend, gpu_index: int, mid: int) -> bool:
+    """True if the backend read-back confirms the +`mid` MHz core offset is applied.
+
+    Judged by read-back, NOT by whether the under-load clock rose: a power-limited GPU
+    won't show a clock increase even when the offset is correctly applied. Returns True
+    (don't block) when verification is unavailable.
+    """
+    if mid <= 0:
+        return True
+    verify = getattr(backend, "verify", None)
+    if verify is None:
+        return True
+    v = verify(gpu_index)
+    if not v:
+        return True
+    rb = v.get("core_offset_khz")
+    if rb is None:
+        return True
+    return abs(rb // 1000 - mid) <= 1
+
+
 def _best_backend(gpu: GPUInfo, candidates: Optional[List[GPUBackend]] = None) -> GPUBackend:
     """Return the highest-priority available backend for this GPU."""
     if candidates is None:
@@ -359,23 +380,20 @@ class GPUOptimizer:
                 break
             ok = test.passed
 
-            # Check clock verification using the UNDER-LOAD snapshots from the
-            # stability test itself (not a post-test idle read).
-            if ok and mid > 0 and test.snapshots:
-                load_clocks = [s.core_clock_mhz for s in test.snapshots
-                               if s.gpu_util_pct >= 80 and s.core_clock_mhz > 0]
-                if load_clocks:
-                    avg_load_clock = sum(load_clocks) / len(load_clocks)
-                    if avg_load_clock <= self._baseline_core_mhz + 10:
-                        self._journal.complete(seq, passed=False, note="no clock change")
-                        m = self._monitor.read_once()
-                        self._emit(
-                            f"Core search: +{mid} MHz applied but clock unchanged "
-                            f"(avg {avg_load_clock:.0f} vs baseline {self._baseline_core_mhz}) "
-                            f"— backend may have failed",
-                            3, 10, m,
-                        )
-                        break
+            # Verify the offset actually applied via backend READ-BACK — not by whether
+            # the under-load clock rose. A power-limited GPU (pinned at its power wall)
+            # won't show a clock increase even when the offset is correctly applied;
+            # judging by load clock wrongly flagged that as a backend failure and
+            # abandoned the search at +0 (the live RTX 4070 symptom).
+            if ok and mid > 0 and not _core_offset_applied(self._backend, self._gpu.index, mid):
+                self._journal.complete(seq, passed=False, note="offset did not read back")
+                m = self._monitor.read_once()
+                self._emit(
+                    f"Core search: +{mid} MHz did not verify on read-back "
+                    f"— backend failed to apply",
+                    3, 10, m,
+                )
+                break
 
             self._journal.complete(seq, passed=ok)
             m = self._monitor.read_once()
