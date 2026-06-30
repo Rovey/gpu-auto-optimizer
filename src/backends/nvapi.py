@@ -314,7 +314,7 @@ class NVAPIBackend(GPUBackend):
                 target_mw = int(default_mw * power_limit_pct / 100)
                 target_mw = max(min_mw, min(max_mw, target_mw))
                 pynvml.nvmlDeviceSetPowerManagementLimit(h, target_mw)
-                notes.append(f"Power limit → {target_mw // 1000} W")
+                notes.append(f"Power limit set to {target_mw // 1000} W")
             finally:
                 pynvml.nvmlShutdown()
         except Exception as e:
