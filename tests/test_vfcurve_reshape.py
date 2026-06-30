@@ -136,3 +136,33 @@ def test_apply_routes_to_reshape_not_lock(monkeypatch):
     assert res.success is True
     assert res.target_voltage_mv == 950
     assert res.target_freq_mhz == 2800
+
+
+def test_reset_returns_true_when_readback_is_stock_despite_false_write_rc(monkeypatch):
+    """Some drivers return a non-OK rc from SetClockBoostTable even when the write
+    applied (seen live: reset() reported False but the curve was actually stock).
+    reset() must trust the read-back curve state, not the write's return code."""
+    import types
+    import src.backends.nvapi as nvapi_mod
+
+    pts = [(850000, 2400000), (900000, 2550000), (950000, 2700000)]
+    mask, vfp, ct = _pack_buffers(pts)
+    state = {"ct": ct}
+
+    b = object.__new__(NVAPIVFCurveBackend)
+    b._read_raw_mask = lambda gi: mask
+    b._read_raw_vfp = lambda gi, m=None: vfp
+    b._read_raw_clock_table = lambda gi, m=None: state["ct"]
+
+    def _write(gi, buf):
+        state["ct"] = buf      # the write actually applies...
+        return False           # ...but the driver reports a misleading non-OK rc
+
+    b._write_raw_clock_table = _write
+    b._clear_voltage_lock = lambda gi: True
+
+    fake_loader = types.SimpleNamespace(set_pstate20_raw=lambda *a, **k: True)
+    monkeypatch.setattr(nvapi_mod._NVAPILoader, "get", lambda: fake_loader)
+
+    assert b.reset(0) is True
+

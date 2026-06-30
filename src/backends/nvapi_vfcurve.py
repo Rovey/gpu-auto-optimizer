@@ -448,7 +448,7 @@ class NVAPIVFCurveBackend(GPUBackend):
         ct_buf[4:68] = mask[4:68]
         # All deltas default to 0
 
-        ok = self._write_raw_clock_table(gpu_index, bytes(ct_buf))
+        self._write_raw_clock_table(gpu_index, bytes(ct_buf))
 
         # Unlock voltage
         self._clear_voltage_lock(gpu_index)
@@ -457,7 +457,13 @@ class NVAPIVFCurveBackend(GPUBackend):
         from .nvapi import _NVAPILoader
         _NVAPILoader.get().set_pstate20_raw(gpu_index, 0, 0)
 
-        return ok
+        # Verify by read-back, not the write's return code: some drivers report a
+        # non-OK rc from SetClockBoostTable even when the write applied (observed live —
+        # reset reported False while the curve was actually stock). Trust the curve.
+        points = self.read_vf_curve(gpu_index)
+        if not points:
+            return False
+        return all(p.delta_khz == 0 for p in points)
 
     def verify(self, gpu_index: int) -> dict | None:
         """Read back V/F curve state."""
