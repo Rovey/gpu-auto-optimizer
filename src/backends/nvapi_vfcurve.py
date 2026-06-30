@@ -180,6 +180,34 @@ def _compute_undervolt_deltas(
     return deltas
 
 
+def _compute_reshape_deltas(
+    points: List[VFPoint],
+    target_voltage_uv: int,
+    target_freq_khz: int,
+) -> List[int]:
+    """Compute delta_khz per point for a curve-RESHAPE undervolt (no voltage lock).
+
+    Unlike ``_compute_undervolt_deltas`` (which flattens the *entire* curve to a single
+    frequency and is paired with a hard voltage lock — the combination that froze the
+    RTX 4070), this leaves points below the target voltage untouched:
+
+      - voltage < target  → delta 0 (stock; preserves dynamic boost / idle down-clock)
+      - voltage >= target → delta = target_freq - base_freq (flat top at target_freq)
+
+    The flat top caps frequency at/above the target voltage, which caps the voltage the
+    GPU will request (no frequency gain → no reason to raise voltage), achieving the
+    undervolt by curve *shape* rather than a hard lock. Returns one delta per point,
+    in the same order as ``points``.
+    """
+    deltas: List[int] = []
+    for p in points:
+        if p.voltage_uv < target_voltage_uv:
+            deltas.append(0)
+        else:
+            deltas.append(target_freq_khz - p.base_freq_khz)
+    return deltas
+
+
 # ---------------------------------------------------------------------------
 # Backend class
 # ---------------------------------------------------------------------------
@@ -289,6 +317,54 @@ class NVAPIVFCurveBackend(GPUBackend):
         ok = self._set_voltage_lock(gpu_index, target_voltage_uv)
         return ok
 
+    def apply_vf_reshape(
+        self,
+        gpu_index: int,
+        target_voltage_uv: int,
+        target_freq_khz: int,
+    ) -> bool:
+        """Apply a curve-RESHAPE undervolt: flat-top the V/F curve at target_freq for
+        voltages >= target, keep below-cap points at stock, and set NO hard voltage lock
+        (it clears any stale lock instead). Caps voltage via curve shape while preserving
+        dynamic boost below the cap — the freeze-safe alternative to ``apply_vf_lock``.
+        Returns True on success."""
+        mask = self._read_raw_mask(gpu_index)
+        vfp = self._read_raw_vfp(gpu_index, mask)
+        ct_bytes = self._read_raw_clock_table(gpu_index, mask)
+        if mask is None or vfp is None or ct_bytes is None:
+            return False
+
+        points = _parse_vf_points(mask, vfp, ct_bytes)
+        if not points:
+            return False
+
+        deltas = _compute_reshape_deltas(points, target_voltage_uv, target_freq_khz)
+
+        # Build modified clock table
+        ct_buf = bytearray(ct_bytes)
+        ct_buf[4:68] = mask[4:68]
+
+        gfx_idx = 0
+        for i in range(_MAX_ENTRIES):
+            m_off = _ENTRIES_OFFSET + i * _MASK_ENTRY_SIZE
+            if m_off + _MASK_ENTRY_SIZE > len(mask):
+                break
+            clock_type = struct.unpack_from('<I', mask, m_off)[0]
+            enabled = mask[m_off + 4]
+            if clock_type == _CLOCK_DOMAIN_GRAPHICS and enabled:
+                if gfx_idx < len(deltas):
+                    _apply_delta_to_clock_table(ct_buf, i, deltas[gfx_idx])
+                    gfx_idx += 1
+
+        ok = self._write_raw_clock_table(gpu_index, bytes(ct_buf))
+        if not ok:
+            return False
+
+        # Reshape caps voltage by curve shape — never set a hard lock (the freeze cause).
+        # Clear any stale lock so none remains active.
+        self._clear_voltage_lock(gpu_index)
+        return True
+
     def apply(
         self,
         gpu_index: int,
@@ -306,9 +382,11 @@ class NVAPIVFCurveBackend(GPUBackend):
         notes: list[str] = []
 
         # --- Apply V/F curve if target voltage is specified ---
+        # Phase B: use the freeze-safe curve RESHAPE (flat-top, no hard voltage lock)
+        # instead of the single-point lock that froze the RTX 4070.
         vf_ok = False
         if target_voltage_mv > 0 and target_freq_mhz > 0:
-            vf_ok = self.apply_vf_lock(
+            vf_ok = self.apply_vf_reshape(
                 gpu_index,
                 target_voltage_uv=target_voltage_mv * 1000,
                 target_freq_khz=target_freq_mhz * 1000,
