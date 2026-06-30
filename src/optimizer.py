@@ -43,13 +43,23 @@ from .backends.nvapi_vfcurve import NVAPIVFCurveBackend
 # Backend selection
 # ---------------------------------------------------------------------------
 
-def _best_backend(gpu: GPUInfo) -> GPUBackend:
+# The single-point V/F-curve LOCK (NVAPIVFCurveBackend) hard-freezes some GPUs —
+# reproduced repeatedly on an RTX 4070 / driver 610, even at near-stock voltages.
+# Disabled by default until Phase B replaces the lock with a gentle curve reshape.
+# When off, Balanced/Performance use the stable PState20 core/mem OC + power path.
+ENABLE_VF_CURVE_UNDERVOLT = False
+
+
+def _best_backend(gpu: GPUInfo, candidates: Optional[List[GPUBackend]] = None) -> GPUBackend:
     """Return the highest-priority available backend for this GPU."""
-    candidates: List[GPUBackend] = [
-        NVAPIVFCurveBackend(),
-        NVAPIBackend(),
-        NvidiaSMIBackend(),
-    ]
+    if candidates is None:
+        candidates = [
+            NVAPIVFCurveBackend(),
+            NVAPIBackend(),
+            NvidiaSMIBackend(),
+        ]
+    if not ENABLE_VF_CURVE_UNDERVOLT:
+        candidates = [b for b in candidates if not isinstance(b, NVAPIVFCurveBackend)]
     available = [b for b in candidates if b.is_available()]
     if not available:
         return NvidiaSMIBackend()   # always "available" (nvidia-smi must be present)
