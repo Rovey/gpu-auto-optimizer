@@ -14,6 +14,7 @@ target_compile_definitions(doctest INTERFACE DOCTEST_CONFIG_USE_STD_HEADERS)
 # Pure logic. No Windows, no driver, no D3D — this is what CI tests.
 add_library(core STATIC
   src/core/version.hpp
+  src/core/types.hpp
   src/core/objectives.hpp
   src/core/objectives.cpp
   src/core/config.hpp
@@ -38,6 +39,7 @@ add_executable(core_tests
   tests/test_version.cpp
   tests/test_objectives.cpp
   tests/test_config.cpp
+  tests/test_types.cpp
 )
 target_link_libraries(core_tests PRIVATE core doctest)
 add_test(NAME core_tests COMMAND core_tests)
