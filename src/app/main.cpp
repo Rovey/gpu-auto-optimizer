@@ -2,9 +2,26 @@
 #include "core/version.hpp"
 #include "hw/nvapi.hpp"
 #include "hw/nvml.hpp"
+#include <cerrno>
+#include <climits>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+
+// std::atoi silently returns 0 for anything it cannot parse, so a typo like
+// "--set-fan off" would parse to 0 and pin the fan there -- 0 is in range,
+// so the CLI's own range check cannot catch it. strtol plus this end-pointer
+// check rejects any argument that is not fully numeric, instead of guessing.
+static bool ParseIntArg(const char* text, int* out) {
+    if (!text || *text == '\0') return false;
+    char* end = nullptr;
+    errno = 0;
+    const long value = std::strtol(text, &end, 10);
+    if (end == text || *end != '\0') return false;   // trailing/leading junk, or nothing consumed
+    if (errno == ERANGE || value < INT_MIN || value > INT_MAX) return false;
+    *out = static_cast<int>(value);
+    return true;
+}
 
 static int probe() {
     gao::Nvml nvml;
@@ -48,6 +65,10 @@ static int set_offset(const char* label, int mhz, bool core) {
     std::printf("%s: requested %d MHz, read back ", label, mhz);
     if (readback) std::printf("%d MHz\n", core ? readback->first : readback->second);
     else std::printf("unavailable (%s)\n", nvapi.Error().c_str());
+    // Print the diagnostic before the verdict, same as set_fan(): "clamped to
+    // 210 MHz" and "the call never reached an unelevated driver" both show
+    // MISMATCH here, and without this line they are indistinguishable.
+    if (!ok) std::printf("%s\n", nvapi.Error().c_str());
     std::printf("%s\n", ok ? "OK" : "MISMATCH");
     return ok ? 0 : 1;
 }
@@ -60,6 +81,9 @@ static int reset() {
     std::printf("reset: requested core 0 MHz, mem 0 MHz\n");
     if (readback) std::printf("read back core %d MHz, mem %d MHz\n", readback->first, readback->second);
     else std::printf("read back unavailable (%s)\n", nvapi.Error().c_str());
+    // Print the diagnostic before the verdict, same as set_fan(): a refused
+    // write and an unelevated call both show MISMATCH here otherwise.
+    if (!ok) std::printf("%s\n", nvapi.Error().c_str());
     std::printf("%s\n", ok ? "OK" : "MISMATCH");
     return ok ? 0 : 1;
 }
@@ -88,10 +112,22 @@ int main(int argc, char** argv) {
         return 0;
     }
     if (argc > 1 && std::strcmp(argv[1], "--probe") == 0) return probe();
-    if (argc > 2 && std::strcmp(argv[1], "--set-core") == 0) return set_offset("core offset", std::atoi(argv[2]), true);
-    if (argc > 2 && std::strcmp(argv[1], "--set-mem") == 0) return set_offset("mem offset", std::atoi(argv[2]), false);
+    if (argc > 2 && std::strcmp(argv[1], "--set-core") == 0) {
+        int mhz = 0;
+        if (!ParseIntArg(argv[2], &mhz)) { std::printf("--set-core expects an integer MHz value, got '%s'\n", argv[2]); return 1; }
+        return set_offset("core offset", mhz, true);
+    }
+    if (argc > 2 && std::strcmp(argv[1], "--set-mem") == 0) {
+        int mhz = 0;
+        if (!ParseIntArg(argv[2], &mhz)) { std::printf("--set-mem expects an integer MHz value, got '%s'\n", argv[2]); return 1; }
+        return set_offset("mem offset", mhz, false);
+    }
     if (argc > 1 && std::strcmp(argv[1], "--reset") == 0) return reset();
-    if (argc > 2 && std::strcmp(argv[1], "--set-fan") == 0) return set_fan(std::atoi(argv[2]));
+    if (argc > 2 && std::strcmp(argv[1], "--set-fan") == 0) {
+        int pct = 0;
+        if (!ParseIntArg(argv[2], &pct)) { std::printf("--set-fan expects an integer percentage (or -1), got '%s'\n", argv[2]); return 1; }
+        return set_fan(pct);
+    }
     std::printf("usage: gao [--version | --probe | --set-core <mhz> | --set-mem <mhz> | --reset | --set-fan <pct>]\n");
     return argc > 1 ? 1 : 0;
 }
