@@ -49,9 +49,13 @@ bool Nvml::Init() {
 }
 
 int Nvml::DeviceCount() {
-    if (!inited_ || !p_count) return 0;
+    // -1 means "not ready" (not initialized, or the query failed) and is
+    // never conflated with a genuine zero-device result, mirroring the
+    // fan_pct sentinel convention in Telemetry. Error() carries the reason.
+    if (!inited_) { error_ = "NVML not initialized"; return -1; }
+    if (!p_count) { error_ = "nvmlDeviceGetCount_v2 not available"; return -1; }
     unsigned n = 0;
-    if (p_count(&n) != NVML_SUCCESS) return 0;
+    if (p_count(&n) != NVML_SUCCESS) { error_ = "nvmlDeviceGetCount_v2 failed"; return -1; }
     return static_cast<int>(n);
 }
 
