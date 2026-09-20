@@ -19,7 +19,8 @@ add_library(core STATIC
   src/core/config.hpp
   src/core/config.cpp
 )
-target_include_directories(core PUBLIC src third_party)
+target_include_directories(core PUBLIC src)
+target_include_directories(core PRIVATE third_party)
 
 # The only code allowed to touch hardware.
 add_library(hw STATIC

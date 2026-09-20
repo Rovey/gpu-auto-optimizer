@@ -28,21 +28,32 @@ Config from_json(const std::string& text) {
     const nlohmann::json j = nlohmann::json::parse(text, nullptr, /*allow_exceptions=*/false);
     if (j.is_discarded() || !j.is_object()) return c;
 
-    c.preset = static_cast<Preset>(j.value("preset", 0));
-    c.objectives = objectives_for(c.preset);
-    if (const auto it = j.find("objectives"); it != j.end() && it->is_object()) {
-        c.objectives.max_temp_c = it->value("max_temp_c", c.objectives.max_temp_c);
-        c.objectives.max_fan_pct = it->value("max_fan_pct", c.objectives.max_fan_pct);
-        c.objectives.perf_push = it->value("perf_push", c.objectives.perf_push);
-        c.objectives.core_oc = it->value("core_oc", c.objectives.core_oc);
-        c.objectives.mem_oc = it->value("mem_oc", c.objectives.mem_oc);
-        c.objectives.power = it->value("power", c.objectives.power);
-        c.objectives.undervolt = it->value("undervolt", c.objectives.undervolt);
+    try {
+        int preset_value = j.value("preset", 0);
+        // Validate preset is one of the four enumerators: 0, 1, 2, 3
+        if (preset_value >= 0 && preset_value <= 3) {
+            c.preset = static_cast<Preset>(preset_value);
+        }
+        // else: keep default Preset::BestOfMyGpu
+
+        c.objectives = objectives_for(c.preset);
+        if (const auto it = j.find("objectives"); it != j.end() && it->is_object()) {
+            c.objectives.max_temp_c = it->value("max_temp_c", c.objectives.max_temp_c);
+            c.objectives.max_fan_pct = it->value("max_fan_pct", c.objectives.max_fan_pct);
+            c.objectives.perf_push = it->value("perf_push", c.objectives.perf_push);
+            c.objectives.core_oc = it->value("core_oc", c.objectives.core_oc);
+            c.objectives.mem_oc = it->value("mem_oc", c.objectives.mem_oc);
+            c.objectives.power = it->value("power", c.objectives.power);
+            c.objectives.undervolt = it->value("undervolt", c.objectives.undervolt);
+        }
+        c.core_offset_mhz = j.value("core_offset_mhz", 0);
+        c.mem_offset_mhz = j.value("mem_offset_mhz", 0);
+        c.power_limit_pct = j.value("power_limit_pct", 100);
+        c.blacklisted_core_offsets = j.value("blacklisted_core_offsets", std::vector<int>{});
+    } catch (const nlohmann::json::exception&) {
+        // Type mismatch or other JSON error: return defaults
+        return Config{};
     }
-    c.core_offset_mhz = j.value("core_offset_mhz", 0);
-    c.mem_offset_mhz = j.value("mem_offset_mhz", 0);
-    c.power_limit_pct = j.value("power_limit_pct", 100);
-    c.blacklisted_core_offsets = j.value("blacklisted_core_offsets", std::vector<int>{});
     return c;
 }
 
