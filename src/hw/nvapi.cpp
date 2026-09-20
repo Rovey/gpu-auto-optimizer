@@ -45,8 +45,8 @@ constexpr unsigned kSetPstates20Id     = 0x0F4DAE6B;
 //     (Open Hardware Monitor / nvapi-rs).
 //
 //   - kClientFanCoolersGetStatusId/GetControlId/SetControlId, the newer
-//     "client fan cooler" API this task was asked to try first, also come
-//     from sys/src/nvid.rs -- but that is *all* that exists for them
+//     "client fan cooler" API this task was asked to try first, come from
+//     the same nvid.rs table -- but that is *all* that exists for them
 //     anywhere in the crate (checked every branch: master, v0.1.x, v0.2.x,
 //     v0.2.x-macros, v0.2.x-refactor, vfp, serde-rpc). No parameter struct,
 //     no field layout, no caller. The ids were added in commit ca75f787
@@ -63,17 +63,34 @@ constexpr unsigned kSetPstates20Id     = 0x0F4DAE6B;
 //     safe "unsupported" result the way a null pointer is; it is undefined
 //     behavior. That is a materially different risk than every other id in
 //     this file, all of which come with a fully specified struct from a real
-//     source. So these three ids are recorded for diagnostics only -- see
-//     DetectFanControl() -- and never used to build a call.
+//     source.
+//
+//     NOT IMPLEMENTED, as a result: no call is ever built against these
+//     three ids anywhere in this file. DetectFanControl() only resolves them
+//     (an nvapi_QueryInterface lookup, nothing more) to fold "the newer ids
+//     do resolve on this driver" into a diagnostic when the legacy fallback
+//     below also fails to resolve -- that resolution result is never used to
+//     decide availability or attempted as a control path. So despite the
+//     "try the newer API first, fall back to SetCoolerLevels" plan, the
+//     fallback order actually implemented today is legacy-only: SetFanPct()
+//     goes straight to ApplyCoolerLevels/RestoreCoolerLevels, never through
+//     these three ids. Finishing this needs a real, sourced
+//     NV_GPU_CLIENT_FAN_COOLERS_STATUS/CONTROL struct (field offsets and a
+//     version tag, the same kind of thing NV_GPU_COOLER_SETTINGS_V1 below
+//     has) from somewhere other than this project's own guesswork, then a
+//     TryClientFanCoolers(gpu, pct) attempted first in SetFanPct(), falling
+//     through to the existing legacy calls on any failure.
 //
 //     Empirically, on this project's own RTX 4070: NvAPI_GPU_GetCoolerSettings
-//     (the fallback's own read call, fully specified, called correctly)
-//     returns NVAPI_NOT_SUPPORTED (-104), not a resolution failure. That
-//     matches the well-known fact that NVIDIA dropped the legacy per-cooler
-//     API on Turing-and-later GPUs. In other words, FanControlAvailable()
-//     is expected to read false on THIS card specifically -- fan control is
-//     safe and correctly reports itself unavailable, but does not actually
-//     work here until the newer API's struct is found. See task-6-report.md.
+//     (the legacy fallback's own read call, fully specified, called
+//     correctly) returns NVAPI_NOT_SUPPORTED (-104), not a resolution
+//     failure. That matches the well-known fact that NVIDIA dropped the
+//     legacy per-cooler API on Turing-and-later GPUs. In other words,
+//     FanControlAvailable() is expected to read false on THIS card
+//     specifically -- fan control safely and correctly reports itself
+//     unavailable here, but does not actually work on this GPU until the
+//     newer API above is implemented. See task-6-report.md /
+//     task-6-fix-report.md.
 constexpr unsigned kGetCoolerSettingsId          = 0xDA141340;
 constexpr unsigned kSetCoolerLevelsId            = 0x891FA0AE;
 constexpr unsigned kRestoreCoolerSettingsId      = 0x8F6ED0FB;
@@ -425,16 +442,27 @@ bool Nvapi::VerifyFanPct(unsigned gpu, int target_pct) {
 }
 
 bool Nvapi::SetFanPct(unsigned gpu, int pct) {
+    // Client-side sanity check, ahead of everything else (including whether
+    // fan control is even available): -1 or 0-100 are the only values that
+    // mean anything to a fan. VerifyFanPct's read-back would eventually
+    // catch a value the driver refused or clamped, but a value this
+    // obviously wrong (e.g. --set-fan 500) should never reach the driver at
+    // all rather than rely on the round trip to notice.
+    if (pct != -1 && (pct < 0 || pct > 100)) {
+        error_ = "fan percentage out of range: " + std::to_string(pct) + " (expected -1 or 0-100)";
+        return false;
+    }
+
     if (!fan_available_) {
         // error_ already explains which resolve/probe failed, set by
         // DetectFanControl() during Init().
         return false;
     }
 
-    // The newer client fan-cooler API would be tried here first if this
-    // project had a verified struct for it (see the block comment at the
-    // top of this file for why it does not); DetectFanControl() already
-    // confirmed the fallback below is the one this GPU actually answers to.
+    // NOT IMPLEMENTED: the newer client fan-cooler API is not tried here --
+    // see the "NOT IMPLEMENTED" paragraph in the block comment at the top of
+    // this file for what is missing and what finishing it would take. The
+    // fallback below is the only path that actually runs today.
     const bool ok = (pct < 0) ? RestoreCoolerLevels(gpu) : ApplyCoolerLevels(gpu, pct);
     if (!ok) {
         // Resolved fine at Init() time but failed on a real call: the same

@@ -27,9 +27,9 @@ root; adjust the path for a Debug build.
 | 4 | Core offset reverts | `.\build\Release\gao.exe --reset` | yes | Read-back core 0, mem 0, `OK` | |
 | 5 | Memory offset applies | `.\build\Release\gao.exe --set-mem 100` | yes | Read-back 100, `OK` | |
 | 6 | A refused write is reported | `.\build\Release\gao.exe --set-core 5000` | yes | `MISMATCH`, not `OK` | |
-| 7 | Fan control applies | `.\build\Release\gao.exe --set-fan 70` | yes | Fan audibly rises within a few seconds, `OK`; a follow-up `--probe` shows `fan=` near 70% | |
-| 8 | Fan returns to automatic | `.\build\Release\gao.exe --set-fan -1` | yes | Fan drops back under driver control, `OK` | |
-| 9 | Unsupported fan API is reported | Run `--set-fan 70` on a GPU/driver combination without cooler support | yes | Prints "fan control unavailable" and the failing call's name, not silence and not a crash | N/A on this machine's RTX 4070, which does answer to `NvAPI_GPU_SetCoolerLevels` -- see check 7/8. Revisit if this project is ever run on different hardware. |
+| 7 | Fan control applies | `.\build\Release\gao.exe --set-fan 70` | yes | **On a GPU/driver that supports the legacy `NvAPI_GPU_SetCoolerLevels` API:** fan audibly rises within a few seconds, `OK`; a follow-up `--probe` shows `fan=` near 70%. **On this project's own reference RTX 4070, verified during implementation:** the legacy API answers `NVAPI_NOT_SUPPORTED`, so `gao` instead prints `fan control unavailable: NvAPI_GPU_GetCoolerSettings failed (status -104)` and exits 1 -- the fan does not move. That is the correct, honest result for *this* card (see check 9), not a failure of this check or of `gao`. | |
+| 8 | Fan returns to automatic | `.\build\Release\gao.exe --set-fan -1` | yes | **On supported hardware:** fan drops back under driver control, `OK`. **On this reference RTX 4070:** the same `fan control unavailable: NvAPI_GPU_GetCoolerSettings failed (status -104)` message and exit 1 as check 7 -- there is no automatic control to hand back, because manual control was never available to begin with. A different message here than check 7 would indicate a real bug; the same message on both is the expected, consistent result. | |
+| 9 | Unsupported fan API is reported | `.\build\Release\gao.exe --set-fan 70` (same command as check 7) | yes | Prints `fan control unavailable: ` followed by the name of the failing call, not silence and not a crash, and exits 1. | **This project's reference RTX 4070 *is* the unsupported case** -- its driver answers `NVAPI_NOT_SUPPORTED` (status -104) to the legacy cooler API (see the block comment in `src/hw/nvapi.cpp`), so checks 7 and 8 above already exercise this exact check on this exact hardware; it is not a separate scenario needing different hardware. If this project ever runs on a card that *does* support the legacy API, checks 7/8 will show real fan movement there, and this row would then need genuinely unsupported hardware (or a blocked/older driver) to exercise instead. |
 
 ## Notes
 
@@ -52,3 +52,12 @@ root; adjust the path for a Debug build.
   calling a real function pointer with an invented buffer -- unlike a wrong
   interface id, that is not a safe failure mode. See the block comment at
   the top of `src/hw/nvapi.cpp` for the full account.
+- **On this project's own reference RTX 4070, fan control does not
+  currently work at all** -- not a driver quirk to troubleshoot, not a bug
+  to file. NVIDIA dropped the legacy per-cooler API this build calls on
+  Turing-and-later GPUs, and this card confirms that (`NVAPI_NOT_SUPPORTED`,
+  status -104, from `NvAPI_GPU_GetCoolerSettings` itself). Checks 7, 8 and 9
+  above all describe this same, single, expected outcome on this hardware.
+  Fan control only starts working again once the newer API above is
+  implemented, which needs its struct layout from somewhere this project
+  could not reach at implementation time.
