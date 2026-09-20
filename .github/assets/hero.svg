@@ -1,0 +1,81 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 500" width="1200" height="500" role="img" aria-label="GPU Auto Optimizer: pick a risk profile, and the tool binary-searches the highest stable core and memory offsets, verifying every step by read-back and stability testing, with a crash-safe journal that blacklists any setting that froze the machine">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0d1117"/>
+      <stop offset="100%" stop-color="#121a15"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#76B900"/>
+      <stop offset="60%" stop-color="#3fb950"/>
+      <stop offset="100%" stop-color="#d29922"/>
+    </linearGradient>
+    <style>
+      .sans { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+      .mono { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace; }
+      .title { font-size: 34px; font-weight: 700; fill: #e6edf3; }
+      .sub { font-size: 17px; fill: #8b949e; }
+      .label { font-size: 12px; font-weight: 700; letter-spacing: 1.4px; fill: #6e7681; }
+      .chip { font-size: 13.5px; fill: #8b949e; }
+      .chipOn { font-size: 13.5px; font-weight: 700; fill: #0d1117; }
+      .val { font-size: 15px; fill: #c9d1d9; }
+      .good { fill: #3fb950; }
+      .warn { fill: #d29922; }
+      .bad { fill: #f85149; }
+      .log { font-size: 13px; fill: #adbac7; }
+      .tag { font-size: 13px; fill: #8b949e; }
+      .key { fill: #e6edf3; }
+    </style>
+  </defs>
+
+  <rect width="1200" height="500" rx="18" fill="url(#bg)"/>
+  <rect x="0.5" y="0.5" width="1199" height="499" rx="18" fill="none" stroke="#30363d"/>
+  <rect x="0" y="0" width="1200" height="5" rx="2.5" fill="url(#accent)"/>
+
+  <text class="sans title" x="56" y="84">GPU Auto Optimizer</text>
+  <text class="sans sub" x="56" y="116">Pick a profile, press Optimize. It finds the highest stable settings itself.</text>
+
+  <g transform="translate(56 166)">
+    <text class="sans label" x="0" y="0">RISK PROFILE</text>
+
+    <rect x="0" y="16" width="62" height="28" rx="14" fill="#161b22" stroke="#30363d"/>
+    <text class="sans chip" x="31" y="35" text-anchor="middle">Safe</text>
+
+    <rect x="72" y="16" width="92" height="28" rx="14" fill="#3fb950"/>
+    <text class="sans chipOn" x="118" y="35" text-anchor="middle">Balanced</text>
+
+    <rect x="174" y="16" width="112" height="28" rx="14" fill="#161b22" stroke="#30363d"/>
+    <text class="sans chip" x="230" y="35" text-anchor="middle">Performance</text>
+
+    <rect x="296" y="16" width="82" height="28" rx="14" fill="#161b22" stroke="#30363d"/>
+    <text class="sans chip" x="337" y="35" text-anchor="middle">Extreme</text>
+
+    <text class="sans label" x="0" y="92">SEARCH CEILING FOR THIS PROFILE</text>
+    <text class="mono val" x="0" y="122"><tspan class="good">core</tspan> +150 MHz   <tspan class="good">mem</tspan> +800 MHz   <tspan class="warn">power</tspan> -10% … +15%</text>
+    <text class="sans tag" x="0" y="148">every step applied, read back, then stress-tested before it is kept</text>
+
+    <text class="sans label" x="0" y="204">SETTINGS ARE VOLATILE</text>
+    <text class="sans tag" x="0" y="228">cleared on reboot — optional boot-apply stops itself after 3 failures</text>
+  </g>
+
+  <g transform="translate(600 150)">
+    <rect x="0" y="0" width="544" height="278" rx="12" fill="#010409" stroke="#30363d"/>
+    <circle cx="22" cy="22" r="5" fill="#f85149"/>
+    <circle cx="40" cy="22" r="5" fill="#d29922"/>
+    <circle cx="58" cy="22" r="5" fill="#3fb950"/>
+    <text class="sans tag" x="80" y="26">optimizer log</text>
+    <line x1="0" y1="44" x2="544" y2="44" stroke="#21262d"/>
+
+    <text class="mono log" x="20" y="72"><tspan class="key">backend</tspan> NVAPI PState20 selected</text>
+    <text class="mono log" x="20" y="96"><tspan class="key">baseline</tspan> measured under CuPy load</text>
+    <text class="mono log" x="20" y="120">core +180  <tspan class="bad">froze — journaled, blacklisted</tspan></text>
+    <text class="mono log" x="20" y="144">core +150  <tspan class="good">read-back ok · soak passed</tspan></text>
+    <text class="mono log" x="20" y="168">mem  +800  <tspan class="good">read-back ok · soak passed</tspan></text>
+    <text class="mono log" x="20" y="192">power cap applied via NVML</text>
+    <line x1="20" y1="216" x2="524" y2="216" stroke="#21262d"/>
+    <text class="mono log" x="20" y="246"><tspan class="good">✓</tspan> <tspan class="tag">write-ahead journal: a freeze is never retried</tspan></text>
+  </g>
+
+  <g transform="translate(56 462)">
+    <text class="sans tag" x="0" y="0">Windows · NVIDIA · NVAPI + NVML control · CuPy stability testing · 75 mocked unit tests</text>
+  </g>
+</svg>
