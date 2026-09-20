@@ -100,13 +100,25 @@ constexpr unsigned kClientFanCoolersSetControlId = 0xA58971A5;
 
 // NV_GPU_COOLER_SETTINGS_V1: version(u32) + count(u32) +
 // cooler[NVAPI_MAX_COOLERS_PER_GPU], each cooler entry 12 u32 fields (48
-// bytes). Only `count` and each entry's `currentLevel`/`currentPolicy` are
-// read by this file; the rest of the entry is skipped over, not decoded.
+// bytes). Only `count` and each entry's `currentPolicy` are read by this
+// file; the rest of the entry (currentLevel included) is skipped over, not
+// decoded.
 constexpr int kMaxCoolersPerGpu = 3;       // NVAPI_MAX_COOLERS_PER_GPU
-constexpr int kCoolerSettingsSize = 4 * 2 + (4 * 12) * kMaxCoolersPerGpu;  // 152
+constexpr int kCoolerEntrySize = 4 * 12;   // 48 bytes, NV_GPU_COOLER_SETTINGS_COOLER
+constexpr int kCoolerSettingsSize = 4 * 2 + kCoolerEntrySize * kMaxCoolersPerGpu;  // 152
 constexpr unsigned kCoolerSettingsVerV1 = kCoolerSettingsSize | (1u << 16);
 constexpr int kCoolerOffVersion = 0;
 constexpr int kCoolerOffCount = 4;
+constexpr int kCoolerOffCoolerArray = 8;   // entries begin right after version+count
+// Field order within NV_GPU_COOLER_SETTINGS_COOLER, from arcnmx/nvapi-rs
+// (sys/src/gpu/cooler.rs, fetched at implementation time -- the same
+// source, cross-checked the same way, as the cooler ids and the SET struct
+// below): type_, controller, defaultMinLevel, defaultMaxLevel,
+// currentMinLevel, currentMaxLevel, currentLevel, defaultPolicy,
+// currentPolicy, target, controlType, active -- twelve u32 fields, matching
+// NV_GPU_COOLER_SETTINGS_COOLER_SIZE = 4 * 12 in that source. currentPolicy
+// is the 9th field (index 8), so its offset within one entry is 8 * 4 = 32.
+constexpr int kCoolerEntryOffCurrentPolicy = 32;
 
 // NV_GPU_SETCOOLER_LEVEL_V1: version(u32) + cooler[kMaxCoolersPerGpu], each
 // entry {currentLevel: u32, currentPolicy: u32} (8 bytes).
@@ -410,12 +422,42 @@ bool Nvapi::RestoreCoolerLevels(unsigned gpu) {
 }
 
 bool Nvapi::VerifyFanPct(unsigned gpu, int target_pct) {
-    // The driver needs a moment to actually move the fan before NVML
-    // reports the new speed. The source of truth here is NVML, not NVAPI's
-    // own GetCoolerSettings.currentLevel, because NVML's fan_pct is the same
-    // reading --probe and any later fan-curve search already trust.
+    // The driver needs a moment to actually move the fan, or hand control
+    // back, before either NVML or NVAPI's own settings reflect it.
     Sleep(static_cast<DWORD>(kFanSettleMs));
 
+    if (target_pct < 0) {
+        // Automatic control was restored. NVML's fan_pct cannot verify
+        // this: the fan can sit at the exact same percentage whether it is
+        // being held there by MANUAL policy or genuinely following the
+        // driver's own curve, since the level itself does not change just
+        // because the policy does -- a cooler still pinned at MANUAL would
+        // read back through NVML exactly the same as a real restore.
+        // NVAPI's own GetCoolerSettings is the only thing that can tell the
+        // two apart: read the policy back and require every cooler this
+        // GPU reported to be off NVAPI_COOLER_POLICY_MANUAL.
+        unsigned char settings[kCoolerSettingsSize];
+        if (!GetCoolerSettings(gpu, settings)) {
+            error_ = "fan restore could not be verified: " + error_;
+            return false;
+        }
+        const unsigned count = GetU32(settings, kCoolerOffCount);
+        for (unsigned i = 0; i < count && i < static_cast<unsigned>(kMaxCoolersPerGpu); ++i) {
+            const int entry_off = kCoolerOffCoolerArray + static_cast<int>(i) * kCoolerEntrySize;
+            const unsigned policy = GetU32(settings, entry_off + kCoolerEntryOffCurrentPolicy);
+            if (policy == kCoolerPolicyManual) {
+                error_ = "fan restore did not take: cooler " + std::to_string(i) +
+                         " is still reported under NVAPI_COOLER_POLICY_MANUAL";
+                return false;
+            }
+        }
+        return true;
+    }
+
+    // target_pct >= 0: a manual level was requested. The source of truth
+    // here is NVML, not NVAPI's own GetCoolerSettings.currentLevel, because
+    // NVML's fan_pct is the same reading --probe and any later fan-curve
+    // search already trust.
     Nvml nvml;
     if (!nvml.Init()) {
         error_ = "fan change applied but could not verify: NVML init failed (" + nvml.Error() + ")";
@@ -425,12 +467,6 @@ bool Nvapi::VerifyFanPct(unsigned gpu, int target_pct) {
     if (!t.ok || t.fan_pct < 0) {
         error_ = "fan change applied but could not verify: NVML did not report a fan percentage";
         return false;
-    }
-    if (target_pct < 0) {
-        // Automatic control was restored -- there is no fixed target to
-        // compare against. Success here means NVML still reports a real
-        // reading, i.e. the card is still responding.
-        return true;
     }
     const int diff = t.fan_pct > target_pct ? t.fan_pct - target_pct : target_pct - t.fan_pct;
     if (diff > kFanTolerancePct) {
@@ -468,12 +504,32 @@ bool Nvapi::SetFanPct(unsigned gpu, int pct) {
         // Resolved fine at Init() time but failed on a real call: the same
         // "never offer a control that just failed for real" discipline the
         // offsets use. error_ is already set by the failing call.
+        //
+        // For pct >= 0 this may have left the cooler pinned at MANUAL with
+        // whatever partially landed; for pct < 0 the restore attempt above
+        // is exactly what just failed. Either way, a caller (make_gpu_control
+        // hands this object to the future tuner as a long-lived reference)
+        // must not be left holding a fan stuck under manual control just
+        // because this one call failed -- best-effort try to hand control
+        // back before giving up, without letting a failure in that attempt
+        // overwrite the error that actually explains what went wrong.
+        const std::string original_error = error_;
+        RestoreCoolerLevels(gpu);
+        error_ = original_error;
         fan_available_ = false;
         return false;
     }
 
     if (!VerifyFanPct(gpu, pct)) {
-        fan_available_ = false;  // error_ set by VerifyFanPct
+        // The write reported success but did not verify -- e.g. a transient
+        // NVML/NVAPI read miss. Same reasoning as above: the cooler may be
+        // sitting at MANUAL right now, and this object is about to refuse
+        // all further fan calls, so a best-effort restore here is the last
+        // chance to not strand it there.
+        const std::string verify_error = error_;
+        RestoreCoolerLevels(gpu);
+        error_ = verify_error;
+        fan_available_ = false;
         return false;
     }
     return true;

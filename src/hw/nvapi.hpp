@@ -32,8 +32,12 @@ public:
     // Fan control through NvAPI_GPU_SetCoolerLevels (the older, fully
     // specified API -- see nvapi.cpp for why the newer client fan-cooler ids
     // are known but never called). pct is 0-100; -1 restores automatic
-    // (driver) control. Verified by reading the fan percentage back through
-    // NVML after a settle delay -- never trust NVAPI's return code alone.
+    // (driver) control. A manual level is verified by reading the fan
+    // percentage back through NVML after a settle delay; a restore is
+    // verified by reading the cooler policy back through NVAPI itself --
+    // never trust NVAPI's return code alone for either. On any failure,
+    // best-effort hands control back to the driver before returning, so a
+    // failed write does not also strand the fan pinned at manual.
     bool SetFanPct(unsigned gpu, int pct);
     // False until Init() has confirmed, read-only, that this GPU answers to
     // the fan-control calls; also flips to false if a later SetFanPct() call
@@ -69,8 +73,13 @@ private:
     bool ApplyCoolerLevels(unsigned gpu, int pct);
     // Hands fan control back to the driver via NvAPI_GPU_RestoreCoolerSettings.
     bool RestoreCoolerLevels(unsigned gpu);
-    // Settles, then reads fan_pct back through NVML and compares to
-    // target_pct (skipped for target_pct < 0, which has no fixed target).
+    // Settles, then verifies the change actually took. For target_pct >= 0,
+    // reads fan_pct back through NVML and compares to target_pct. For
+    // target_pct < 0 (a restore), NVML's fan_pct cannot tell a real restore
+    // apart from a cooler still pinned at MANUAL -- the level itself does
+    // not change just because the policy does -- so this instead reads the
+    // cooler policy back through NVAPI's own GetCoolerSettings and requires
+    // every cooler to be off NVAPI_COOLER_POLICY_MANUAL.
     bool VerifyFanPct(unsigned gpu, int target_pct);
 
     void* lib_ = nullptr;
