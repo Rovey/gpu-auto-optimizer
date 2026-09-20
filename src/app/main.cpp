@@ -64,6 +64,24 @@ static int reset() {
     return ok ? 0 : 1;
 }
 
+// pct is 0-100; -1 restores automatic control. Prints the same OK/MISMATCH
+// verdict as set_offset() -- SetFanPct() already verified the change through
+// NVML before returning, so the return value alone is trustworthy here.
+static int set_fan(int pct) {
+    gao::Nvapi nvapi;
+    if (!nvapi.Init()) { std::printf("NVAPI init failed: %s\n", nvapi.Error().c_str()); return 1; }
+    if (!nvapi.FanControlAvailable()) {
+        std::printf("fan control unavailable: %s\n", nvapi.Error().c_str());
+        return 1;
+    }
+    if (pct < 0) std::printf("fan: restoring automatic control\n");
+    else std::printf("fan: requested %d%%\n", pct);
+    const bool ok = nvapi.SetFanPct(kGpu, pct);
+    if (!ok) std::printf("%s\n", nvapi.Error().c_str());
+    std::printf("%s\n", ok ? "OK" : "MISMATCH");
+    return ok ? 0 : 1;
+}
+
 int main(int argc, char** argv) {
     if (argc > 1 && std::strcmp(argv[1], "--version") == 0) {
         std::printf("%s %s\n", gao::kProductName.data(), gao::kVersion.data());
@@ -73,6 +91,7 @@ int main(int argc, char** argv) {
     if (argc > 2 && std::strcmp(argv[1], "--set-core") == 0) return set_offset("core offset", std::atoi(argv[2]), true);
     if (argc > 2 && std::strcmp(argv[1], "--set-mem") == 0) return set_offset("mem offset", std::atoi(argv[2]), false);
     if (argc > 1 && std::strcmp(argv[1], "--reset") == 0) return reset();
-    std::printf("usage: gao [--version | --probe | --set-core <mhz> | --set-mem <mhz> | --reset]\n");
+    if (argc > 2 && std::strcmp(argv[1], "--set-fan") == 0) return set_fan(std::atoi(argv[2]));
+    std::printf("usage: gao [--version | --probe | --set-core <mhz> | --set-mem <mhz> | --reset | --set-fan <pct>]\n");
     return argc > 1 ? 1 : 0;
 }
