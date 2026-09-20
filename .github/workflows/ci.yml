@@ -9,30 +9,21 @@ permissions:
   contents: read
 
 jobs:
-  test:
-    name: Test (Python ${{ matrix.python }})
+  build-and-test:
+    name: Build and test (x64)
     runs-on: windows-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        # 3.12 is what setup.bat provisions; 3.13 guards against the next bump.
-        python: ['3.12', '3.13']
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: ${{ matrix.python }}
-          cache: pip
-          cache-dependency-path: requirements-dev.txt
+      - name: Configure
+        run: cmake -S . -B build -A x64
 
-      # The runner has no NVIDIA GPU, driver or CUDA runtime, and it does not need
-      # one: the suite mocks NVAPI, NVML and CuPy. Installing requirements.txt here
-      # would pull the CUDA wheels for nothing.
-      - name: Install test dependencies
-        run: python -m pip install --disable-pip-version-check -r requirements-dev.txt
+      # The full executable is built, not just the test target: the runner has no
+      # GPU, but it still catches link errors in the hardware layer.
+      - name: Build
+        run: cmake --build build --config Release
 
       - name: Test
-        run: python -m pytest -q
+        run: ctest --test-dir build -C Release --output-on-failure
