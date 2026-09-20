@@ -4,6 +4,7 @@
 #include "hw/nvml.hpp"
 #include <cerrno>
 #include <climits>
+#include <cstddef>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -23,6 +24,13 @@ static bool ParseIntArg(const char* text, int* out) {
     return true;
 }
 
+// Telemetry fields that use the -1-means-unknown sentinel print as "n/a"
+// instead of a number that would look like a real reading.
+static void FormatField(char* buf, std::size_t size, int value, const char* suffix) {
+    if (value < 0) std::snprintf(buf, size, "n/a");
+    else std::snprintf(buf, size, "%d%s", value, suffix);
+}
+
 static int probe() {
     gao::Nvml nvml;
     if (!nvml.Init()) {
@@ -38,13 +46,18 @@ static int probe() {
     for (int i = 0; i < count; ++i) {
         const gao::Telemetry t = nvml.Read(static_cast<unsigned>(i));
         if (!t.ok) { std::printf("  [%d] read failed\n", i); continue; }
-        // fan_pct is -1 when the driver didn't report it; print that as an
-        // unambiguous "n/a" rather than a number that looks like a reading.
-        char fan[8];
-        if (t.fan_pct < 0) std::snprintf(fan, sizeof(fan), "n/a");
-        else std::snprintf(fan, sizeof(fan), "%d%%", t.fan_pct);
-        std::printf("  [%d] core=%d MHz  mem=%d MHz  temp=%d C  fan=%s  power=%d/%d W\n",
-                    i, t.core_mhz, t.mem_mhz, t.temp_c, fan, t.power_w, t.power_limit_w);
+        // core_mhz/mem_mhz/temp_c/power_w/fan_pct are each -1 when the
+        // driver didn't report that particular value, even though t.ok is
+        // true overall; print "n/a" for those rather than a number that
+        // would look like a real reading.
+        char core[8], mem[8], temp[8], fan[8], power[8];
+        FormatField(core, sizeof(core), t.core_mhz, "");
+        FormatField(mem, sizeof(mem), t.mem_mhz, "");
+        FormatField(temp, sizeof(temp), t.temp_c, "");
+        FormatField(fan, sizeof(fan), t.fan_pct, "%");
+        FormatField(power, sizeof(power), t.power_w, "");
+        std::printf("  [%d] core=%s MHz  mem=%s MHz  temp=%s C  fan=%s  power=%s/%d W\n",
+                    i, core, mem, temp, fan, power, t.power_limit_w);
     }
     return 0;
 }

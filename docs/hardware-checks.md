@@ -21,7 +21,7 @@ root; adjust the path for a Debug build.
 
 | # | Check | Command | Elevated | Expected | Result |
 |---|---|---|---|---|---|
-| 1 | Telemetry matches nvidia-smi | `.\build\Release\gao.exe --probe` | no | Clocks, temp and power agree with `nvidia-smi` | |
+| 1 | Telemetry matches nvidia-smi | `.\build\Release\gao.exe --probe` | no | Clocks, temp and power agree with `nvidia-smi`, and none of them print `n/a` (a failed reading now shows `n/a`, not a `0` that would look like a real one) | |
 | 2 | Fan percentage is real | `.\build\Release\gao.exe --probe` | no | `fan=` is not `n/a` (i.e. NVML reported a real value, not the -1 sentinel) | |
 | 3 | Core offset applies | `.\build\Release\gao.exe --set-core 25` | yes | Read-back 25, `OK` | |
 | 4 | Core offset reverts | `.\build\Release\gao.exe --reset` | yes | Read-back core 0, mem 0, `OK` | |

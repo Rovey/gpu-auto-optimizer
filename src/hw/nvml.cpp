@@ -65,16 +65,25 @@ Telemetry Nvml::Read(unsigned index) {
     nvmlDevice_t dev = nullptr;
     if (p_byIndex(index, &dev) != NVML_SUCCESS) return t;
     unsigned v = 0;
-    if (p_clock && p_clock(dev, /*GRAPHICS*/0, &v) == NVML_SUCCESS) t.core_mhz = static_cast<int>(v);
+    // Every field below stays at its -1 default (its "unknown" sentinel)
+    // unless the driver actually reports a reading: a missing symbol or a
+    // non-zero status must never be read as 0, since 0 is itself a real
+    // value for several of these (an idle card's fan, a card at its thermal
+    // floor). core_ok/temp_ok track the two readings the search depends on,
+    // for t.ok below.
+    bool core_ok = false;
+    bool temp_ok = false;
+    if (p_clock && p_clock(dev, /*GRAPHICS*/0, &v) == NVML_SUCCESS) { t.core_mhz = static_cast<int>(v); core_ok = true; }
     if (p_clock && p_clock(dev, /*MEM*/2, &v) == NVML_SUCCESS)      t.mem_mhz = static_cast<int>(v);
-    if (p_temp && p_temp(dev, /*GPU*/0, &v) == NVML_SUCCESS)        t.temp_c = static_cast<int>(v);
+    if (p_temp && p_temp(dev, /*GPU*/0, &v) == NVML_SUCCESS)        { t.temp_c = static_cast<int>(v); temp_ok = true; }
     if (p_power && p_power(dev, &v) == NVML_SUCCESS)                t.power_w = static_cast<int>(v / 1000);
     if (p_powerlimit && p_powerlimit(dev, &v) == NVML_SUCCESS)      t.power_limit_w = static_cast<int>(v / 1000);
-    // fan_pct stays -1 (its default) unless the driver actually reports a
-    // reading: a missing symbol or a non-zero status must never be read as 0,
-    // since 0 is itself a real fan speed (e.g. an idle card with the fan off).
     if (p_fan && p_fan(dev, &v) == NVML_SUCCESS) t.fan_pct = static_cast<int>(v);
-    t.ok = true;
+    // A device handle alone is not proof the readings this app relies on
+    // (the thermal abort, the fan-curve search) are real, rather than a
+    // failed call masquerading as a plausible zero. mem/power/fan may still
+    // be -1 (unknown) with ok == true; callers check those individually.
+    t.ok = core_ok && temp_ok;
     return t;
 }
 
