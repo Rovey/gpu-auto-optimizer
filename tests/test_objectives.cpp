@@ -27,6 +27,16 @@ TEST_CASE("cool and efficient does not overclock") {
     CHECK(o.power);
 }
 
+TEST_CASE("max performance pushes every ceiling to its highest value") {
+    const Objectives o = objectives_for(Preset::MaxPerformance);
+    CHECK(o.max_temp_c == 83);
+    CHECK(o.max_fan_pct == 100);
+    CHECK(o.perf_push == doctest::Approx(1.0f));
+    CHECK(o.core_oc);
+    CHECK(o.mem_oc);
+    CHECK(o.power);
+}
+
 TEST_CASE("no preset ever enables undervolting") {
     for (const Preset p : {Preset::BestOfMyGpu, Preset::Quiet,
                            Preset::CoolAndEfficient, Preset::MaxPerformance}) {
