@@ -16,8 +16,10 @@ add_library(core STATIC
   src/core/version.hpp
   src/core/objectives.hpp
   src/core/objectives.cpp
+  src/core/config.hpp
+  src/core/config.cpp
 )
-target_include_directories(core PUBLIC src)
+target_include_directories(core PUBLIC src third_party)
 
 # The only code allowed to touch hardware.
 add_library(hw STATIC
@@ -34,6 +36,7 @@ add_executable(core_tests
   tests/test_main.cpp
   tests/test_version.cpp
   tests/test_objectives.cpp
+  tests/test_config.cpp
 )
 target_link_libraries(core_tests PRIVATE core doctest)
 add_test(NAME core_tests COMMAND core_tests)
