@@ -11,3 +11,7 @@ out/
 .venv/
 __pycache__/
 logs/
+
+# Review/planning workspace (briefs, reports, raw diffs) -- not project
+# output, and not meant to be published in this public repo.
+.superpowers/
