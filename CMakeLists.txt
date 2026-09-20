@@ -12,13 +12,12 @@ target_include_directories(doctest INTERFACE third_party)
 target_compile_definitions(doctest INTERFACE DOCTEST_CONFIG_USE_STD_HEADERS)
 
 # Pure logic. No Windows, no driver, no D3D — this is what CI tests.
-# INTERFACE, not STATIC: header-only, so there is nothing to compile into an
-# archive (a STATIC target with zero translation units builds "successfully"
-# but never produces a .lib, which breaks every consumer at link time).
-add_library(core INTERFACE
+add_library(core STATIC
   src/core/version.hpp
+  src/core/objectives.hpp
+  src/core/objectives.cpp
 )
-target_include_directories(core INTERFACE src)
+target_include_directories(core PUBLIC src)
 
 # The only code allowed to touch hardware.
 add_library(hw STATIC
@@ -34,6 +33,7 @@ enable_testing()
 add_executable(core_tests
   tests/test_main.cpp
   tests/test_version.cpp
+  tests/test_objectives.cpp
 )
 target_link_libraries(core_tests PRIVATE core doctest)
 add_test(NAME core_tests COMMAND core_tests)
