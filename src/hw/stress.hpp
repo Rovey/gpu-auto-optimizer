@@ -18,6 +18,10 @@ enum class StressSelftest {
 // The DX11 compute stress load. Multiplies two exact-float matrices (see
 // core/stress_math.hpp) and has the GPU count every output element that
 // differs from the uploaded CPU reference. Changes no GPU settings.
+// Name of the first NVIDIA adapter DXGI reports ("NVIDIA GeForce RTX 4070"),
+// or empty. Cheap: no device, no shader.
+std::string nvidia_adapter_name();
+
 class Stress {
 public:
     Stress();

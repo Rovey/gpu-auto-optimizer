@@ -1,0 +1,2 @@
+Dear ImGui v1.92.9b (https://github.com/ocornut/imgui/releases/tag/v1.92.9b), MIT license (LICENSE.txt).
+Only the core files and the Win32 + DirectX 11 backends are vendored; nothing is modified.

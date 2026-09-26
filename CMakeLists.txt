@@ -93,6 +93,27 @@ target_link_options(gao PRIVATE /DELAYLOAD:d3dcompiler_47.dll /DELAYLOAD:d3d11.d
 # compatibility. (/DYNAMICBASE and /HIGHENTROPYVA are already x64 defaults.)
 target_link_options(gao PRIVATE /GUARD:CF /CETCOMPAT)
 
+# Dear ImGui (vendored, unmodified) as its own library, compiled with the
+# compiler's defaults rather than our warning set.
+add_library(imgui STATIC
+  third_party/imgui/imgui.cpp third_party/imgui/imgui_draw.cpp
+  third_party/imgui/imgui_tables.cpp third_party/imgui/imgui_widgets.cpp
+  third_party/imgui/backends/imgui_impl_win32.cpp third_party/imgui/backends/imgui_impl_dx11.cpp
+)
+target_include_directories(imgui SYSTEM PUBLIC third_party/imgui)
+target_link_libraries(imgui PUBLIC d3d11 dwmapi PRIVATE gao_hardening)
+
+# The window and tray executable (Windows subsystem: no console).
+add_executable(GpuAutoOptimizer WIN32
+  src/app/gui/main_gui.cpp
+  src/app/gui/ui.hpp src/app/gui/ui.cpp
+  src/app/gui/worker.hpp src/app/gui/worker.cpp
+  src/app/gao.manifest
+)
+target_link_libraries(GpuAutoOptimizer PRIVATE app imgui gao_warnings gao_hardening delayimp)
+target_link_options(GpuAutoOptimizer PRIVATE /DELAYLOAD:d3dcompiler_47.dll /DELAYLOAD:d3d11.dll /DELAYLOAD:dxgi.dll
+                   /DELAYLOAD:dwmapi.dll /DEPENDENTLOADFLAG:0x800 /GUARD:CF /CETCOMPAT)
+
 enable_testing()
 add_executable(core_tests
   tests/test_main.cpp
@@ -111,4 +132,4 @@ add_executable(core_tests
 target_link_libraries(core_tests PRIVATE core doctest gao_warnings)
 add_test(NAME core_tests COMMAND core_tests)
 
-set_target_properties(core hw app gao core_tests PROPERTIES COMPILE_WARNING_AS_ERROR ON)
+set_target_properties(core hw app gao GpuAutoOptimizer core_tests PROPERTIES COMPILE_WARNING_AS_ERROR ON)

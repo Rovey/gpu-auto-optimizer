@@ -114,6 +114,19 @@ std::string Hr(const char* what, HRESULT hr) {
 
 }
 
+std::string nvidia_adapter_name() {
+    ComPtr<IDXGIFactory1> factory;
+    if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory)))) return {};
+    ComPtr<IDXGIAdapter1> adapter;
+    for (UINT i = 0; factory->EnumAdapters1(i, &adapter) != DXGI_ERROR_NOT_FOUND; ++i) {
+        DXGI_ADAPTER_DESC1 desc{};
+        adapter->GetDesc1(&desc);
+        if (desc.VendorId == kNvidiaVendorId) return Narrow(desc.Description);
+        adapter.Reset();
+    }
+    return {};
+}
+
 struct Stress::Impl {
     ComPtr<ID3D11Device> device;
     ComPtr<ID3D11DeviceContext> ctx;
