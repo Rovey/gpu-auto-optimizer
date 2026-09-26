@@ -8,8 +8,16 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # would load first. Static linking also drops the redistributable dependency.
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
+# Warning set for our own code (cpp-best-practices MSVC list). Third-party
+# headers are SYSTEM includes and stay quiet through /external:W0.
+add_library(gao_warnings INTERFACE)
+target_compile_options(gao_warnings INTERFACE
+  /W4 /permissive- /external:W0 /external:anglebrackets
+  /w14242 /w14254 /w14263 /w14265 /w14287 /we4289 /w14296 /w14311 /w14545 /w14546
+  /w14547 /w14549 /w14555 /w14619 /w14640 /w14826 /w14905 /w14906 /w14928)
+
 add_library(doctest INTERFACE)
-target_include_directories(doctest INTERFACE third_party)
+target_include_directories(doctest SYSTEM INTERFACE third_party)
 # Without this, doctest forward-declares std::string/ostream itself (its own
 # comment calls this "not permitted by the C++ Standard") instead of including
 # <string>/<ostream>, which breaks as soon as a test streams a real std type.
@@ -37,7 +45,8 @@ add_library(core STATIC
   src/core/task_xml.cpp
 )
 target_include_directories(core PUBLIC src)
-target_include_directories(core PRIVATE third_party)
+target_include_directories(core SYSTEM PRIVATE third_party)
+target_link_libraries(core PRIVATE gao_warnings)
 
 # The only code allowed to touch hardware.
 add_library(hw STATIC
@@ -49,16 +58,21 @@ add_library(hw STATIC
   src/hw/boot_task.hpp src/hw/boot_task.cpp
 )
 target_include_directories(hw PUBLIC src)
-target_link_libraries(hw PUBLIC core d3d11 dxgi d3dcompiler shell32 ole32)
+target_link_libraries(hw PUBLIC core d3d11 dxgi d3dcompiler shell32 ole32 PRIVATE gao_warnings)
 
-add_executable(gao src/app/main.cpp)
-target_link_libraries(gao PRIVATE core hw)
+add_executable(gao src/app/main.cpp src/app/gao.manifest)
+target_link_libraries(gao PRIVATE core hw gao_warnings)
 # d3dcompiler_47.dll, d3d11.dll and dxgi.dll are not KnownDLLs: delay-load
 # them so they resolve after SetDefaultDllDirectories(SYSTEM32) in main(),
 # never from the exe's folder.
 target_link_libraries(gao PRIVATE delayimp)
 target_link_options(gao PRIVATE /DELAYLOAD:d3dcompiler_47.dll /DELAYLOAD:d3d11.dll /DELAYLOAD:dxgi.dll
                    /DEPENDENTLOADFLAG:0x800)
+# Exploit mitigations for an exe that runs elevated: Control Flow Guard, CET
+# shadow stack compatibility, SDL checks. (/DYNAMICBASE and /HIGHENTROPYVA are
+# already the x64 defaults.)
+target_compile_options(gao PRIVATE /guard:cf /sdl)
+target_link_options(gao PRIVATE /GUARD:CF /CETCOMPAT)
 
 enable_testing()
 add_executable(core_tests
@@ -74,5 +88,7 @@ add_executable(core_tests
   tests/test_boot.cpp
   tests/test_task_xml.cpp
 )
-target_link_libraries(core_tests PRIVATE core doctest)
+target_link_libraries(core_tests PRIVATE core doctest gao_warnings)
 add_test(NAME core_tests COMMAND core_tests)
+
+set_target_properties(core hw gao core_tests PROPERTIES COMPILE_WARNING_AS_ERROR ON)

@@ -476,6 +476,9 @@ int main(int argc, char** argv) {
     // Before anything loads a DLL: System32 only (the delay-loaded
     // d3dcompiler_47.dll included), never the exe's own folder.
     SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32);
+    // The manifest makes the process code page UTF-8; match the console so
+    // paths print correctly.
+    SetConsoleOutputCP(CP_UTF8);
     if (argc > 1 && std::strcmp(argv[1], "--version") == 0) {
         std::printf("%s %s\n", gao::kProductName.data(), gao::kVersion.data());
         return 0;
