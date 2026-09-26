@@ -5,6 +5,8 @@
 #include <cstdio>
 #include <map>
 #include <optional>
+#include <utility>
+#include <vector>
 
 namespace gao {
 
@@ -37,6 +39,28 @@ int apply_margin(int max, int step, float perf_push) {
     // bare floor would turn into one step less than intended.
     const int steps = static_cast<int>(std::floor(double(perf_push) * max / step + 1e-4));
     return std::max(0, std::min(steps * step, max - step));
+}
+
+int best_bandwidth_offset(int lo, int hi, int step, int ceiling, const std::function<MemSample(int)>& sample) {
+    const int top = std::min(hi, ceiling - 1);
+    std::vector<std::pair<int, double>> seen;
+    double best = 0;
+    for (int v = lo; v <= top; v += step) {
+        const MemSample s = sample(v);
+        if (!s.stable) break;
+        seen.emplace_back(v, s.gbps);
+        best = std::max(best, s.gbps);
+        if (s.gbps < best * (1 - kBandwidthDrop)) break;
+    }
+    for (const auto& [v, gbps] : seen)
+        if (gbps >= best * (1 - kBandwidthTie)) return v;
+    return lo;
+}
+
+int confirm_edge(int edge, int lo, int step, int tries, const std::function<bool(int)>& holds) {
+    for (int t = 0, v = edge; t < tries && v > lo; ++t, v -= step)
+        if (holds(v)) return v;
+    return lo;
 }
 
 namespace {

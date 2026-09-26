@@ -317,3 +317,57 @@ TEST_CASE("a soak that runs too hot lowers power, not clocks") {
     CHECK(r.core_mhz == 105);
     CHECK(r.mem_mhz == 550);
 }
+
+TEST_CASE("bandwidth scan stops at the peak of a rising-then-falling curve") {
+    int max_sampled = -1;
+    const int r = best_bandwidth_offset(0, 1500, 50, INT_MAX, [&](int v) {
+        max_sampled = std::max(max_sampled, v);
+        return MemSample{true, v <= 600 ? 500 + v * 0.1 : 560 - (v - 600) * 0.3};
+    });
+    CHECK(r == 600);
+    CHECK(max_sampled == 650);   // stopped at the first step more than 1 % below the peak
+}
+
+TEST_CASE("bandwidth scan stops at the first unstable step") {
+    int max_sampled = -1;
+    const int r = best_bandwidth_offset(0, 1500, 50, INT_MAX, [&](int v) {
+        max_sampled = std::max(max_sampled, v);
+        return MemSample{v <= 400, 500 + v * 0.1};
+    });
+    CHECK(r == 400);
+    CHECK(max_sampled == 450);
+}
+
+TEST_CASE("a flat curve keeps the lowest offset") {
+    const int r = best_bandwidth_offset(0, 1500, 50, INT_MAX, [](int v) {
+        return MemSample{true, 500.0 + ((v / 50) % 2)};   // +-1 GB/s noise
+    });
+    CHECK(r == 0);
+}
+
+TEST_CASE("bandwidth scan samples lo and respects the ceiling") {
+    std::vector<int> sampled;
+    const int r = best_bandwidth_offset(0, 1500, 50, 300, [&](int v) {
+        sampled.push_back(v);
+        return MemSample{true, 500 + v * 0.1};
+    });
+    REQUIRE_FALSE(sampled.empty());
+    CHECK(sampled.front() == 0);
+    CHECK(sampled.back() == 250);
+    CHECK(r == 250);
+    CHECK(best_bandwidth_offset(0, 1500, 50, 300, [](int) { return MemSample{false, 0}; }) == 0);
+}
+
+TEST_CASE("confirm_edge keeps a holding edge and steps down otherwise") {
+    int calls = 0;
+    CHECK(confirm_edge(150, 0, 15, 3, [&](int) { ++calls; return true; }) == 150);
+    CHECK(calls == 1);
+    CHECK(confirm_edge(150, 0, 15, 3, [](int v) { return v <= 135; }) == 135);
+    calls = 0;
+    CHECK(confirm_edge(150, 0, 15, 3, [&](int) { ++calls; return false; }) == 0);
+    CHECK(calls == 3);
+    calls = 0;
+    CHECK(confirm_edge(0, 0, 15, 3, [&](int) { ++calls; return false; }) == 0);
+    CHECK(calls == 0);
+    CHECK(confirm_edge(15, 0, 15, 3, [](int) { return false; }) == 0);
+}

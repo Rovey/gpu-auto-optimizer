@@ -27,6 +27,29 @@ int lowest_passing(int lo, int hi, int step, const std::function<bool(int)>& pas
 // least one step below max so a 3 s probe's blind spot has headroom.
 int apply_margin(int max, int step, float perf_push);
 
+// Memory overclocks fail by losing bandwidth before they fail by producing
+// errors: GDDR6X/GDDR6 retry bad transfers. The memory search therefore looks
+// for the bandwidth peak, not the stability ceiling.
+inline constexpr double kBandwidthDrop = 0.01;   // stop once 1 % below the best
+inline constexpr double kBandwidthTie = 0.005;   // within 0.5 % of the best counts as the best
+
+struct MemSample {
+    bool stable = false;
+    double gbps = 0;
+};
+
+// Scans lo, lo+step, ... (<= hi, < ceiling), sampling lo too. Stops at the
+// first unstable sample or once gbps falls more than kBandwidthDrop below the
+// best so far. Returns the lowest stable offset within kBandwidthTie of the
+// best, so noise on a flat curve never drifts the result upward; lo when no
+// sample was stable.
+int best_bandwidth_offset(int lo, int hi, int step, int ceiling, const std::function<MemSample(int)>& sample);
+
+// "Search fast, confirm long": re-checks edge with a long probe; on failure
+// steps down by step and retries, at most `tries` probes, never probing lo
+// (stock). Returns the first value that holds, or lo.
+int confirm_edge(int edge, int lo, int step, int tries, const std::function<bool(int)>& holds);
+
 // One stress run: seconds of load, aborting above max_temp_c.
 using Probe = std::function<StabilityResult(double seconds, int max_temp_c)>;
 
