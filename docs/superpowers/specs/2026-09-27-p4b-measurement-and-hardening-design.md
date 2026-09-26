@@ -161,3 +161,19 @@ New rows in `docs/hardware-checks.md`:
 
 Compiler hardening flags, presets, sanitizers, CI changes (next round); pulsed-load soak and
 per-point V/F tuning; UI and tray (P5); signing and release (P6).
+
+## 9. Revisions after review (2026-09-27)
+
+- **No journal migration.** Reading `%LOCALAPPDATA%\...\journal.jsonl` from the elevated process
+  could be redirected (junctions, object-manager links) to copy other files into the
+  user-readable state folder. The old journal on the reference machine had no open entries.
+- **Known folders, not environment variables**, for ProgramData and Program Files: `HKCU\Environment`
+  is user-writable and would otherwise decide where the elevated process installs and writes.
+- **Existing state folder is checked through one handle** opened with
+  `FILE_FLAG_OPEN_REPARSE_POINT`; a reparse point is refused, owner check and DACL change use
+  that handle (no junction adoption, no check/use race). `--apply` verifies the folder too.
+- **Static CRT and delay-loaded `d3d11`/`dxgi`** in addition to `d3dcompiler_47`: every static
+  import is now a KnownDLL.
+- **Confirm probes treat TOO HOT as holding**; heat is handled by the power step and the soak.
+- **`kBandwidthTie` = 1 %** (noise ~0.4 % vs ~0.5 % per step); the bandwidth source buffer is
+  filled with pseudo-random data; the bandwidth resources are created all-or-nothing.

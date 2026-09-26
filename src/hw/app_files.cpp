@@ -4,16 +4,28 @@
 #include <windows.h>
 #include <aclapi.h>
 #include <sddl.h>
-#include <cstdlib>
+#include <shlobj.h>
 #include <fstream>
 #include <sstream>
 
 namespace gao {
 
+// Known folders come from the registry under HKLM, not from environment
+// variables: the elevated process must not let the user's own environment
+// (HKCU\Environment) decide where it installs or what it trusts.
+static std::filesystem::path known_folder(REFKNOWNFOLDERID id) {
+    PWSTR raw = nullptr;
+    std::filesystem::path out;
+    if (SUCCEEDED(SHGetKnownFolderPath(id, KF_FLAG_DEFAULT, nullptr, &raw))) out = raw;
+    CoTaskMemFree(raw);
+    return out;
+}
+
+std::filesystem::path program_files_dir() { return known_folder(FOLDERID_ProgramFiles); }
+
 std::filesystem::path app_dir() {
-    const wchar_t* base = _wgetenv(L"ProgramData");
-    if (!base || !*base) return {};
-    return std::filesystem::path(base) / L"GpuAutoOptimizer";
+    const auto base = known_folder(FOLDERID_ProgramData);
+    return base.empty() ? base : base / L"GpuAutoOptimizer";
 }
 
 static std::filesystem::path in_app_dir(const wchar_t* name) {
@@ -24,12 +36,6 @@ std::filesystem::path journal_path() { return in_app_dir(L"journal.jsonl"); }
 std::filesystem::path config_path() { return in_app_dir(L"gao.json"); }
 std::filesystem::path boot_log_path() { return in_app_dir(L"boot.log"); }
 
-std::filesystem::path legacy_journal_path() {
-    const wchar_t* base = _wgetenv(L"LOCALAPPDATA");
-    if (!base || !*base) return {};
-    return std::filesystem::path(base) / L"GpuAutoOptimizer" / L"journal.jsonl";
-}
-
 // Owner Administrators; protected DACL: SYSTEM and Administrators full
 // control, Users read & execute, inherited by everything inside.
 static constexpr wchar_t kAppDirSddl[] = L"O:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;0x1200a9;;;BU)";
@@ -37,41 +43,52 @@ static constexpr wchar_t kAppDirSddl[] = L"O:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;B
 bool ensure_app_dir(std::string* why) {
     auto fail = [&](const std::string& w) { if (why) *why = w; return false; };
     const auto dir = app_dir();
-    if (dir.empty()) return fail("%ProgramData% is not set");
+    if (dir.empty()) return fail("the ProgramData folder could not be resolved");
     PSECURITY_DESCRIPTOR sd = nullptr;
     if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(kAppDirSddl, SDDL_REVISION_1, &sd, nullptr))
         return fail("could not build the folder's security descriptor");
     SECURITY_ATTRIBUTES sa{sizeof(sa), sd, FALSE};
-    bool ok = true;
-    if (!CreateDirectoryW(dir.c_str(), &sa)) {
-        if (GetLastError() != ERROR_ALREADY_EXISTS) {
-            ok = fail("could not create " + dir.string());
-        } else {
-            // Someone may have created it first to plant files the elevated
-            // process would trust: only adopt a folder an admin owns.
-            PSID owner = nullptr;
-            PSECURITY_DESCRIPTOR existing = nullptr;
-            if (GetNamedSecurityInfoW(dir.c_str(), SE_FILE_OBJECT, OWNER_SECURITY_INFORMATION, &owner, nullptr,
-                                      nullptr, nullptr, &existing) != ERROR_SUCCESS) {
-                ok = fail("could not read the owner of " + dir.string());
-            } else {
-                const bool trusted = IsWellKnownSid(owner, WinBuiltinAdministratorsSid) || IsWellKnownSid(owner, WinLocalSystemSid);
-                LocalFree(existing);
-                if (!trusted) {
-                    ok = fail(dir.string() + " exists but is not owned by Administrators or SYSTEM; delete it and try again");
-                } else {
-                    PACL dacl = nullptr;
-                    BOOL present = FALSE, defaulted = FALSE;
-                    GetSecurityDescriptorDacl(sd, &present, &dacl, &defaulted);
-                    std::wstring name = dir.wstring();
-                    if (SetNamedSecurityInfoW(name.data(), SE_FILE_OBJECT,
-                                              DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION, nullptr,
-                                              nullptr, dacl, nullptr) != ERROR_SUCCESS)
-                        ok = fail("could not secure " + dir.string());
-                }
-            }
-        }
+    if (CreateDirectoryW(dir.c_str(), &sa)) {   // new: created with our descriptor, nothing to check
+        LocalFree(sd);
+        return true;
     }
+    if (GetLastError() != ERROR_ALREADY_EXISTS) {
+        LocalFree(sd);
+        return fail("could not create " + dir.string());
+    }
+    // It already exists. A user can create folders in ProgramData, so it may
+    // have been planted -- possibly as a junction to some other admin-owned
+    // tree. Open the folder object itself (never a reparse target) and do
+    // every check and change through that one handle.
+    const HANDLE h = CreateFileW(dir.c_str(), READ_CONTROL | WRITE_DAC,
+                                 FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+                                 FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+    if (h == INVALID_HANDLE_VALUE) {
+        LocalFree(sd);
+        return fail("could not open " + dir.string());
+    }
+    bool ok = true;
+    BY_HANDLE_FILE_INFORMATION info{};
+    PSID owner = nullptr;
+    PSECURITY_DESCRIPTOR existing = nullptr;
+    if (!GetFileInformationByHandle(h, &info) || !(info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) ||
+        (info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) {
+        ok = fail(dir.string() + " is a link or not a folder; delete it and try again");
+    } else if (GetSecurityInfo(h, SE_FILE_OBJECT, OWNER_SECURITY_INFORMATION, &owner, nullptr, nullptr, nullptr,
+                               &existing) != ERROR_SUCCESS) {
+        ok = fail("could not read the owner of " + dir.string());
+    } else if (!IsWellKnownSid(owner, WinBuiltinAdministratorsSid) && !IsWellKnownSid(owner, WinLocalSystemSid)) {
+        ok = fail(dir.string() + " exists but is not owned by Administrators or SYSTEM; delete it and try again");
+    } else {
+        PACL dacl = nullptr;
+        BOOL present = FALSE, defaulted = FALSE;
+        GetSecurityDescriptorDacl(sd, &present, &dacl, &defaulted);
+        if (SetSecurityInfo(h, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+                            nullptr, nullptr, dacl, nullptr) != ERROR_SUCCESS)
+            ok = fail("could not secure " + dir.string());
+    }
+    if (existing) LocalFree(existing);
+    CloseHandle(h);
     LocalFree(sd);
     return ok;
 }

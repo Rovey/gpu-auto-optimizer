@@ -45,7 +45,7 @@ That builds `.\build\Release\gao.exe` -- a command-line tool; there is no GUI ye
 All state (`gao.json`, the crash journal, `boot.log`) lives in `%ProgramData%\GpuAutoOptimizer`, which users can read but only administrators can write. `--boot on` copies `gao.exe` to `%ProgramFiles%\GpuAutoOptimizer\` and registers a logon task (`\GpuAutoOptimizer\BootApply`) that runs that copy and re-applies the saved profile; `--status` says whether the installed copy matches your build; if the machine crashes within 2 minutes of three logons in a row, or the NVIDIA driver version changes, boot-apply stops and `--status` / `boot.log` say why. A profile only applies to the card it was tuned on (NVML UUID).
 
 > [!NOTE]
-> The logon task runs with administrator rights, so everything it touches is admin-only: the exe in Program Files and the state folder in ProgramData. `gao` loads every DLL from System32 only (`d3dcompiler_47.dll` is delay-loaded after that is set), and refuses profile values outside its search range.
+> The logon task runs with administrator rights, so everything it touches is admin-only: the exe in Program Files and the state folder in ProgramData (a folder someone else created there first, or a link in its place, is refused). Both locations come from the registry, not from environment variables. The CRT is linked statically and every non-system DLL (`d3d11`, `dxgi`, `d3dcompiler_47`) is delay-loaded from System32, so nothing placed next to the exe is ever loaded. Profile values outside the search range are refused.
 
 `--stress` runs a DX11 compute load that checks every value it computes and ends with a verdict (`STABLE`, `WRONG RESULT`, `DEVICE LOST`, `TOO HOT`, `NO TELEMETRY`); it changes no settings and needs no elevation.
 

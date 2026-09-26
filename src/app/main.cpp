@@ -247,17 +247,10 @@ static void boot_log(const std::string& msg) {
     gao::append_line_durable(gao::boot_log_path(), now_text() + "  " + msg);
 }
 
-// Every elevated command that writes state calls this first: creates or
-// verifies the protected folder, and imports the pre-P4b journal once so its
-// freeze ceilings survive the move.
-static bool prepare_state(std::string* why) {
-    if (!gao::ensure_app_dir(why)) return false;
-    std::error_code ec;
-    const auto legacy = gao::legacy_journal_path();
-    if (!std::filesystem::exists(gao::journal_path(), ec) && !legacy.empty() && std::filesystem::exists(legacy, ec))
-        for (const auto& line : gao::read_lines(legacy)) gao::append_line_durable(gao::journal_path(), line);
-    return true;
-}
+// Every elevated command that reads or writes state calls this first: it
+// creates, or verifies and re-secures, the admin-only state folder. Nothing
+// in a folder a user could have prepared is ever trusted.
+static bool prepare_state(std::string* why) { return gao::ensure_app_dir(why); }
 
 static std::string profile_text(const gao::Profile& p) {
     return std::string(gao::preset_name(p.preset)) + ": power " + std::to_string(p.power_pct) + " %, core +" +
@@ -311,7 +304,11 @@ static int optimize(gao::Preset preset) {
     };
     io.aborted = [] { return g_abort.load(); };
     io.log = [](const std::string& m) { std::printf("  %s\n", m.c_str()); };
-    io.bandwidth = [&] { return load.MeasureBandwidth(); };
+    io.bandwidth = [&] {
+        const auto gbps = load.MeasureBandwidth();
+        if (!gbps) std::printf("  bandwidth measurement failed: %s\n", load.Error().c_str());
+        return gbps;
+    };
     const gao::OptimizeResult r = gao::optimize(gpu, gao::objectives_for(preset), journal, io);
     SetConsoleCtrlHandler(OnConsoleCtrl, FALSE);
     g_gpu = nullptr;
@@ -338,6 +335,8 @@ static int optimize(gao::Preset preset) {
 
 static int apply() {
     if (!IsElevated()) { std::printf("--apply needs an elevated (administrator) shell\n"); return 1; }
+    std::string why;
+    if (!prepare_state(&why)) { std::printf("%s\n", why.c_str()); return 1; }
     gao::Nvml nvml;
     if (!nvml.Init()) { std::printf("NVML init failed: %s\n", nvml.Error().c_str()); return 1; }
     gao::Nvapi nvapi;
@@ -348,7 +347,6 @@ static int apply() {
     const auto d = gao::decide_boot(cfg, driver, nvml.GpuUuid(kGpu));
     if (d != gao::BootDecision::Apply) { std::printf("not applied: %s\n", decision_text(d, cfg, driver).c_str()); return 1; }
     const gao::GpuControl gpu = gao::make_gpu_control(nvml, nvapi, kGpu);
-    std::string why;
     if (!gao::apply_profile(gpu, *cfg.profile, &why)) { std::printf("not applied: %s\n", why.c_str()); return 1; }
     std::printf("applied %s\nOK\n", profile_text(*cfg.profile).c_str());
     return 0;
@@ -358,27 +356,35 @@ static int boot(bool on) {
     if (!IsElevated()) { std::printf("--boot needs an elevated (administrator) shell\n"); return 1; }
     std::string why;
     if (!prepare_state(&why)) { std::printf("%s\n", why.c_str()); return 1; }
-    gao::boot_task_remove_legacy();   // the pre-P4b task, if any
     if (!on) {
         const int code = gao::boot_task_remove();
+        gao::boot_task_remove_legacy();   // the pre-P4b task, if any
         gao::uninstall_exe();
-        std::printf(code == 0 ? "boot-apply off: task and installed copy removed\n"
-                              : "task not removed (schtasks exit %d); installed copy removed\n", code);
-        return code == 0 ? 0 : 1;
+        std::error_code ec;
+        const bool copy_left = std::filesystem::exists(gao::installed_exe_path(), ec);
+        std::printf("boot-apply off: task %s, installed copy %s\n", code == 0 ? "removed" : "not removed",
+                    copy_left ? "still there (is it running? run --boot off from the build folder)" : "removed");
+        return code == 0 && !copy_left ? 0 : 1;
     }
+    const std::string sid = gao::current_user_sid();
+    if (sid.empty()) { std::printf("could not determine the current user's SID\n"); return 1; }
     wchar_t self[MAX_PATH];
     const DWORD n = GetModuleFileNameW(nullptr, self, MAX_PATH);
     if (n == 0 || n >= MAX_PATH) { std::printf("could not find gao.exe's own path\n"); return 1; }
-    if (!gao::install_exe(self, &why)) { std::printf("%s\n", why.c_str()); return 1; }
+    if (!gao::install_exe(self, &why)) {
+        std::printf("%s\n(if boot-apply is running right now, wait 2 minutes and retry)\n", why.c_str());
+        return 1;
+    }
     const auto exe = gao::installed_exe_path();
     const auto u8 = exe.u8string();
-    const std::string xml = gao::boot_task_xml(std::string(u8.begin(), u8.end()), gao::current_user_sid());
+    const std::string xml = gao::boot_task_xml(std::string(u8.begin(), u8.end()), sid);
     const auto xml_path = gao::app_dir() / L"BootApply.xml";
     if (!gao::write_utf16_file(xml_path, xml)) { std::printf("could not write %s\n", xml_path.string().c_str()); return 1; }
     const int code = gao::boot_task_create_xml(xml_path);
     std::error_code ec;
     std::filesystem::remove(xml_path, ec);
     if (code != 0) { std::printf("could not create the task (schtasks exit %d)\n", code); return 1; }
+    gao::boot_task_remove_legacy();   // only once the new task exists
     gao::Config cfg = load_config();
     cfg.boot_strikes = 0;
     if (!save_config(cfg)) { std::printf("task created, but could not reset the strike counter\n"); return 1; }

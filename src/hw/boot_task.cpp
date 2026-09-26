@@ -1,4 +1,5 @@
 #include "hw/boot_task.hpp"
+#include "hw/app_files.hpp"
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
@@ -33,14 +34,13 @@ static int run_schtasks(const std::wstring& args) {
 }
 
 std::filesystem::path installed_exe_path() {
-    const wchar_t* pf = _wgetenv(L"ProgramFiles");
-    if (!pf || !*pf) return {};
-    return std::filesystem::path(pf) / L"GpuAutoOptimizer" / L"gao.exe";
+    const auto pf = program_files_dir();
+    return pf.empty() ? pf : pf / L"GpuAutoOptimizer" / L"gao.exe";
 }
 
 bool install_exe(const std::filesystem::path& self, std::string* why) {
     const auto dst = installed_exe_path();
-    if (dst.empty()) { if (why) *why = "%ProgramFiles% is not set"; return false; }
+    if (dst.empty()) { if (why) *why = "the Program Files folder could not be resolved"; return false; }
     std::error_code ec;
     if (std::filesystem::equivalent(self, dst, ec)) return true;   // running the installed copy already
     std::filesystem::create_directories(dst.parent_path(), ec);

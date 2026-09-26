@@ -8,13 +8,13 @@ namespace gao {
 
 // Everything the app keeps lives in %ProgramData%\GpuAutoOptimizer: readable
 // by users, writable only by administrators (see ensure_app_dir). Each path
-// is empty when %ProgramData% is not set.
+// is empty when the known folder cannot be resolved.
 std::filesystem::path app_dir();
 std::filesystem::path journal_path();
 std::filesystem::path config_path();
 std::filesystem::path boot_log_path();
-// Where the journal lived before it moved to %ProgramData% (imported once).
-std::filesystem::path legacy_journal_path();
+// %ProgramFiles%, resolved from the registry (never the environment).
+std::filesystem::path program_files_dir();
 
 // Creates the folder with a protected DACL (SYSTEM + Administrators full,
 // Users read), or verifies an existing one is owned by Administrators or

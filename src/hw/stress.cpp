@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdint>
 #include <climits>
 #include <cstdio>
 #include <cstring>
@@ -269,21 +270,30 @@ StressBatch Stress::Batch() {
 std::optional<double> Stress::MeasureBandwidth() {
     Impl& d = *impl_;
     if (!d.device && !CreateDevice()) return std::nullopt;
-    if (!d.copy_cs) {   // created lazily: the stress path never needs 512 MB of buffers
+    // Created lazily (the stress path never needs 512 MB of buffers) and all
+    // or nothing: q_end is created last, and any failure drops what was made,
+    // so a later call can never time dispatches against half-built resources.
+    if (!d.q_end) {
+        auto drop = [&](const std::string& why) {
+            d.copy_cs.Reset(); d.bw_src.Reset(); d.bw_dst.Reset(); d.bw_src_uav.Reset(); d.bw_dst_uav.Reset();
+            d.q_disjoint.Reset(); d.q_begin.Reset(); d.q_end.Reset();
+            error_ = why;
+            return std::nullopt;
+        };
         ComPtr<ID3DBlob> code, log;
         HRESULT hr = D3DCompile(kCopyShader, sizeof(kCopyShader) - 1, "copy.hlsl", nullptr, nullptr, "main",
                                 "cs_5_0", D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, &code, &log);
-        if (FAILED(hr)) { error_ = Hr("D3DCompile (copy)", hr); return std::nullopt; }
-        if (FAILED(hr = d.device->CreateComputeShader(code->GetBufferPointer(), code->GetBufferSize(), nullptr, &d.copy_cs))) {
-            error_ = Hr("CreateComputeShader (copy)", hr); return std::nullopt;
-        }
-        auto make = [&](ComPtr<ID3D11Buffer>& buf, ComPtr<ID3D11UnorderedAccessView>& uav) {
+        if (FAILED(hr)) return drop(Hr("D3DCompile (copy)", hr));
+        if (FAILED(hr = d.device->CreateComputeShader(code->GetBufferPointer(), code->GetBufferSize(), nullptr, &d.copy_cs)))
+            return drop(Hr("CreateComputeShader (copy)", hr));
+        auto make = [&](ComPtr<ID3D11Buffer>& buf, ComPtr<ID3D11UnorderedAccessView>& uav, const void* init) {
             D3D11_BUFFER_DESC bd{};
             bd.ByteWidth = kBwBytes;
             bd.Usage = D3D11_USAGE_DEFAULT;
             bd.BindFlags = D3D11_BIND_UNORDERED_ACCESS;
             bd.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS;
-            HRESULT h = d.device->CreateBuffer(&bd, nullptr, &buf);
+            D3D11_SUBRESOURCE_DATA data{init, 0, 0};
+            HRESULT h = d.device->CreateBuffer(&bd, init ? &data : nullptr, &buf);
             if (FAILED(h)) return h;
             D3D11_UNORDERED_ACCESS_VIEW_DESC ud{};
             ud.Format = DXGI_FORMAT_R32_TYPELESS;
@@ -292,15 +302,19 @@ std::optional<double> Stress::MeasureBandwidth() {
             ud.Buffer.Flags = D3D11_BUFFER_UAV_FLAG_RAW;
             return d.device->CreateUnorderedAccessView(buf.Get(), &ud, &uav);
         };
-        if (FAILED(hr = make(d.bw_src, d.bw_src_uav)) || FAILED(hr = make(d.bw_dst, d.bw_dst_uav))) {
-            error_ = Hr("bandwidth buffers", hr); return std::nullopt;
-        }
+        // Pseudo-random source data: an all-zero buffer barely toggles the
+        // memory bus, provoking fewer of the retried transfers this
+        // measurement exists to detect.
+        std::vector<std::uint32_t> noise(kBwBytes / 4);
+        std::uint32_t x = 0x9E3779B9u;
+        for (auto& w : noise) { x ^= x << 13; x ^= x >> 17; x ^= x << 5; w = x; }
+        if (FAILED(hr = make(d.bw_src, d.bw_src_uav, noise.data())) || FAILED(hr = make(d.bw_dst, d.bw_dst_uav, nullptr)))
+            return drop(Hr("bandwidth buffers", hr));
         D3D11_QUERY_DESC qd{D3D11_QUERY_TIMESTAMP_DISJOINT, 0};
         D3D11_QUERY_DESC qt{D3D11_QUERY_TIMESTAMP, 0};
         if (FAILED(hr = d.device->CreateQuery(&qd, &d.q_disjoint)) || FAILED(hr = d.device->CreateQuery(&qt, &d.q_begin)) ||
-            FAILED(hr = d.device->CreateQuery(&qt, &d.q_end))) {
-            error_ = Hr("timestamp queries", hr); return std::nullopt;
-        }
+            FAILED(hr = d.device->CreateQuery(&qt, &d.q_end)))
+            return drop(Hr("timestamp queries", hr));
     }
     auto wait = [&](ID3D11Asynchronous* q, void* out, UINT size) {
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
