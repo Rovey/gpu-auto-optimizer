@@ -27,6 +27,12 @@ static fn_temp        p_temp = nullptr;
 static fn_power       p_power = nullptr;
 static fn_powerlimit  p_powerlimit = nullptr;
 static fn_fan         p_fan = nullptr;
+typedef nvmlReturn_t (*fn_pl_default)(nvmlDevice_t, unsigned*);
+typedef nvmlReturn_t (*fn_pl_constraints)(nvmlDevice_t, unsigned*, unsigned*);
+typedef nvmlReturn_t (*fn_pl_set)(nvmlDevice_t, unsigned);
+static fn_pl_default     p_pl_default = nullptr;
+static fn_pl_constraints p_pl_constraints = nullptr;
+static fn_pl_set         p_pl_set = nullptr;
 
 bool Nvml::Init() {
     HMODULE h = LoadLibraryA("nvml.dll");
@@ -42,6 +48,9 @@ bool Nvml::Init() {
     p_power      = (fn_power)GetProcAddress(h, "nvmlDeviceGetPowerUsage");
     p_powerlimit = (fn_powerlimit)GetProcAddress(h, "nvmlDeviceGetPowerManagementLimit");
     p_fan        = (fn_fan)GetProcAddress(h, "nvmlDeviceGetFanSpeed");
+    p_pl_default     = (fn_pl_default)GetProcAddress(h, "nvmlDeviceGetPowerManagementDefaultLimit");
+    p_pl_constraints = (fn_pl_constraints)GetProcAddress(h, "nvmlDeviceGetPowerManagementLimitConstraints");
+    p_pl_set         = (fn_pl_set)GetProcAddress(h, "nvmlDeviceSetPowerManagementLimit");
     if (!p_init || !p_byIndex) { error_ = "required NVML entry points not found"; return false; }
     inited_ = (p_init() == NVML_SUCCESS);
     if (!inited_) error_ = "nvmlInit_v2 failed";
@@ -85,6 +94,45 @@ Telemetry Nvml::Read(unsigned index) {
     // be -1 (unknown) with ok == true; callers check those individually.
     t.ok = core_ok && temp_ok;
     return t;
+}
+
+std::optional<std::pair<int, int>> Nvml::PowerLimitRangePct(unsigned index) {
+    nvmlDevice_t dev = nullptr;
+    unsigned def = 0, lo = 0, hi = 0;
+    if (!inited_ || p_byIndex(index, &dev) != NVML_SUCCESS) { error_ = "NVML device not available"; return std::nullopt; }
+    if (!p_pl_default || p_pl_default(dev, &def) != NVML_SUCCESS || def == 0) {
+        error_ = "nvmlDeviceGetPowerManagementDefaultLimit failed"; return std::nullopt;
+    }
+    if (!p_pl_constraints || p_pl_constraints(dev, &lo, &hi) != NVML_SUCCESS) {
+        error_ = "nvmlDeviceGetPowerManagementLimitConstraints failed"; return std::nullopt;
+    }
+    // Round inward so every percent in the range is actually settable.
+    const int min_pct = static_cast<int>((static_cast<unsigned long long>(lo) * 100 + def - 1) / def);
+    const int max_pct = static_cast<int>(static_cast<unsigned long long>(hi) * 100 / def);
+    return std::make_pair(min_pct, max_pct);
+}
+
+bool Nvml::SetPowerLimitPct(unsigned index, int pct) {
+    nvmlDevice_t dev = nullptr;
+    unsigned def = 0, now = 0;
+    if (!inited_ || p_byIndex(index, &dev) != NVML_SUCCESS) { error_ = "NVML device not available"; return false; }
+    if (!p_pl_default || p_pl_default(dev, &def) != NVML_SUCCESS || def == 0) {
+        error_ = "nvmlDeviceGetPowerManagementDefaultLimit failed"; return false;
+    }
+    const unsigned target = static_cast<unsigned>(static_cast<unsigned long long>(def) * pct / 100);
+    if (!p_pl_set || p_pl_set(dev, target) != NVML_SUCCESS) {
+        error_ = "nvmlDeviceSetPowerManagementLimit failed (elevated?)"; return false;
+    }
+    // Never trust the return code: read the limit back.
+    if (!p_powerlimit || p_powerlimit(dev, &now) != NVML_SUCCESS) {
+        error_ = "nvmlDeviceGetPowerManagementLimit failed after set"; return false;
+    }
+    const long long diff = static_cast<long long>(now) - static_cast<long long>(target);
+    if ((diff < 0 ? -diff : diff) > def / 100) {
+        error_ = "power limit read back " + std::to_string(now / 1000) + " W, requested " + std::to_string(target / 1000) + " W";
+        return false;
+    }
+    return true;
 }
 
 Nvml::~Nvml() {

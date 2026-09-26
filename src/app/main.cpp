@@ -91,14 +91,19 @@ static int set_offset(const char* label, int mhz, bool core) {
 static int reset() {
     gao::Nvapi nvapi;
     if (!nvapi.Init()) { std::printf("NVAPI init failed: %s\n", nvapi.Error().c_str()); return 1; }
-    const bool ok = nvapi.ResetOffsets(kGpu);
+    bool ok = nvapi.ResetOffsets(kGpu);
     const auto readback = nvapi.ReadOffsetsMhz(kGpu);
     std::printf("reset: requested core 0 MHz, mem 0 MHz\n");
     if (readback) std::printf("read back core %d MHz, mem %d MHz\n", readback->first, readback->second);
     else std::printf("read back unavailable (%s)\n", nvapi.Error().c_str());
-    // Print the diagnostic before the verdict, same as set_fan(): a refused
-    // write and an unelevated call both show MISMATCH here otherwise.
     if (!ok) std::printf("%s\n", nvapi.Error().c_str());
+    // Power limit back to the driver default, where the card supports it.
+    gao::Nvml nvml;
+    if (nvml.Init() && nvml.PowerLimitRangePct(kGpu)) {
+        const bool power_ok = nvml.SetPowerLimitPct(kGpu, 100);
+        std::printf("power limit: default %s\n", power_ok ? "restored" : nvml.Error().c_str());
+        ok = ok && power_ok;
+    }
     std::printf("%s\n", ok ? "OK" : "MISMATCH");
     return ok ? 0 : 1;
 }

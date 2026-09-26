@@ -9,9 +9,16 @@ GpuControl make_gpu_control(Nvml& nvml, Nvapi& nvapi, unsigned gpu) {
     c.read = [&nvml, gpu] { return nvml.Read(gpu); };
     c.set_core_offset = [&nvapi, gpu](int mhz) { return nvapi.SetCoreOffsetMhz(gpu, mhz); };
     c.set_mem_offset = [&nvapi, gpu](int mhz) { return nvapi.SetMemOffsetMhz(gpu, mhz); };
-    c.reset_to_stock = [&nvapi, gpu] { return nvapi.ResetOffsets(gpu); };
-    // set_power_limit stays empty: power limits are a later phase, and an
-    // empty callback is the honest representation of "not implemented yet".
+    const bool power = nvml.PowerLimitRangePct(gpu).has_value();
+    if (power) {
+        c.set_power_limit = [&nvml, gpu](int pct) { return nvml.SetPowerLimitPct(gpu, pct); };
+        c.power_limit_range_pct = [&nvml, gpu] { return *nvml.PowerLimitRangePct(gpu); };
+    }
+    // Stock = offsets 0 and, where the card allows it, the default power limit.
+    c.reset_to_stock = [&nvapi, &nvml, gpu, power] {
+        const bool offsets = nvapi.ResetOffsets(gpu);
+        return (power ? nvml.SetPowerLimitPct(gpu, 100) : true) && offsets;
+    };
     if (nvapi.FanControlAvailable()) {
         c.set_fan_pct = [&nvapi, gpu](int pct) { return nvapi.SetFanPct(gpu, pct); };
     }

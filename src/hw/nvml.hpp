@@ -1,6 +1,8 @@
 #pragma once
 #include "core/types.hpp"
+#include <optional>
 #include <string>
+#include <utility>
 
 namespace gao {
 
@@ -14,6 +16,12 @@ public:
     // with a real zero reading.
     int DeviceCount();
     Telemetry Read(unsigned index);
+    // Power limit as percent of the driver default. Empty when NVML cannot
+    // report the constraints (older cards, or a failed call; see Error()).
+    std::optional<std::pair<int, int>> PowerLimitRangePct(unsigned index);
+    // Sets the limit to pct of default and verifies by reading it back
+    // (within 1 % of default). Needs administrator rights.
+    bool SetPowerLimitPct(unsigned index, int pct);
     const std::string& Error() const { return error_; }
 
 private:
