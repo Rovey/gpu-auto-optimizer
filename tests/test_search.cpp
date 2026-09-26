@@ -74,6 +74,7 @@ struct FakeCard {
     int soak_failures = 0;           // how many 60 s probes fail before one passes
     int noisy_power_pct = -1;        // a 20 s probe at this power reads 10 % low
     int soak_extra_heat = 0;         // a 60 s probe peaks this much hotter than a 20 s one
+    int confirm_extra_heat = 0;      // a 30 s probe peaks this much hotter than a 20 s one
     bool abort_on_soak = false;      // Ctrl+C arrives while the soak probe runs
     bool aborted_now = false;
     int reset_calls = 0, reset_fails_from = -1;   // reset_to_stock fails from this call on
@@ -114,7 +115,8 @@ struct FakeCard {
             if (seconds == 20) ++power_probes;
             StabilityResult r;
             r.seconds = seconds;
-            r.peak_temp_c = static_cast<int>(40 + 0.3 * power) + (seconds == 60 ? soak_extra_heat : 0);
+            r.peak_temp_c = static_cast<int>(40 + 0.3 * power) + (seconds == 60 ? soak_extra_heat : 0) +
+                            (seconds == 30 ? confirm_extra_heat : 0);
             if (seconds == 60 && abort_on_soak) aborted_now = true;
             r.score = 1000.0 * std::min(power, 90) / 90;
             if (seconds == 20 && power == noisy_power_pct) r.score *= 0.9;
@@ -338,7 +340,7 @@ TEST_CASE("bandwidth scan stops at the peak of a rising-then-falling curve") {
     int max_sampled = -1;
     const int r = best_bandwidth_offset(0, 1500, 50, INT_MAX, [&](int v) {
         max_sampled = std::max(max_sampled, v);
-        return MemSample{true, v <= 600 ? 500 + v * 0.1 : 560 - (v - 600) * 0.3};
+        return MemSample{true, v <= 600 ? 500 + v * 0.3 : 680 - (v - 600) * 0.9};
     });
     CHECK(r == 600);
     CHECK(max_sampled == 650);   // stopped at the first step more than 1 % below the peak
@@ -352,7 +354,7 @@ TEST_CASE("a single low bandwidth reading is re-measured before it ends the scan
     const int r = best_bandwidth_offset(0, 1500, 50, INT_MAX, [&](int v) {
         const bool dip = v == 300 && calls[v] == 0;
         ++calls[v];
-        return MemSample{true, dip ? 250.0 : (v <= 600 ? 500 + v * 0.1 : 560 - (v - 600) * 0.3)};
+        return MemSample{true, dip ? 250.0 : (v <= 600 ? 500 + v * 0.3 : 680 - (v - 600) * 0.9)};
     });
     CHECK(r == 600);
     CHECK(calls[300] == 2);
@@ -363,7 +365,7 @@ TEST_CASE("bandwidth scan stops at the first unstable step") {
     int max_sampled = -1;
     const int r = best_bandwidth_offset(0, 1500, 50, INT_MAX, [&](int v) {
         max_sampled = std::max(max_sampled, v);
-        return MemSample{v <= 400, 500 + v * 0.1};
+        return MemSample{v <= 400, 500 + v * 0.3};
     });
     CHECK(r == 400);
     CHECK(max_sampled == 450);
@@ -380,7 +382,7 @@ TEST_CASE("bandwidth scan samples lo and respects the ceiling") {
     std::vector<int> sampled;
     const int r = best_bandwidth_offset(0, 1500, 50, 300, [&](int v) {
         sampled.push_back(v);
-        return MemSample{true, 500 + v * 0.1};
+        return MemSample{true, 500 + v * 0.3};
     });
     REQUIRE_FALSE(sampled.empty());
     CHECK(sampled.front() == 0);
@@ -406,13 +408,15 @@ TEST_CASE("confirm_edge keeps a holding edge and steps down otherwise") {
 TEST_CASE("memory search stops at the bandwidth peak, not the stability edge") {
     Run run;
     run.card.mem_edge = 1400;
-    run.card.bw_curve = [](int m) { return m <= 900 ? 500 + m * 0.1 : 590 - (m - 900) * 0.2; };
+    run.card.bw_curve = [](int m) { return m <= 900 ? 500 + m * 0.3 : 770 - (m - 900) * 0.6; };
     const auto r = run.go(Preset::BestOfMyGpu);
     REQUIRE(r.ok);
     CHECK(r.mem_max_stable == 900);
     CHECK(r.mem_confirmed == 900);
     CHECK(r.mem_mhz == 600);
     CHECK(run.card.max_mem_seen <= 950);
+    Journal reread(run.card.journal, [](const std::string&) { return true; });
+    CHECK(reread.freezes().empty());
 }
 
 TEST_CASE("the margin applies to the confirmed core edge") {
@@ -432,4 +436,25 @@ TEST_CASE("a failing bandwidth measurement never raises memory") {
     const auto r = run.go(Preset::BestOfMyGpu);
     REQUIRE(r.ok);
     CHECK(r.mem_mhz == 0);
+}
+
+TEST_CASE("a confirm probe that only runs too hot keeps the clock edge") {
+    // Heat is the power step's and the soak's business: confirming clocks at a
+    // slightly hotter 30 s must not step core and memory down to nothing.
+    Run run;
+    run.card.confirm_extra_heat = 2;   // at 115 %: 74 + 2 = 76 > 75
+    const auto r = run.go(Preset::BestOfMyGpu);
+    REQUIRE(r.ok);
+    CHECK(r.core_confirmed == 150);
+    CHECK(r.mem_confirmed == 800);
+}
+
+TEST_CASE("bandwidth noise wider than one step does not pick a higher offset") {
+    // Measured spread on the 4070 is ~0.4 %; one 50 MHz step is worth ~0.5 %.
+    // Noise of +-0.45 % (0.9 % spread, twice what was measured) on a flat
+    // curve must leave the result at the bottom.
+    const int r = best_bandwidth_offset(0, 1500, 50, INT_MAX, [](int v) {
+        return MemSample{true, 500.0 * (1 + (((v / 50) % 3) - 1) * 0.0045)};
+    });
+    CHECK(r == 0);
 }

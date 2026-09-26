@@ -32,7 +32,10 @@ int apply_margin(int max, int step, float perf_push);
 // errors: GDDR6X/GDDR6 retry bad transfers. The memory search therefore looks
 // for the bandwidth peak, not the stability ceiling.
 inline constexpr double kBandwidthDrop = 0.01;   // stop once 1 % below the best
-inline constexpr double kBandwidthTie = 0.005;   // within 0.5 % of the best counts as the best
+// Within 1 % of the best counts as the best: measured noise on the 4070 is
+// ~0.4 % and one 50 MHz step is worth ~0.5 %, so a narrower band would let
+// noise pick the offset.
+inline constexpr double kBandwidthTie = 0.01;
 
 struct MemSample {
     bool stable = false;

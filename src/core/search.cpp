@@ -177,30 +177,35 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
 
     // One clock candidate: journal first, then hardware, then the probe.
     // `extra` runs while the candidate is still applied and stable (e.g. a
-    // bandwidth measurement), before the journal entry is closed.
+    // bandwidth measurement), before the journal entry is closed. Returns the
+    // verdict, or nothing when the candidate did not run.
     auto clock_candidate = [&](std::optional<int> core_j, std::optional<int> mem_j, int core, int mem,
-                               double seconds, const std::function<void()>& extra = {}) {
-        if (!stopped.empty()) return false;
-        if (io.aborted && io.aborted()) { stopped = "aborted"; return false; }
+                               double seconds, const std::function<void()>& extra = {}) -> std::optional<Verdict> {
+        if (!stopped.empty()) return std::nullopt;
+        if (io.aborted && io.aborted()) { stopped = "aborted"; return std::nullopt; }
         const int id = journal.begin(core_j, mem_j);
-        if (id < 0) { stopped = "could not write the journal"; return false; }
-        if (!set_state(r.power_pct, core, mem)) { journal.complete(id, "SET FAILED"); return false; }
+        if (id < 0) { stopped = "could not write the journal"; return std::nullopt; }
+        if (!set_state(r.power_pct, core, mem)) { journal.complete(id, "SET FAILED"); return std::nullopt; }
         const auto s = probe(seconds, obj.max_temp_c);
-        const bool stable = s && s->verdict == Verdict::Stable;
-        if (stable && extra) extra();
+        if (s && s->verdict == Verdict::Stable && extra) extra();
         journal.complete(id, s ? verdict_name(s->verdict) : "NOT RUN");
-        if (!s) return false;
+        if (!s) return std::nullopt;
         log(std::string(seconds == kConfirmProbeS ? "confirm " : "") + "core +" + std::to_string(core) +
             " / mem +" + std::to_string(mem) + ": " + describe(*s));
-        return stable;
+        return s->verdict;
     };
+    auto is_stable = [](std::optional<Verdict> v) { return v == Verdict::Stable; };
+    // A confirm probe only decides whether the clock holds. Running a little
+    // hot over 30 s is the power step's and the soak's business (the soak
+    // lowers power), not a reason to throw the clock edge away.
+    auto holds = [](std::optional<Verdict> v) { return v == Verdict::Stable || v == Verdict::TooHot; };
 
     if (obj.core_oc) {
         r.core_max_stable = highest_stable(0, kCoreMax, kCoreStep, journal.ceilings().core_mhz,
-                                           [&](int v) { return clock_candidate(v, std::nullopt, v, 0, kClockProbeS); });
+                                           [&](int v) { return is_stable(clock_candidate(v, std::nullopt, v, 0, kClockProbeS)); });
         if (!stopped.empty()) return finish_fail(stopped);
         r.core_confirmed = confirm_edge(r.core_max_stable, 0, kCoreStep, kConfirmTries, [&](int v) {
-            return clock_candidate(v, std::nullopt, v, 0, kConfirmProbeS);
+            return holds(clock_candidate(v, std::nullopt, v, 0, kConfirmProbeS));
         });
         if (!stopped.empty()) return finish_fail(stopped);
         r.core_mhz = apply_margin(r.core_confirmed, kCoreStep, obj.perf_push);
@@ -213,7 +218,8 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
             r.mem_max_stable = best_bandwidth_offset(0, kMemMax, kMemStep, ceiling, [&](int v) {
                 MemSample m;
                 std::optional<double> gbps;
-                m.stable = clock_candidate(std::nullopt, v, r.core_mhz, v, kClockProbeS, [&] { gbps = io.bandwidth(); });
+                m.stable = is_stable(clock_candidate(std::nullopt, v, r.core_mhz, v, kClockProbeS,
+                                                     [&] { gbps = io.bandwidth(); }));
                 // A failed measurement (device lost) makes the step unusable.
                 if (m.stable && !gbps) m.stable = false;
                 if (m.stable) {
@@ -226,12 +232,12 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
             });
         } else {
             r.mem_max_stable = highest_stable(0, kMemMax, kMemStep, ceiling, [&](int v) {
-                return clock_candidate(std::nullopt, v, r.core_mhz, v, kClockProbeS);
+                return is_stable(clock_candidate(std::nullopt, v, r.core_mhz, v, kClockProbeS));
             });
         }
         if (!stopped.empty()) return finish_fail(stopped);
         r.mem_confirmed = confirm_edge(r.mem_max_stable, 0, kMemStep, kConfirmTries, [&](int v) {
-            return clock_candidate(std::nullopt, v, r.core_mhz, v, kConfirmProbeS);
+            return holds(clock_candidate(std::nullopt, v, r.core_mhz, v, kConfirmProbeS));
         });
         if (!stopped.empty()) return finish_fail(stopped);
         r.mem_mhz = apply_margin(r.mem_confirmed, kMemStep, obj.perf_push);
