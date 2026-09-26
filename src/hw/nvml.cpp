@@ -158,6 +158,15 @@ std::string Nvml::DriverVersion() {
     return buf;
 }
 
+std::optional<int> Nvml::PowerLimitPct(unsigned index) {
+    nvmlDevice_t dev = nullptr;
+    unsigned def = 0, now = 0;
+    if (!inited_ || p_byIndex(index, &dev) != NVML_SUCCESS) return std::nullopt;
+    if (!p_pl_default || p_pl_default(dev, &def) != NVML_SUCCESS || def == 0) return std::nullopt;
+    if (!p_powerlimit || p_powerlimit(dev, &now) != NVML_SUCCESS) return std::nullopt;
+    return static_cast<int>((static_cast<unsigned long long>(now) * 100 + def / 2) / def);
+}
+
 std::string Nvml::GpuUuid(unsigned index) {
     nvmlDevice_t dev = nullptr;
     char buf[96] = {};

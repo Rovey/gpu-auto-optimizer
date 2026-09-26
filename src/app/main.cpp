@@ -427,6 +427,13 @@ static int status() {
         std::printf("gpu:        %s\n", !gpu_id.empty() && gpu_id == cfg.profile->gpu
                                          ? "matches the profile" : "DIFFERENT card or unknown -- run `gao --optimize` again");
     }
+    // What the driver reports right now, whoever set it.
+    gao::Nvapi nvapi;
+    const auto applied = nvapi.Init() ? gao::make_gpu_control(nvml, nvapi, kGpu).read_applied() : std::nullopt;
+    if (applied)
+        std::printf("applied:    power %d %%, core %+d MHz, mem %+d MHz\n", applied->power_pct, applied->core_mhz, applied->mem_mhz);
+    else
+        std::printf("applied:    unknown (could not read the driver)\n");
     std::printf("boot-apply: %s\n", gao::boot_task_exists() ? "on (logon task registered)" : "off");
     if (gao::boot_task_legacy_exists())
         std::printf("            an older logon task (\\GpuAutoOptimizer) is still registered; run `gao --boot on` to replace it\n");

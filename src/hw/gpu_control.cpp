@@ -20,6 +20,15 @@ GpuControl make_gpu_control(Nvml& nvml, Nvapi& nvapi, unsigned gpu) {
         const bool offsets = nvapi.ResetOffsets(gpu);
         return (power ? nvml.SetPowerLimitPct(gpu, 100) : true) && offsets;
     };
+    // What is applied right now, straight from the driver. A card without
+    // power control counts as 100 %.
+    c.read_applied = [&nvapi, &nvml, gpu, power]() -> std::optional<AppliedState> {
+        const auto offsets = nvapi.ReadOffsetsMhz(gpu);
+        if (!offsets) return std::nullopt;
+        const auto pct = power ? nvml.PowerLimitPct(gpu) : std::optional<int>(100);
+        if (!pct) return std::nullopt;
+        return AppliedState{offsets->first, offsets->second, *pct};
+    };
     if (nvapi.FanControlAvailable()) {
         c.set_fan_pct = [&nvapi, gpu](int pct) { return nvapi.SetFanPct(gpu, pct); };
     }

@@ -1,5 +1,6 @@
 #pragma once
 #include <functional>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -22,6 +23,13 @@ struct Telemetry {
     bool ok = false;
 };
 
+// What the GPU reports as applied right now (read back, not remembered).
+struct AppliedState {
+    int core_mhz = 0;
+    int mem_mhz = 0;
+    int power_pct = 100;
+};
+
 struct FanPoint { int temp_c; int fan_pct; };
 using FanCurve = std::vector<FanPoint>;   // four points, ascending by temp_c
 
@@ -35,6 +43,7 @@ struct GpuControl {
     std::function<std::pair<int, int>()> power_limit_range_pct;   // {min, max}, percent of default
     std::function<bool(int)> set_fan_pct;       // percent, -1 restores automatic
     std::function<bool()> reset_to_stock;
+    std::function<std::optional<AppliedState>()> read_applied;   // nullopt when a read fails
 };
 
 }

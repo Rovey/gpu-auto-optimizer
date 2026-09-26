@@ -26,6 +26,8 @@ public:
     // Sets the limit to pct of default and verifies by reading it back
     // (within 1 % of default). Needs administrator rights.
     bool SetPowerLimitPct(unsigned index, int pct);
+    // Current limit as a (rounded) percent of the default; nullopt on failure.
+    std::optional<int> PowerLimitPct(unsigned index);
     const std::string& Error() const { return error_; }
 
 private:

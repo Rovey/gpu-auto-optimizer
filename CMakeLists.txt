@@ -58,6 +58,8 @@ add_library(core STATIC
   src/core/boot.cpp
   src/core/task_xml.hpp
   src/core/task_xml.cpp
+  src/core/watchdog.hpp
+  src/core/watchdog.cpp
 )
 target_include_directories(core PUBLIC src)
 target_include_directories(core SYSTEM PRIVATE third_party)
@@ -100,6 +102,7 @@ add_executable(core_tests
   tests/test_search.cpp
   tests/test_boot.cpp
   tests/test_task_xml.cpp
+  tests/test_watchdog.cpp
 )
 target_link_libraries(core_tests PRIVATE core doctest gao_warnings)
 add_test(NAME core_tests COMMAND core_tests)
