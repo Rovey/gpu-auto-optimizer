@@ -23,6 +23,8 @@ add_library(core STATIC
   src/core/stress_math.cpp
   src/core/stability.hpp
   src/core/stability.cpp
+  src/core/journal.hpp
+  src/core/journal.cpp
 )
 target_include_directories(core PUBLIC src)
 target_include_directories(core PRIVATE third_party)
@@ -49,6 +51,7 @@ add_executable(core_tests
   tests/test_types.cpp
   tests/test_stress_math.cpp
   tests/test_stability.cpp
+  tests/test_journal.cpp
 )
 target_link_libraries(core_tests PRIVATE core doctest)
 add_test(NAME core_tests COMMAND core_tests)
