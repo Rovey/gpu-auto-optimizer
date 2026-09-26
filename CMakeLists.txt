@@ -29,6 +29,8 @@ add_library(core STATIC
   src/core/search.cpp
   src/core/boot.hpp
   src/core/boot.cpp
+  src/core/task_xml.hpp
+  src/core/task_xml.cpp
 )
 target_include_directories(core PUBLIC src)
 target_include_directories(core PRIVATE third_party)
@@ -60,6 +62,7 @@ add_executable(core_tests
   tests/test_journal.cpp
   tests/test_search.cpp
   tests/test_boot.cpp
+  tests/test_task_xml.cpp
 )
 target_link_libraries(core_tests PRIVATE core doctest)
 add_test(NAME core_tests COMMAND core_tests)
