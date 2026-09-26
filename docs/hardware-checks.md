@@ -12,6 +12,7 @@ PowerShell/Terminal -> "Run as administrator") for any command marked
 those specific calls with an NVAPI error, not a crash. Checks 1-2 only read
 telemetry through NVML and do not need elevation. Checks 10-12 need no
 elevation either: the stress load only computes, it writes no settings.
+Checks 13-16 run `--optimize`, which writes clocks and the power limit: elevated.
 
 Commands assume a Release build at `.\build\Release\gao.exe` from the repo
 root; adjust the path for a Debug build.
@@ -34,6 +35,10 @@ root; adjust the path for a Debug build.
 | 10 | Stress load is stable on stock and loads the card | `.\build\Release\gao.exe --stress 60` (after `--reset`) | no | `VERDICT: STABLE`, exit 0, `avg power` ≥ 95 % of the power limit printed on each line, `errors=0` on every line | Pass (2026-09-26). `STABLE`, exit 0, 0 errors, peak 65 C, score ~5560 it/s. Steady power 184-195 W (avg 193 W = 96.5 % of 200 W); the whole-run average is 189 W (94.5 %) because the ramp-up at start is included. |
 | 11 | A wrong result is detected | `.\build\Release\gao.exe --stress 10 --stress-selftest wrong` | no | `VERDICT: WRONG RESULT`, exit 2, within the first second | Pass (2026-09-26). `WRONG RESULT` on the first batch, exit 2. |
 | 12 | A TDR is detected and survived | Start `.\build\Release\gao.exe --stress 30`; after ~5 s run `dxcap -forcetdr` in an elevated shell (`DXCap.exe` ships with Windows' Graphics Tools feature); then `.\build\Release\gao.exe --stress 5` | dxcap only | Screen goes black for 1-2 s while Windows resets the driver; the stress run prints `VERDICT: DEVICE LOST` (exit 2); the second prints `VERDICT: STABLE`. A long dispatch does not work as a trigger: the GPU preempts compute work instead of hanging, so no TDR fires (tried: a ~6 s dispatch completed as STABLE). | Pass (2026-09-26). `DEVICE LOST` a moment after `dxcap -forcetdr`; the next `--stress 5` printed `STABLE`. (The exit code was not captured in this run: `Start-Process` swallowed it; the verdict line comes from the same code path that returns 2.) |
+| 13 | Optimize end to end | `.\build\Release\gao.exe --optimize best`, then `.\build\Release\gao.exe --stress 60` | yes / no | `RESULT:` line with the applied values, soak `STABLE`; the follow-up stress run `STABLE` | |
+| 14 | A recorded freeze becomes a ceiling | Append `{"id":999,"core":150,"state":"begin"}` to `%LOCALAPPDATA%\GpuAutoOptimizer\journal.jsonl`, run `--optimize best` | yes | Warning "froze the machine at core +150"; no logged core candidate ≥ +150. Remove the line afterwards. | |
+| 15 | Ctrl+C restores stock | Press Ctrl+C during the core search of `--optimize best` | yes | "abort requested", then `RESULT: not applied -- aborted (card at stock)`; `--reset` read-back 0/0 | |
+| 16 | Power limit applies | `--optimize quiet` log shows `power <N> %` lines; `--probe` afterwards | yes | `--probe`'s `/<limit> W` equals N % of the default limit (±1 %) | |
 
 ## Notes
 

@@ -1,9 +1,19 @@
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
 #include "core/types.hpp"
 #include "core/stability.hpp"
 #include "core/version.hpp"
 #include "hw/nvapi.hpp"
 #include "hw/nvml.hpp"
 #include "hw/stress.hpp"
+#include "core/journal.hpp"
+#include "core/objectives.hpp"
+#include "core/search.hpp"
+#include "hw/gpu_control.hpp"
+#include "hw/journal_file.hpp"
+#include <atomic>
+#include <string>
 #include <cerrno>
 #include <climits>
 #include <cstddef>
@@ -179,6 +189,71 @@ static int stress(int seconds, int max_temp_c, gao::StressSelftest selftest) {
     return 1;
 }
 
+static std::atomic<bool> g_abort{false};
+
+// Ctrl+C / Ctrl+Break do not kill the process during --optimize: they ask
+// the search to stop, and the search restores stock before returning.
+static BOOL WINAPI OnConsoleCtrl(DWORD type) {
+    if (type == CTRL_C_EVENT || type == CTRL_BREAK_EVENT) {
+        g_abort = true;
+        std::printf("\nabort requested -- finishing the current probe, then restoring stock\n");
+        return TRUE;
+    }
+    return FALSE;
+}
+
+static bool IsElevated() {
+    HANDLE token = nullptr;
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) return false;
+    TOKEN_ELEVATION elevation{};
+    DWORD size = 0;
+    const bool ok = GetTokenInformation(token, TokenElevation, &elevation, sizeof(elevation), &size);
+    CloseHandle(token);
+    return ok && elevation.TokenIsElevated;
+}
+
+static int optimize(gao::Preset preset) {
+    if (!IsElevated()) {
+        std::printf("--optimize changes clocks and power limits and needs an elevated (administrator) shell\n");
+        return 1;
+    }
+    gao::Nvml nvml;
+    if (!nvml.Init()) { std::printf("NVML init failed: %s\n", nvml.Error().c_str()); return 1; }
+    gao::Nvapi nvapi;
+    if (!nvapi.Init()) { std::printf("NVAPI init failed: %s\n", nvapi.Error().c_str()); return 1; }
+    gao::Stress load;
+    if (!load.Init()) { std::printf("stress init failed: %s\n", load.Error().c_str()); return 1; }
+    const gao::GpuControl gpu = gao::make_gpu_control(nvml, nvapi, kGpu);
+
+    const auto path = gao::journal_path();
+    if (path.empty()) { std::printf("LOCALAPPDATA is not set; cannot keep the crash journal\n"); return 1; }
+    gao::Journal journal(gao::read_lines(path), [&path](const std::string& l) { return gao::append_line_durable(path, l); });
+    for (const auto& f : journal.freezes())
+        std::printf("warning: a previous run froze the machine at %s; staying below it from now on\n", f.c_str());
+    if (!gpu.set_power_limit) std::printf("power limit: not adjustable on this card, skipped\n");
+    if (!gpu.set_fan_pct) std::printf("fan: not controllable on this card, skipped\n");
+
+    SetConsoleCtrlHandler(OnConsoleCtrl, TRUE);
+    gao::OptimizeIo io;
+    io.probe = [&](double seconds, int max_temp) {
+        return gao::run_stability([&] { return load.Batch(); }, gpu.read, seconds, max_temp);
+    };
+    io.aborted = [] { return g_abort.load(); };
+    io.log = [](const std::string& m) { std::printf("  %s\n", m.c_str()); };
+    const gao::OptimizeResult r = gao::optimize(gpu, gao::objectives_for(preset), journal, io);
+    SetConsoleCtrlHandler(OnConsoleCtrl, FALSE);
+
+    if (!r.ok) { std::printf("RESULT: not applied -- %s (card at stock)\n", r.reason.c_str()); return 1; }
+    std::printf("RESULT: power %d %%, core +%d MHz (max stable +%d), mem +%d MHz (max stable +%d)\n",
+                r.power_pct, r.core_mhz, r.core_max_stable, r.mem_mhz, r.mem_max_stable);
+    std::printf("  before: score=%.0f it/s  core=%d MHz  mem=%d MHz  peak=%d C  power=%d W\n",
+                r.baseline.score, r.baseline.avg_core_mhz, r.baseline.avg_mem_mhz, r.baseline.peak_temp_c, r.baseline.avg_power_w);
+    std::printf("  after:  score=%.0f it/s  core=%d MHz  mem=%d MHz  peak=%d C  power=%d W\n",
+                r.soak.score, r.soak.avg_core_mhz, r.soak.avg_mem_mhz, r.soak.peak_temp_c, r.soak.avg_power_w);
+    std::printf("Applied until reboot. `gao --reset` returns to stock.\n");
+    return 0;
+}
+
 int main(int argc, char** argv) {
     if (argc > 1 && std::strcmp(argv[1], "--version") == 0) {
         std::printf("%s %s\n", gao::kProductName.data(), gao::kVersion.data());
@@ -226,7 +301,19 @@ int main(int argc, char** argv) {
         }
         return stress(seconds, max_temp, selftest);
     }
+    if (argc > 1 && std::strcmp(argv[1], "--optimize") == 0) {
+        gao::Preset preset = gao::Preset::BestOfMyGpu;
+        if (argc > 2) {
+            const std::string p = argv[2];
+            if (p == "best") preset = gao::Preset::BestOfMyGpu;
+            else if (p == "quiet") preset = gao::Preset::Quiet;
+            else if (p == "cool") preset = gao::Preset::CoolAndEfficient;
+            else if (p == "max") preset = gao::Preset::MaxPerformance;
+            else { std::printf("--optimize expects best, quiet, cool or max, got '%s'\n", argv[2]); return 1; }
+        }
+        return optimize(preset);
+    }
     std::printf("usage: gao [--version | --probe | --set-core <mhz> | --set-mem <mhz> | --reset | --set-fan <pct>\n"
-                "            | --stress <sec> [--max-temp <c>]]\n");
+                "            | --stress <sec> [--max-temp <c>] | --optimize [best|quiet|cool|max]]\n");
     return argc > 1 ? 1 : 0;
 }
