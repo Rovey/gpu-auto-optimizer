@@ -4,6 +4,7 @@
 #include "core/stability.hpp"
 #include "core/types.hpp"
 #include <functional>
+#include <optional>
 #include <string>
 
 namespace gao {
@@ -57,6 +58,9 @@ struct OptimizeIo {
     Probe probe;
     std::function<bool()> aborted;                      // polled between probes
     std::function<void(const std::string&)> log;
+    // GB/s at the currently applied settings; nullopt when the measurement
+    // failed. Empty: the memory search falls back to stability only.
+    std::function<std::optional<double>()> bandwidth;
 };
 
 struct OptimizeResult {
@@ -68,6 +72,8 @@ struct OptimizeResult {
     int mem_mhz = 0;
     int core_max_stable = 0;
     int mem_max_stable = 0;
+    int core_confirmed = 0;   // edge that held a 30 s probe; the margin applies to this
+    int mem_confirmed = 0;
     StabilityResult baseline;
     StabilityResult soak;
 };

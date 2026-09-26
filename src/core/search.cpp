@@ -72,6 +72,8 @@ constexpr int kSafetyTempC = 85;
 constexpr int kSoakRetries = 3;
 constexpr double kEfficiencyScore = 0.98;
 constexpr float kEfficiencyBelowPush = 0.5f;
+constexpr double kConfirmProbeS = 30;
+constexpr int kConfirmTries = 3;
 
 std::string describe(const StabilityResult& s) {
     char buf[160];
@@ -167,33 +169,69 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
         }
     }
 
-    // One clock candidate: journal first, then hardware, then probe.
-    auto clock_candidate = [&](std::optional<int> core_j, std::optional<int> mem_j, int core, int mem) {
+    // One clock candidate: journal first, then hardware, then the probe.
+    // `extra` runs while the candidate is still applied and stable (e.g. a
+    // bandwidth measurement), before the journal entry is closed.
+    auto clock_candidate = [&](std::optional<int> core_j, std::optional<int> mem_j, int core, int mem,
+                               double seconds, const std::function<void()>& extra = {}) {
         if (!stopped.empty()) return false;
         if (io.aborted && io.aborted()) { stopped = "aborted"; return false; }
         const int id = journal.begin(core_j, mem_j);
         if (id < 0) { stopped = "could not write the journal"; return false; }
         if (!set_state(r.power_pct, core, mem)) { journal.complete(id, "SET FAILED"); return false; }
-        const auto s = probe(kClockProbeS, obj.max_temp_c);
+        const auto s = probe(seconds, obj.max_temp_c);
+        const bool stable = s && s->verdict == Verdict::Stable;
+        if (stable && extra) extra();
         journal.complete(id, s ? verdict_name(s->verdict) : "NOT RUN");
         if (!s) return false;
-        log("core +" + std::to_string(core) + " / mem +" + std::to_string(mem) + ": " + describe(*s));
-        return s->verdict == Verdict::Stable;
+        log(std::string(seconds == kConfirmProbeS ? "confirm " : "") + "core +" + std::to_string(core) +
+            " / mem +" + std::to_string(mem) + ": " + describe(*s));
+        return stable;
     };
 
     if (obj.core_oc) {
         r.core_max_stable = highest_stable(0, kCoreMax, kCoreStep, journal.ceilings().core_mhz,
-                                           [&](int v) { return clock_candidate(v, std::nullopt, v, 0); });
+                                           [&](int v) { return clock_candidate(v, std::nullopt, v, 0, kClockProbeS); });
         if (!stopped.empty()) return finish_fail(stopped);
-        r.core_mhz = apply_margin(r.core_max_stable, kCoreStep, obj.perf_push);
-        log("core: highest stable +" + std::to_string(r.core_max_stable) + ", applying +" + std::to_string(r.core_mhz));
+        r.core_confirmed = confirm_edge(r.core_max_stable, 0, kCoreStep, kConfirmTries, [&](int v) {
+            return clock_candidate(v, std::nullopt, v, 0, kConfirmProbeS);
+        });
+        if (!stopped.empty()) return finish_fail(stopped);
+        r.core_mhz = apply_margin(r.core_confirmed, kCoreStep, obj.perf_push);
+        log("core: highest stable +" + std::to_string(r.core_max_stable) + ", confirmed +" +
+            std::to_string(r.core_confirmed) + ", applying +" + std::to_string(r.core_mhz));
     }
     if (obj.mem_oc) {
-        r.mem_max_stable = highest_stable(0, kMemMax, kMemStep, journal.ceilings().mem_mhz,
-                                          [&](int v) { return clock_candidate(std::nullopt, v, r.core_mhz, v); });
+        const int ceiling = journal.ceilings().mem_mhz;
+        if (io.bandwidth) {
+            r.mem_max_stable = best_bandwidth_offset(0, kMemMax, kMemStep, ceiling, [&](int v) {
+                MemSample m;
+                std::optional<double> gbps;
+                m.stable = clock_candidate(std::nullopt, v, r.core_mhz, v, kClockProbeS, [&] { gbps = io.bandwidth(); });
+                // A failed measurement (device lost) makes the step unusable.
+                if (m.stable && !gbps) m.stable = false;
+                if (m.stable) {
+                    m.gbps = *gbps;
+                    char buf[64];
+                    std::snprintf(buf, sizeof(buf), "mem +%d: bandwidth %.1f GB/s", v, m.gbps);
+                    log(buf);
+                }
+                return m;
+            });
+        } else {
+            r.mem_max_stable = highest_stable(0, kMemMax, kMemStep, ceiling, [&](int v) {
+                return clock_candidate(std::nullopt, v, r.core_mhz, v, kClockProbeS);
+            });
+        }
         if (!stopped.empty()) return finish_fail(stopped);
-        r.mem_mhz = apply_margin(r.mem_max_stable, kMemStep, obj.perf_push);
-        log("mem: highest stable +" + std::to_string(r.mem_max_stable) + ", applying +" + std::to_string(r.mem_mhz));
+        r.mem_confirmed = confirm_edge(r.mem_max_stable, 0, kMemStep, kConfirmTries, [&](int v) {
+            return clock_candidate(std::nullopt, v, r.core_mhz, v, kConfirmProbeS);
+        });
+        if (!stopped.empty()) return finish_fail(stopped);
+        r.mem_mhz = apply_margin(r.mem_confirmed, kMemStep, obj.perf_push);
+        log(std::string("mem: ") + (io.bandwidth ? "bandwidth peak +" : "highest stable +") +
+            std::to_string(r.mem_max_stable) + ", confirmed +" + std::to_string(r.mem_confirmed) +
+            ", applying +" + std::to_string(r.mem_mhz));
     }
 
     // Soak. On failure: too hot -> one power step down (lower clocks barely

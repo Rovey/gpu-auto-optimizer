@@ -78,6 +78,10 @@ struct FakeCard {
     int reset_calls = 0, reset_fails_from = -1;   // reset_to_stock fails from this call on
     int fail_core_set_at = -1;       // set_core_offset(this) returns false
     int max_core_seen = 0;
+    std::vector<int> confirm_fail_core;   // a 30 s probe at these core offsets fails
+    std::function<double(int)> bw_curve;  // GB/s by memory offset; empty = no bandwidth
+    bool bw_fails = false;                // every bandwidth measurement fails
+    int max_mem_seen = 0;
     int probes = 0, power_probes = 0;
     std::vector<std::string> journal;
     std::string last_set_begin_ok;   // "" if every set had its begin line first
@@ -92,7 +96,7 @@ struct FakeCard {
             if (v == fail_core_set_at) return false;
             core = v; max_core_seen = std::max(max_core_seen, v); return true;
         };
-        g.set_mem_offset = [this](int v) { mem = v; return true; };
+        g.set_mem_offset = [this](int v) { mem = v; max_mem_seen = std::max(max_mem_seen, v); return true; };
         g.reset_to_stock = [this] {
             if (reset_fails_from >= 0 && ++reset_calls > reset_fails_from) return false;
             power = 100; core = 0; mem = 0; return true;
@@ -113,6 +117,10 @@ struct FakeCard {
             if (seconds == 60 && abort_on_soak) aborted_now = true;
             r.score = 1000.0 * std::min(power, 90) / 90;
             if (seconds == 20 && power == noisy_power_pct) r.score *= 0.9;
+            if (seconds == 30 && std::find(confirm_fail_core.begin(), confirm_fail_core.end(), core) != confirm_fail_core.end()) {
+                r.verdict = Verdict::WrongResult;
+                return r;
+            }
             if (stock_unstable || core > core_edge || mem > mem_edge) r.verdict = Verdict::WrongResult;
             else if (seconds == 60 && soak_failures > 0) { --soak_failures; r.verdict = Verdict::WrongResult; }
             else if (r.peak_temp_c > max_temp) r.verdict = Verdict::TooHot;
@@ -131,6 +139,11 @@ struct Run {
         io.probe = card.probe();
         io.aborted = [this] { return card.aborted_now || (abort_after_probes >= 0 && card.probes >= abort_after_probes); };
         io.log = [this](const std::string& m) { log.push_back(m); };
+        if (card.bw_curve)
+            io.bandwidth = [this]() -> std::optional<double> {
+                if (card.bw_fails) return std::nullopt;
+                return card.bw_curve(card.mem);
+            };
         return optimize(gpu, objectives_for(preset), j, io);
     }
     OptimizeResult go(Preset preset) { return go(preset, card.gpu()); }
@@ -151,6 +164,8 @@ TEST_CASE("best preset converges to the card's edges and applies the margin") {
     CHECK(run.card.power == 115);
     CHECK(r.soak.verdict == Verdict::Stable);
     CHECK(run.card.last_set_begin_ok.empty());
+    CHECK(r.core_confirmed == 150);
+    CHECK(r.mem_confirmed == 800);
 }
 
 TEST_CASE("quiet preset picks the lowest power within 2 % of the reference score") {
@@ -370,4 +385,35 @@ TEST_CASE("confirm_edge keeps a holding edge and steps down otherwise") {
     CHECK(confirm_edge(0, 0, 15, 3, [&](int) { ++calls; return false; }) == 0);
     CHECK(calls == 0);
     CHECK(confirm_edge(15, 0, 15, 3, [](int) { return false; }) == 0);
+}
+
+TEST_CASE("memory search stops at the bandwidth peak, not the stability edge") {
+    Run run;
+    run.card.mem_edge = 1400;
+    run.card.bw_curve = [](int m) { return m <= 900 ? 500 + m * 0.1 : 590 - (m - 900) * 0.2; };
+    const auto r = run.go(Preset::BestOfMyGpu);
+    REQUIRE(r.ok);
+    CHECK(r.mem_max_stable == 900);
+    CHECK(r.mem_confirmed == 900);
+    CHECK(r.mem_mhz == 600);
+    CHECK(run.card.max_mem_seen <= 950);
+}
+
+TEST_CASE("the margin applies to the confirmed core edge") {
+    Run run;
+    run.card.confirm_fail_core = {150};
+    const auto r = run.go(Preset::BestOfMyGpu);
+    REQUIRE(r.ok);
+    CHECK(r.core_max_stable == 150);
+    CHECK(r.core_confirmed == 135);
+    CHECK(r.core_mhz == 90);
+}
+
+TEST_CASE("a failing bandwidth measurement never raises memory") {
+    Run run;
+    run.card.bw_curve = [](int m) { return 500 + m * 0.1; };
+    run.card.bw_fails = true;
+    const auto r = run.go(Preset::BestOfMyGpu);
+    REQUIRE(r.ok);
+    CHECK(r.mem_mhz == 0);
 }
