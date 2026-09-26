@@ -12,10 +12,10 @@
 </div>
 
 > [!IMPORTANT]
-> `main` is being rewritten from Python to C++ (see [the design spec](docs/superpowers/specs/2026-09-20-cpp-rewrite-design.md)). What's here today is the repository skeleton, the hardware layer and the stress load: it can read live telemetry, write clock offsets and fan speed verified against the driver, and run a DX11 load that checks every value it computes and ends in a stability verdict. It can also tune: `--optimize` searches power limit, core and memory offsets against that verdict. **There is no GUI yet, and results are lost on reboot** -- those are later phases. v1.0 will be the finished C++ application. The previous, working Python version (search engine, risk profiles, tray GUI) is preserved at the `v0.9-python` git tag and still works as it always did; it just isn't what lives on `main` anymore.
+> `main` is being rewritten from Python to C++ (see [the design spec](docs/superpowers/specs/2026-09-20-cpp-rewrite-design.md)). What's here today is the repository skeleton, the hardware layer and the stress load: it can read live telemetry, write clock offsets and fan speed verified against the driver, and run a DX11 load that checks every value it computes and ends in a stability verdict. It can also tune: `--optimize` searches power limit, core and memory offsets against that verdict, saves the result, and `--boot on` re-applies it at every logon. **There is no GUI yet** -- that is a later phase. v1.0 will be the finished C++ application. The previous, working Python version (search engine, risk profiles, tray GUI) is preserved at the `v0.9-python` git tag and still works as it always did; it just isn't what lives on `main` anymore.
 
 > [!WARNING]
-> The commands below that write to the GPU (`--set-core`, `--set-mem`, `--set-fan`, `--reset`, `--optimize`) change clocks, power limit and fan behavior directly through the driver. Every write is verified by reading the value back rather than trusting the driver's return code, but a wrong offset can still make a card unstable. Use at your own risk.
+> The commands below that write to the GPU (`--set-core`, `--set-mem`, `--set-fan`, `--reset`, `--optimize`, `--apply`, `--boot`) change clocks, power limit and fan behavior directly through the driver. Every write is verified by reading the value back rather than trusting the driver's return code, but a wrong offset can still make a card unstable. Use at your own risk.
 
 ## Quick start
 
@@ -34,9 +34,14 @@ That builds `.\build\Release\gao.exe` -- a command-line tool; there is no GUI ye
 .\build\Release\gao.exe --probe
 .\build\Release\gao.exe --stress 60
 .\build\Release\gao.exe --optimize best   # elevated
+.\build\Release\gao.exe --apply           # elevated: re-apply the saved result
+.\build\Release\gao.exe --boot on         # elevated: re-apply at every logon
+.\build\Release\gao.exe --status
 ```
 
 `--optimize` runs baseline → power → core → memory → 60 s soak (~5 minutes), leaves the result applied until reboot, and keeps a crash journal in `%LOCALAPPDATA%\GpuAutoOptimizer` so a setting that froze the machine is never tried again. Ctrl+C restores stock.
+
+`--optimize` saves its result to `%LOCALAPPDATA%\GpuAutoOptimizer\gao.json`. `--boot on` registers a logon task that re-applies it; if the machine crashes within 2 minutes of three logons in a row, or the NVIDIA driver version changes, boot-apply stops and `--status` / `boot.log` say why.
 
 `--stress` runs a DX11 compute load that checks every value it computes and ends with a verdict (`STABLE`, `WRONG RESULT`, `DEVICE LOST`, `TOO HOT`, `NO TELEMETRY`); it changes no settings and needs no elevation.
 
@@ -59,12 +64,14 @@ src/core/     pure logic -- no windows.h, no driver calls, no D3D. Unit-tested i
   stability.*     the stress run loop and its verdict (stable / wrong result / TDR / too hot / no telemetry)
   journal.*       write-ahead log of clock candidates; a freeze becomes a ceiling
   search.*        the tuner: baseline, power, core, memory, soak
+  boot.*          when boot-apply may run (strikes, driver) and the verified profile apply
 src/hw/       the only code that touches hardware: NVML, NVAPI and D3D11.
   nvml.*          telemetry (clocks, temp, fan %, power) via NVML
   nvapi.*         clock offsets and fan control via NVAPI, verified by read-back
   gpu_control.*   wires nvml/nvapi into the GpuControl struct core code uses
   stress.*        DX11 compute stress load; the GPU checks every value it computes
-  journal_file.*  the crash journal on disk, flushed before every candidate is applied
+  app_files.*     gao.json (atomic writes), the crash journal and boot.log, all flushed to disk
+  boot_task.*     the logon task, via schtasks.exe
 src/app/      entry point -- currently a command-line probe (gao.exe); an ImGui UI is a later phase.
 tests/        doctest, core only.
 third_party/  doctest, nlohmann/json -- vendored as source, no package manager.
@@ -96,7 +103,7 @@ ctest --test-dir build -C Debug --output-on-failure
 
 ## Status and roadmap
 
-Phases 0-3 of the rewrite are done: repository migration, the CMake/CI skeleton, the hardware layer (NVML telemetry and power limit, NVAPI clock offsets, NVAPI fan control), the DX11 stress load with its stability verdict, and the search with its crash-safe journal. The phases after this one -- persistence and boot-apply, the ImGui screens, and finally the release workflow -- are not started. See [the design spec](docs/superpowers/specs/2026-09-20-cpp-rewrite-design.md) for the full phase table and the reasoning behind each decision (why NVAPI + NVML directly, why the Afterburner route was abandoned, why undervolting ships opt-in).
+Phases 0-4 of the rewrite are done: repository migration, the CMake/CI skeleton, the hardware layer (NVML telemetry and power limit, NVAPI clock offsets, NVAPI fan control), the DX11 stress load with its stability verdict, the search with its crash-safe journal, and persistence with boot-apply. The phases after this one -- the ImGui screens and tray, and finally the release workflow -- are not started. See [the design spec](docs/superpowers/specs/2026-09-20-cpp-rewrite-design.md) for the full phase table and the reasoning behind each decision (why NVAPI + NVML directly, why the Afterburner route was abandoned, why undervolting ships opt-in).
 
 ## License
 

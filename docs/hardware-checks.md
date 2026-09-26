@@ -13,6 +13,7 @@ those specific calls with an NVAPI error, not a crash. Checks 1-2 only read
 telemetry through NVML and do not need elevation. Checks 10-12 need no
 elevation either: the stress load only computes, it writes no settings.
 Checks 13-16 run `--optimize`, which writes clocks and the power limit: elevated.
+Checks 17-22 cover persistence; 19 and 20 need a log-off and log-on.
 
 Commands assume a Release build at `.\build\Release\gao.exe` from the repo
 root; adjust the path for a Debug build.
@@ -39,6 +40,12 @@ root; adjust the path for a Debug build.
 | 14 | A recorded freeze becomes a ceiling | Append `{"id":999,"core":150,"state":"begin"}` to `%LOCALAPPDATA%\GpuAutoOptimizer\journal.jsonl`, run `--optimize best` | yes | Warning "froze the machine at core +150"; no logged core candidate ≥ +150. Remove the line afterwards. | Pass (2026-09-26). Printed `warning: a previous run froze the machine at core +150; staying below it from now on`; the highest core candidate tried was +135 (max stable +135, applied +90). Line removed afterwards. |
 | 15 | Ctrl+C restores stock | Press Ctrl+C during the core search of `--optimize best` | yes | "abort requested", then `RESULT: not applied -- aborted (card at stock)`; `--reset` read-back 0/0 | Pass (2026-09-26). Ctrl+C during the core search printed `abort requested`, finished the running +180 probe, then `stopped: aborted -- card restored to stock` / `RESULT: not applied -- aborted (card at stock)`. `--reset` afterwards: read-back 0/0, power default, `OK`. |
 | 16 | Power limit applies | `--optimize quiet` log shows `power <N> %` lines; `--probe` afterwards | yes | `--probe`'s `/<limit> W` equals N % of the default limit (±1 %) | Pass (2026-09-26). `--optimize quiet` chose 80 %; `--probe` afterwards showed `/160 W`, 80 % of the 200 W default. That run also exposed a bug: the efficiency reference was a single noisy probe, so quiet cost 4 % score instead of < 2 % (5718 -> 5486 it/s); fixed in `ed289e1` (reference = best stable score at or below the cap). |
+| 17 | Optimize saves a profile | `--optimize best` (elevated), then `--status` | yes / no | `Saved:` line; `--status` shows the profile and `driver: ... (matches)` | |
+| 18 | Apply re-applies it | `--reset`, then `--apply`, then `--probe` | yes | `applied best: ...`, `OK`; `--probe` limit equals the profile's power % of default | |
+| 19 | Boot-apply at logon | `--boot on`, log off and on, wait 2 min, `--status` | yes | `boot.log` last line `applied ...`; `--status` shows `boot-apply: on`, `strikes: 0 of 3` | |
+| 20 | Three strikes stop it | set `"boot_strikes": 3` in `gao.json`, log off and on, `--status`; then `--boot on` | yes | last boot line `not applied: disabled after 3 crashes ...`; card at stock; after `--boot on`, `strikes: 0 of 3` | |
+| 21 | A driver change blocks it | set `"driver": "000.00"` in `gao.json`, run `--apply`; restore the value | yes | `not applied: driver changed (000.00 -> ...)` | |
+| 22 | Boot-apply off | `--boot off`, then `schtasks /Query /TN GpuAutoOptimizer` | yes | `boot-apply off: task removed`; schtasks reports the task does not exist | |
 
 ## Notes
 
