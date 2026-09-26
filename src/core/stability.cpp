@@ -4,12 +4,14 @@
 namespace gao {
 
 namespace {
-// Averages only the samples that were actually reported (-1 = unknown).
+// Time-weighted average over the samples that were actually reported
+// (-1 = unknown). Weighting by batch time keeps hw's short calibration
+// batches at startup from dragging a full-load average down.
 struct Avg {
-    long long sum = 0;
-    int n = 0;
-    void add(int v) { if (v >= 0) { sum += v; ++n; } }
-    int get() const { return n ? static_cast<int>(sum / n) : -1; }
+    double sum = 0;
+    double weight = 0;
+    void add(int v, double w) { if (v >= 0) { sum += v * w; weight += w; } }
+    int get() const { return weight > 0 ? static_cast<int>(sum / weight) : -1; }
 };
 }
 
@@ -23,7 +25,8 @@ StabilityResult run_stability(const std::function<StressBatch()>& batch,
         const StressBatch b = batch();
         // A batch that claims no time would never advance the loop; count it
         // as 1 ms so a broken timer ends the run instead of hanging it.
-        r.seconds += std::max(b.elapsed_ms, 1.0) / 1000.0;
+        const double batch_s = std::max(b.elapsed_ms, 1.0) / 1000.0;
+        r.seconds += batch_s;
         // Device lost first: after a TDR the error counter is garbage.
         if (b.device_lost) { r.verdict = Verdict::DeviceLost; break; }
         if (b.wrong_values > 0) { r.verdict = Verdict::WrongResult; break; }
@@ -31,9 +34,9 @@ StabilityResult run_stability(const std::function<StressBatch()>& batch,
         const Telemetry t = read();
         if (!t.ok) { r.verdict = Verdict::NoTelemetry; break; }
         r.peak_temp_c = std::max(r.peak_temp_c, t.temp_c);
-        power.add(t.power_w);
-        core.add(t.core_mhz);
-        mem.add(t.mem_mhz);
+        power.add(t.power_w, batch_s);
+        core.add(t.core_mhz, batch_s);
+        mem.add(t.mem_mhz, batch_s);
         if (t.temp_c > max_temp_c) { r.verdict = Verdict::TooHot; break; }
     } while (r.seconds < seconds);
     r.score = static_cast<double>(iterations) / r.seconds;

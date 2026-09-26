@@ -80,6 +80,16 @@ TEST_CASE("unknown power is excluded from the average") {
     CHECK(none.avg_power_w == -1);
 }
 
+TEST_CASE("averages are weighted by batch time, so short warm-up batches do not dominate") {
+    // hw starts with ~1 ms batches while it calibrates; ten of those at low
+    // power followed by one 250 ms batch at full power is a full-power run.
+    int calls = 0;
+    const auto r = run_stability([&] { ++calls; return calls <= 10 ? good(1, 1) : good(100, 250); },
+                                 [&] { return tel(60, calls <= 10 ? 50 : 200); }, 0.26, 85);
+    CHECK(calls == 11);
+    CHECK(r.avg_power_w == 194);   // (10*1*50 + 250*200) / 260 = 194.2
+}
+
 TEST_CASE("a zero-length run still judges one batch") {
     int calls = 0;
     const auto r = run_stability([&] { ++calls; return good(); }, [] { return tel(60); }, 0.0, 85);
