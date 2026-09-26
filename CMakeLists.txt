@@ -27,6 +27,8 @@ add_library(core STATIC
   src/core/journal.cpp
   src/core/search.hpp
   src/core/search.cpp
+  src/core/boot.hpp
+  src/core/boot.cpp
 )
 target_include_directories(core PUBLIC src)
 target_include_directories(core PRIVATE third_party)
@@ -56,6 +58,7 @@ add_executable(core_tests
   tests/test_stability.cpp
   tests/test_journal.cpp
   tests/test_search.cpp
+  tests/test_boot.cpp
 )
 target_link_libraries(core_tests PRIVATE core doctest)
 add_test(NAME core_tests COMMAND core_tests)
