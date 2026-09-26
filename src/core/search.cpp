@@ -46,8 +46,14 @@ int best_bandwidth_offset(int lo, int hi, int step, int ceiling, const std::func
     std::vector<std::pair<int, double>> seen;
     double best = 0;
     for (int v = lo; v <= top; v += step) {
-        const MemSample s = sample(v);
+        MemSample s = sample(v);
         if (!s.stable) break;
+        // A drop is measured twice before it ends the scan: a single reading
+        // can land while the memory clock is still in a lower P-state.
+        if (s.gbps < best * (1 - kBandwidthDrop)) {
+            s = sample(v);
+            if (!s.stable) break;
+        }
         seen.emplace_back(v, s.gbps);
         best = std::max(best, s.gbps);
         if (s.gbps < best * (1 - kBandwidthDrop)) break;

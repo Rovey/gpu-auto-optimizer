@@ -41,9 +41,9 @@ struct MemSample {
 
 // Scans lo, lo+step, ... (<= hi, < ceiling), sampling lo too. Stops at the
 // first unstable sample or once gbps falls more than kBandwidthDrop below the
-// best so far. Returns the lowest stable offset within kBandwidthTie of the
-// best, so noise on a flat curve never drifts the result upward; lo when no
-// sample was stable.
+// best so far (a drop is re-measured once before it counts). Returns the
+// lowest stable offset within kBandwidthTie of the best, so noise on a flat
+// curve never drifts the result upward; lo when no sample was stable.
 int best_bandwidth_offset(int lo, int hi, int step, int ceiling, const std::function<MemSample(int)>& sample);
 
 // "Search fast, confirm long": re-checks edge with a long probe; on failure

@@ -5,6 +5,7 @@
 #include <string>
 #include <algorithm>
 #include <climits>
+#include <map>
 #include <vector>
 
 using namespace gao;
@@ -341,6 +342,21 @@ TEST_CASE("bandwidth scan stops at the peak of a rising-then-falling curve") {
     });
     CHECK(r == 600);
     CHECK(max_sampled == 650);   // stopped at the first step more than 1 % below the peak
+}
+
+TEST_CASE("a single low bandwidth reading is re-measured before it ends the scan") {
+    // Measured on the 4070: an occasional reading lands at half speed when the
+    // memory clock is still in a lower P-state. One such dip must not end the
+    // scan; a drop that repeats does.
+    std::map<int, int> calls;
+    const int r = best_bandwidth_offset(0, 1500, 50, INT_MAX, [&](int v) {
+        const bool dip = v == 300 && calls[v] == 0;
+        ++calls[v];
+        return MemSample{true, dip ? 250.0 : (v <= 600 ? 500 + v * 0.1 : 560 - (v - 600) * 0.3)};
+    });
+    CHECK(r == 600);
+    CHECK(calls[300] == 2);
+    CHECK(calls[650] == 2);   // the real drop is confirmed once too
 }
 
 TEST_CASE("bandwidth scan stops at the first unstable step") {

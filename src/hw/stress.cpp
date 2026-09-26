@@ -7,11 +7,13 @@
 #include <dxgi.h>
 #include <wrl/client.h>
 
+#include <algorithm>
 #include <chrono>
 #include <climits>
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <vector>
 
 using Microsoft::WRL::ComPtr;
 
@@ -23,6 +25,24 @@ constexpr UINT kNvidiaVendorId = 0x10DE;
 constexpr int kTile = 64;   // output tile per thread group (16x16 threads, 4x4 outputs each)
 constexpr double kTargetBatchMs = 250.0;
 constexpr int kMaxDispatches = 2048;
+constexpr UINT kBwBytes = 256u * 1024 * 1024;   // per buffer; far above the 4070's 36 MB L2
+constexpr UINT kBwGroups = 1024;
+constexpr int kBwDispatches = 64;
+constexpr size_t kBwRuns = 3;          // consecutive runs that must agree
+constexpr int kBwMaxRuns = 20;         // ~1.5 s at full speed; more if clocks are low
+constexpr double kBwSettle = 0.01;     // agree = within 1 %
+
+// Grid-stride copy of 16-byte elements between two raw buffers.
+const char kCopyShader[] = R"(
+#define COUNT (256 * 1024 * 1024 / 16)
+#define THREADS (1024 * 256)
+RWByteAddressBuffer Src : register(u0);
+RWByteAddressBuffer Dst : register(u1);
+[numthreads(256, 1, 1)]
+void main(uint3 id : SV_DispatchThreadID) {
+    for (uint i = id.x; i < COUNT; i += THREADS) Dst.Store4(i * 16, Src.Load4(i * 16));
+}
+)";
 // The GPU error counter is a 32-bit uint summed over every dispatch in a
 // batch; a batch where every element is wrong must not wrap it back to 0.
 static_assert(static_cast<long long>(kMaxDispatches) * kStressN * kStressN <= 0xFFFFFFFFLL,
@@ -101,6 +121,10 @@ struct Stress::Impl {
     ComPtr<ID3D11Buffer> errors, staging;
     ComPtr<ID3D11UnorderedAccessView> errors_uav;
     std::vector<float> ha, hb, href;   // host copies, kept for device recreation
+    ComPtr<ID3D11ComputeShader> copy_cs;
+    ComPtr<ID3D11Buffer> bw_src, bw_dst;
+    ComPtr<ID3D11UnorderedAccessView> bw_src_uav, bw_dst_uav;
+    ComPtr<ID3D11Query> q_disjoint, q_begin, q_end;
 };
 
 Stress::Stress() : impl_(std::make_unique<Impl>()) {}
@@ -120,6 +144,8 @@ bool Stress::CreateDevice() {
     d.device.Reset(); d.ctx.Reset(); d.cs.Reset();
     d.a.Reset(); d.b.Reset(); d.ref.Reset();
     d.errors.Reset(); d.staging.Reset(); d.errors_uav.Reset();
+    d.copy_cs.Reset(); d.bw_src.Reset(); d.bw_dst.Reset(); d.bw_src_uav.Reset(); d.bw_dst_uav.Reset();
+    d.q_disjoint.Reset(); d.q_begin.Reset(); d.q_end.Reset();
     // Any failure below leaves no device behind, so the next Batch() retries
     // the rebuild instead of dispatching with half-created resources (likely
     // right after a TDR, when resource creation can still fail).
@@ -238,6 +264,87 @@ StressBatch Stress::Batch() {
     finish();
     if (out.elapsed_ms < kTargetBatchMs * 0.6 && dispatches_ < kMaxDispatches) dispatches_ *= 2;
     return out;
+}
+
+std::optional<double> Stress::MeasureBandwidth() {
+    Impl& d = *impl_;
+    if (!d.device && !CreateDevice()) return std::nullopt;
+    if (!d.copy_cs) {   // created lazily: the stress path never needs 512 MB of buffers
+        ComPtr<ID3DBlob> code, log;
+        HRESULT hr = D3DCompile(kCopyShader, sizeof(kCopyShader) - 1, "copy.hlsl", nullptr, nullptr, "main",
+                                "cs_5_0", D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, &code, &log);
+        if (FAILED(hr)) { error_ = Hr("D3DCompile (copy)", hr); return std::nullopt; }
+        if (FAILED(hr = d.device->CreateComputeShader(code->GetBufferPointer(), code->GetBufferSize(), nullptr, &d.copy_cs))) {
+            error_ = Hr("CreateComputeShader (copy)", hr); return std::nullopt;
+        }
+        auto make = [&](ComPtr<ID3D11Buffer>& buf, ComPtr<ID3D11UnorderedAccessView>& uav) {
+            D3D11_BUFFER_DESC bd{};
+            bd.ByteWidth = kBwBytes;
+            bd.Usage = D3D11_USAGE_DEFAULT;
+            bd.BindFlags = D3D11_BIND_UNORDERED_ACCESS;
+            bd.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS;
+            HRESULT h = d.device->CreateBuffer(&bd, nullptr, &buf);
+            if (FAILED(h)) return h;
+            D3D11_UNORDERED_ACCESS_VIEW_DESC ud{};
+            ud.Format = DXGI_FORMAT_R32_TYPELESS;
+            ud.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
+            ud.Buffer.NumElements = kBwBytes / 4;
+            ud.Buffer.Flags = D3D11_BUFFER_UAV_FLAG_RAW;
+            return d.device->CreateUnorderedAccessView(buf.Get(), &ud, &uav);
+        };
+        if (FAILED(hr = make(d.bw_src, d.bw_src_uav)) || FAILED(hr = make(d.bw_dst, d.bw_dst_uav))) {
+            error_ = Hr("bandwidth buffers", hr); return std::nullopt;
+        }
+        D3D11_QUERY_DESC qd{D3D11_QUERY_TIMESTAMP_DISJOINT, 0};
+        D3D11_QUERY_DESC qt{D3D11_QUERY_TIMESTAMP, 0};
+        if (FAILED(hr = d.device->CreateQuery(&qd, &d.q_disjoint)) || FAILED(hr = d.device->CreateQuery(&qt, &d.q_begin)) ||
+            FAILED(hr = d.device->CreateQuery(&qt, &d.q_end))) {
+            error_ = Hr("timestamp queries", hr); return std::nullopt;
+        }
+    }
+    auto wait = [&](ID3D11Asynchronous* q, void* out, UINT size) {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        for (;;) {
+            const HRESULT hr = d.ctx->GetData(q, out, size, 0);
+            if (hr == S_OK) return true;
+            if (FAILED(hr) || d.device->GetDeviceRemovedReason() != S_OK ||
+                std::chrono::steady_clock::now() > deadline) return false;
+            Sleep(1);
+        }
+    };
+    ID3D11UnorderedAccessView* uavs[] = {d.bw_src_uav.Get(), d.bw_dst_uav.Get()};
+    ID3D11UnorderedAccessView* none[] = {nullptr, nullptr};
+    // An idle card starts in its lowest memory P-state (405 MHz on the 4070)
+    // and needs up to a second of load to clock up; single readings came out
+    // at half speed in testing. So: keep measuring until kBwRuns consecutive
+    // runs agree within kBwSettle, and report their median.
+    std::vector<double> runs;
+    for (int run = 0; run < kBwMaxRuns; ++run) {
+        d.ctx->CSSetShader(d.copy_cs.Get(), nullptr, 0);
+        d.ctx->CSSetUnorderedAccessViews(0, 2, uavs, nullptr);
+        d.ctx->Begin(d.q_disjoint.Get());
+        d.ctx->End(d.q_begin.Get());
+        for (int i = 0; i < kBwDispatches; ++i) d.ctx->Dispatch(kBwGroups, 1, 1);
+        d.ctx->End(d.q_end.Get());
+        d.ctx->End(d.q_disjoint.Get());
+        d.ctx->CSSetUnorderedAccessViews(0, 2, none, nullptr);
+        D3D11_QUERY_DATA_TIMESTAMP_DISJOINT dj{};
+        UINT64 t0 = 0, t1 = 0;
+        if (!wait(d.q_disjoint.Get(), &dj, sizeof(dj)) || !wait(d.q_begin.Get(), &t0, sizeof(t0)) ||
+            !wait(d.q_end.Get(), &t1, sizeof(t1))) {
+            if (d.device->GetDeviceRemovedReason() != S_OK) d.device.Reset();
+            return std::nullopt;
+        }
+        if (dj.Disjoint || dj.Frequency == 0 || t1 <= t0) continue;   // clock changed mid-run: discard
+        const double seconds = double(t1 - t0) / double(dj.Frequency);
+        runs.push_back(2.0 * kBwBytes * kBwDispatches / seconds / 1e9);
+        if (runs.size() < kBwRuns) continue;
+        std::vector<double> last(runs.end() - kBwRuns, runs.end());
+        std::sort(last.begin(), last.end());
+        if (last.back() <= last.front() * (1 + kBwSettle)) return last[kBwRuns / 2];
+    }
+    error_ = "bandwidth did not settle within " + std::to_string(kBwMaxRuns) + " runs";
+    return std::nullopt;
 }
 
 }

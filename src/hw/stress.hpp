@@ -1,6 +1,7 @@
 #pragma once
 #include "core/stability.hpp"
 #include <memory>
+#include <optional>
 #include <string>
 
 namespace gao {
@@ -25,6 +26,10 @@ public:
     // One batch of dispatches. Batches start at one dispatch and double until
     // they take ~250 ms. After a lost device, the next call recreates it.
     StressBatch Batch();
+    // Device-memory bandwidth in GB/s (read + write) from a 256 MB buffer copy,
+    // timed with GPU timestamps; median of 3 runs. nullopt when the device was
+    // lost or the timing was unusable.
+    std::optional<double> MeasureBandwidth();
     const std::string& Error() const { return error_; }
     const std::string& AdapterName() const { return adapter_name_; }
 

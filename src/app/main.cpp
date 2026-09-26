@@ -296,6 +296,7 @@ static int optimize(gao::Preset preset) {
     };
     io.aborted = [] { return g_abort.load(); };
     io.log = [](const std::string& m) { std::printf("  %s\n", m.c_str()); };
+    io.bandwidth = [&] { return load.MeasureBandwidth(); };
     const gao::OptimizeResult r = gao::optimize(gpu, gao::objectives_for(preset), journal, io);
     SetConsoleCtrlHandler(OnConsoleCtrl, FALSE);
     g_gpu = nullptr;
@@ -305,8 +306,8 @@ static int optimize(gao::Preset preset) {
                     r.stock_restored ? "card at stock" : "reset to stock FAILED, run `gao --reset`");
         return 1;
     }
-    std::printf("RESULT: power %d %%, core +%d MHz (max stable +%d), mem +%d MHz (max stable +%d)\n",
-                r.power_pct, r.core_mhz, r.core_max_stable, r.mem_mhz, r.mem_max_stable);
+    std::printf("RESULT: power %d %%, core +%d MHz (confirmed +%d), mem +%d MHz (confirmed +%d)\n",
+                r.power_pct, r.core_mhz, r.core_confirmed, r.mem_mhz, r.mem_confirmed);
     std::printf("  before: score=%.0f it/s  core=%d MHz  mem=%d MHz  peak=%d C  power=%d W\n",
                 r.baseline.score, r.baseline.avg_core_mhz, r.baseline.avg_mem_mhz, r.baseline.peak_temp_c, r.baseline.avg_power_w);
     std::printf("  after:  score=%.0f it/s  core=%d MHz  mem=%d MHz  peak=%d C  power=%d W\n",
@@ -417,6 +418,15 @@ static int boot_apply() {
     return 1;
 }
 
+static int bandwidth() {
+    gao::Stress load;
+    if (!load.Init()) { std::printf("stress init failed: %s\n", load.Error().c_str()); return 1; }
+    const auto gbps = load.MeasureBandwidth();
+    if (!gbps) { std::printf("bandwidth measurement failed: %s\n", load.Error().c_str()); return 1; }
+    std::printf("memory bandwidth: %.1f GB/s (%s)\n", *gbps, load.AdapterName().c_str());
+    return 0;
+}
+
 int main(int argc, char** argv) {
     if (argc > 1 && std::strcmp(argv[1], "--version") == 0) {
         std::printf("%s %s\n", gao::kProductName.data(), gao::kVersion.data());
@@ -464,6 +474,7 @@ int main(int argc, char** argv) {
         }
         return stress(seconds, max_temp, selftest);
     }
+    if (argc > 1 && std::strcmp(argv[1], "--bandwidth") == 0) return bandwidth();
     if (argc > 1 && std::strcmp(argv[1], "--apply") == 0) return apply();
     if (argc > 2 && std::strcmp(argv[1], "--boot") == 0) {
         if (std::strcmp(argv[2], "on") == 0) return boot(true);
@@ -486,7 +497,7 @@ int main(int argc, char** argv) {
         return optimize(preset);
     }
     std::printf("usage: gao [--version | --probe | --set-core <mhz> | --set-mem <mhz> | --reset | --set-fan <pct>\n"
-                "            | --stress <sec> [--max-temp <c>] | --optimize [best|quiet|cool|max]\n"
+                "            | --stress <sec> [--max-temp <c>] | --bandwidth | --optimize [best|quiet|cool|max]\n"
                 "            | --apply | --boot on|off | --status]\n");
     return argc > 1 ? 1 : 0;
 }
