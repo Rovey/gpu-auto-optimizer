@@ -22,7 +22,11 @@ namespace {
 constexpr UINT kNvidiaVendorId = 0x10DE;
 constexpr int kTile = 64;   // output tile per thread group (16x16 threads, 4x4 outputs each)
 constexpr double kTargetBatchMs = 250.0;
-constexpr int kMaxDispatches = 4096;
+constexpr int kMaxDispatches = 2048;
+// The GPU error counter is a 32-bit uint summed over every dispatch in a
+// batch; a batch where every element is wrong must not wrap it back to 0.
+static_assert(static_cast<long long>(kMaxDispatches) * kStressN * kStressN <= 0xFFFFFFFFLL,
+              "a fully wrong batch would overflow the error counter");
 
 // Tiled, register-blocked matmul: every thread computes a 4x4 block of
 // C = A * B (16 FMAs per 8 shared-memory reads), compares each element with
@@ -116,6 +120,14 @@ bool Stress::CreateDevice() {
     d.device.Reset(); d.ctx.Reset(); d.cs.Reset();
     d.a.Reset(); d.b.Reset(); d.ref.Reset();
     d.errors.Reset(); d.staging.Reset(); d.errors_uav.Reset();
+    // Any failure below leaves no device behind, so the next Batch() retries
+    // the rebuild instead of dispatching with half-created resources (likely
+    // right after a TDR, when resource creation can still fail).
+    struct ResetOnFailure {
+        Impl& d;
+        bool ok = false;
+        ~ResetOnFailure() { if (!ok) d.device.Reset(); }
+    } guard{d};
 
     ComPtr<IDXGIFactory1> factory;
     HRESULT hr = CreateDXGIFactory1(IID_PPV_ARGS(&factory));
@@ -180,6 +192,7 @@ bool Stress::CreateDevice() {
     if (FAILED(hr = d.device->CreateBuffer(&sd, nullptr, &d.staging))) {
         error_ = Hr("staging buffer", hr); return false;
     }
+    guard.ok = true;
     return true;
 }
 
