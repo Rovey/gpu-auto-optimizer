@@ -192,7 +192,8 @@ void* Nvapi::QueryFn(unsigned id) {
 }
 
 bool Nvapi::Init() {
-    HMODULE h = LoadLibraryA("nvapi64.dll");
+    // System32 only, as for nvml.dll: never from the exe's own folder.
+    HMODULE h = LoadLibraryExA("nvapi64.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
     if (!h) { error_ = "could not load nvapi64.dll"; return false; }
     lib_ = h;
 

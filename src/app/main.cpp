@@ -260,6 +260,8 @@ static std::string decision_text(gao::BootDecision d, const gao::Config& c, cons
         case gao::BootDecision::DriverChanged:
             return "driver changed (" + c.profile->driver + " -> " + (driver.empty() ? "unknown" : driver) +
                    "); run `gao --optimize` again";
+        case gao::BootDecision::GpuChanged:
+            return "this is not the card the profile was tested on; run `gao --optimize` again";
         case gao::BootDecision::Apply: return "apply";
     }
     return "unknown";
@@ -310,7 +312,8 @@ static int optimize(gao::Preset preset) {
     std::printf("  after:  score=%.0f it/s  core=%d MHz  mem=%d MHz  peak=%d C  power=%d W\n",
                 r.soak.score, r.soak.avg_core_mhz, r.soak.avg_mem_mhz, r.soak.peak_temp_c, r.soak.avg_power_w);
     gao::Config cfg = load_config();
-    cfg.profile = gao::Profile{preset, r.power_pct, r.core_mhz, r.mem_mhz, nvml.DriverVersion(), now_text()};
+    cfg.profile = gao::Profile{preset, r.power_pct, r.core_mhz, r.mem_mhz, nvml.DriverVersion(),
+                               nvml.GpuUuid(kGpu), now_text()};
     if (save_config(cfg)) std::printf("Saved: `gao --apply` re-applies it, `gao --boot on` applies it at every logon.\n");
     else std::printf("warning: could not save the profile to %s\n", gao::config_path().string().c_str());
     std::printf("Applied until reboot. `gao --reset` returns to stock.\n");
@@ -326,11 +329,11 @@ static int apply() {
     gao::Config cfg = load_config();
     cfg.boot_strikes = 0;   // strikes only gate boot-apply
     const std::string driver = nvml.DriverVersion();
-    const auto d = gao::decide_boot(cfg, driver);
+    const auto d = gao::decide_boot(cfg, driver, nvml.GpuUuid(kGpu));
     if (d != gao::BootDecision::Apply) { std::printf("not applied: %s\n", decision_text(d, cfg, driver).c_str()); return 1; }
     const gao::GpuControl gpu = gao::make_gpu_control(nvml, nvapi, kGpu);
     std::string why;
-    if (!gao::apply_profile(gpu, *cfg.profile, &why)) { std::printf("not applied: %s (card at stock)\n", why.c_str()); return 1; }
+    if (!gao::apply_profile(gpu, *cfg.profile, &why)) { std::printf("not applied: %s\n", why.c_str()); return 1; }
     std::printf("applied %s\nOK\n", profile_text(*cfg.profile).c_str());
     return 0;
 }
@@ -365,6 +368,11 @@ static int status() {
     if (cfg.profile)
         std::printf("driver:     %s (%s)\n", driver.empty() ? "unknown" : driver.c_str(),
                     !driver.empty() && driver == cfg.profile->driver ? "matches" : "CHANGED -- run `gao --optimize` again");
+    if (cfg.profile) {
+        const std::string gpu_id = nvml.GpuUuid(kGpu);
+        std::printf("gpu:        %s\n", !gpu_id.empty() && gpu_id == cfg.profile->gpu
+                                         ? "matches the profile" : "DIFFERENT card or unknown -- run `gao --optimize` again");
+    }
     std::printf("boot-apply: %s\n", gao::boot_task_exists() ? "on (logon task registered)" : "off");
     std::printf("strikes:    %d of %d\n", cfg.boot_strikes, gao::kMaxBootStrikes);
     const auto log = gao::read_lines(gao::boot_log_path());
@@ -379,7 +387,7 @@ static int boot_apply() {
     if (!nvml.Init()) { boot_log("NVML init failed: " + nvml.Error()); return 1; }
     gao::Config cfg = load_config();
     const std::string driver = nvml.DriverVersion();
-    const auto d = gao::decide_boot(cfg, driver);
+    const auto d = gao::decide_boot(cfg, driver, nvml.GpuUuid(kGpu));
     if (d != gao::BootDecision::Apply) { boot_log("not applied: " + decision_text(d, cfg, driver)); return 1; }
     // The strike is on disk before the hardware is touched: a crash from here
     // on counts.
@@ -389,16 +397,24 @@ static int boot_apply() {
     if (!nvapi.Init()) { boot_log("NVAPI init failed: " + nvapi.Error()); return 1; }
     const gao::GpuControl gpu = gao::make_gpu_control(nvml, nvapi, kGpu);
     std::string why;
-    if (!gao::apply_profile(gpu, *cfg.profile, &why)) { boot_log("apply failed: " + why + " -- card at stock"); return 1; }
+    if (!gao::apply_profile(gpu, *cfg.profile, &why)) { boot_log("apply failed: " + why); return 1; }
     boot_log("applied " + profile_text(*cfg.profile) + ", strike " + std::to_string(cfg.boot_strikes) +
              " clears in 2 minutes");
     Sleep(2 * 60 * 1000);
     // Reload: --optimize may have saved a new profile meanwhile; only the
-    // counter is ours to change.
-    gao::Config latest = load_config();
-    latest.boot_strikes = 0;
-    save_config(latest);
-    return 0;
+    // counter is ours to change. If the file cannot be read, or reads without
+    // the profile it had a moment ago, writing would destroy it: leave the
+    // strike (fails safe) and say so.
+    for (int attempt = 0; attempt < 3; ++attempt) {
+        const auto text = gao::read_file(gao::config_path());
+        gao::Config latest = text ? gao::from_json(*text) : gao::Config{};
+        if (!latest.profile) { boot_log("could not re-read gao.json to clear the strike; it stays"); return 1; }
+        latest.boot_strikes = 0;
+        if (save_config(latest)) { boot_log("ran 2 minutes without a crash; strike cleared"); return 0; }
+        Sleep(1000);
+    }
+    boot_log("could not save gao.json to clear the strike; it stays");
+    return 1;
 }
 
 int main(int argc, char** argv) {

@@ -40,8 +40,8 @@ int apply_margin(int max, int step, float perf_push) {
 }
 
 namespace {
-constexpr int kCoreStep = 15, kCoreMax = 300;
-constexpr int kMemStep = 50, kMemMax = 1500;
+constexpr int kCoreStep = 15, kCoreMax = kCoreMaxMhz;
+constexpr int kMemStep = 50, kMemMax = kMemMaxMhz;
 constexpr int kPowerStep = 5;
 constexpr double kBaselineS = 30, kPowerProbeS = 20, kClockProbeS = 3, kSoakS = 60;
 constexpr int kSafetyTempC = 85;

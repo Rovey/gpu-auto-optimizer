@@ -7,12 +7,18 @@
 namespace gao {
 
 static int run_schtasks(std::wstring args) {
-    std::wstring cmd = L"schtasks.exe " + args;
+    // Full path: --boot runs elevated, and a bare name would let the current
+    // or the exe's folder supply a different schtasks.exe.
+    wchar_t sys[MAX_PATH];
+    const UINT n = GetSystemDirectoryW(sys, MAX_PATH);
+    if (n == 0 || n >= MAX_PATH) return -1;
+    const std::wstring app = std::wstring(sys) + L"\\schtasks.exe";
+    std::wstring cmd = L"\"" + app + L"\" " + args;
     STARTUPINFOW si{};
     si.cb = sizeof(si);
     PROCESS_INFORMATION pi{};
     // CREATE_NO_WINDOW: schtasks' own output is not ours to print.
-    if (!CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi))
+    if (!CreateProcessW(app.c_str(), cmd.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi))
         return -1;
     WaitForSingleObject(pi.hProcess, INFINITE);
     DWORD code = 1;

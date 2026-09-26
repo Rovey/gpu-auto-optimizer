@@ -34,11 +34,14 @@ static fn_pl_default     p_pl_default = nullptr;
 static fn_pl_constraints p_pl_constraints = nullptr;
 static fn_pl_set         p_pl_set = nullptr;
 typedef nvmlReturn_t (*fn_driver)(char*, unsigned);
+typedef nvmlReturn_t (*fn_uuid)(nvmlDevice_t, char*, unsigned);
 static fn_driver p_driver = nullptr;
+static fn_uuid p_uuid = nullptr;
 
 bool Nvml::Init() {
-    HMODULE h = LoadLibraryA("nvml.dll");
-    if (!h) h = LoadLibraryA("C:\\Windows\\System32\\nvml.dll");
+    // System32 only: gao runs elevated at logon, and the exe's own folder
+    // must never be able to supply this DLL.
+    HMODULE h = LoadLibraryExA("nvml.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
     if (!h) { error_ = "could not load nvml.dll"; return false; }
     lib_ = h;
     p_init       = (fn_init)GetProcAddress(h, "nvmlInit_v2");
@@ -54,6 +57,7 @@ bool Nvml::Init() {
     p_pl_constraints = (fn_pl_constraints)GetProcAddress(h, "nvmlDeviceGetPowerManagementLimitConstraints");
     p_pl_set         = (fn_pl_set)GetProcAddress(h, "nvmlDeviceSetPowerManagementLimit");
     p_driver = (fn_driver)GetProcAddress(h, "nvmlSystemGetDriverVersion");
+    p_uuid = (fn_uuid)GetProcAddress(h, "nvmlDeviceGetUUID");
     if (!p_init || !p_byIndex) { error_ = "required NVML entry points not found"; return false; }
     inited_ = (p_init() == NVML_SUCCESS);
     if (!inited_) error_ = "nvmlInit_v2 failed";
@@ -149,6 +153,16 @@ std::string Nvml::DriverVersion() {
     char buf[96] = {};
     if (!inited_ || !p_driver || p_driver(buf, sizeof(buf)) != NVML_SUCCESS) {
         error_ = "nvmlSystemGetDriverVersion failed";
+        return {};
+    }
+    return buf;
+}
+
+std::string Nvml::GpuUuid(unsigned index) {
+    nvmlDevice_t dev = nullptr;
+    char buf[96] = {};
+    if (!inited_ || !p_uuid || p_byIndex(index, &dev) != NVML_SUCCESS || p_uuid(dev, buf, sizeof(buf)) != NVML_SUCCESS) {
+        error_ = "nvmlDeviceGetUUID failed";
         return {};
     }
     return buf;

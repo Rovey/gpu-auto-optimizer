@@ -11,6 +11,7 @@ Profile sample() {
     p.core_mhz = 90;
     p.mem_mhz = 600;
     p.driver = "610.74";
+    p.gpu = "GPU-8a1b";
     p.saved_at = "2026-09-26 22:41";
     return p;
 }
@@ -27,6 +28,7 @@ TEST_CASE("a config with a profile survives a round-trip") {
     CHECK(back.profile->core_mhz == 90);
     CHECK(back.profile->mem_mhz == 600);
     CHECK(back.profile->driver == "610.74");
+    CHECK(back.profile->gpu == "GPU-8a1b");
     CHECK(back.profile->saved_at == "2026-09-26 22:41");
     CHECK(back.boot_strikes == 2);
     CHECK(to_json(c).find("\"quiet\"") != std::string::npos);   // readable preset
@@ -49,10 +51,10 @@ TEST_CASE("unreadable JSON yields defaults instead of throwing") {
 }
 
 TEST_CASE("a profile with a wrong type, a missing field or an unknown preset is no profile") {
-    CHECK_FALSE(from_json(R"({"profile":{"preset":"best","power_pct":"105","core_mhz":0,"mem_mhz":0,"driver":"x","saved_at":"y"}})").profile);
-    CHECK_FALSE(from_json(R"({"profile":{"preset":"best","power_pct":105,"core_mhz":0,"driver":"x","saved_at":"y"}})").profile);
-    CHECK_FALSE(from_json(R"({"profile":{"preset":"turbo","power_pct":105,"core_mhz":0,"mem_mhz":0,"driver":"x","saved_at":"y"}})").profile);
-    CHECK(from_json(R"({"profile":{"preset":"best","power_pct":105,"core_mhz":0,"mem_mhz":0,"driver":"x","saved_at":"y"}})").profile);
+    CHECK_FALSE(from_json(R"({"profile":{"preset":"best","power_pct":"105","core_mhz":0,"mem_mhz":0,"driver":"x","gpu":"g","saved_at":"y"}})").profile);
+    CHECK_FALSE(from_json(R"({"profile":{"preset":"best","power_pct":105,"core_mhz":0,"driver":"x","gpu":"g","saved_at":"y"}})").profile);
+    CHECK_FALSE(from_json(R"({"profile":{"preset":"turbo","power_pct":105,"core_mhz":0,"mem_mhz":0,"driver":"x","gpu":"g","saved_at":"y"}})").profile);
+    CHECK(from_json(R"({"profile":{"preset":"best","power_pct":105,"core_mhz":0,"mem_mhz":0,"driver":"x","gpu":"g","saved_at":"y"}})").profile);
 }
 
 TEST_CASE("strike count is sanitized") {
@@ -66,4 +68,8 @@ TEST_CASE("an old-format config loads without error") {
                                   "mem_offset_mhz":800,"power_limit_pct":90,"blacklisted_core_offsets":[180]})");
     CHECK_FALSE(c.profile.has_value());
     CHECK(c.boot_strikes == 0);
+}
+
+TEST_CASE("a profile saved before GPU identity existed is no profile") {
+    CHECK_FALSE(from_json(R"({"profile":{"preset":"best","power_pct":105,"core_mhz":135,"mem_mhz":1050,"driver":"610.74","saved_at":"y"}})").profile);
 }

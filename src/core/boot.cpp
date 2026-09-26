@@ -1,18 +1,25 @@
 #include "core/boot.hpp"
+#include "core/search.hpp"
 
 namespace gao {
 
-BootDecision decide_boot(const Config& c, const std::string& driver) {
+BootDecision decide_boot(const Config& c, const std::string& driver, const std::string& gpu) {
     if (!c.profile) return BootDecision::NoProfile;
     if (c.boot_strikes >= kMaxBootStrikes) return BootDecision::TooManyStrikes;
     if (driver.empty() || driver != c.profile->driver) return BootDecision::DriverChanged;
+    if (gpu.empty() || gpu != c.profile->gpu) return BootDecision::GpuChanged;
     return BootDecision::Apply;
 }
 
 bool apply_profile(const GpuControl& gpu, const Profile& p, std::string* why) {
+    if (p.power_pct < 50 || p.power_pct > 150 || p.core_mhz < 0 || p.core_mhz > kCoreMaxMhz ||
+        p.mem_mhz < 0 || p.mem_mhz > kMemMaxMhz) {
+        if (why) *why = "profile values out of range; nothing applied";
+        return false;
+    }
     auto fail = [&](const std::string& reason) {
-        if (gpu.reset_to_stock) gpu.reset_to_stock();
-        if (why) *why = reason;
+        const bool reset = gpu.reset_to_stock && gpu.reset_to_stock();
+        if (why) *why = reason + (reset ? " -- card at stock" : " -- reset to stock FAILED, run `gao --reset`");
         return false;
     };
     // A missing setter is only acceptable when the profile wants stock there.

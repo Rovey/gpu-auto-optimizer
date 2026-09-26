@@ -8,6 +8,11 @@
 
 namespace gao {
 
+// Search ranges. apply_profile refuses anything outside them, since a
+// saved profile can only legitimately come from this search.
+inline constexpr int kCoreMaxMhz = 300;
+inline constexpr int kMemMaxMhz = 1500;
+
 // Highest value in lo, lo+step, ... (<= hi, < ceiling) for which is_stable
 // holds, assuming stability is monotonic: once a value fails, every higher
 // one fails too. lo itself is assumed stable (it is stock) and never probed.

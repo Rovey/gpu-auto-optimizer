@@ -18,6 +18,8 @@ public:
     Telemetry Read(unsigned index);
     // e.g. "610.74"; empty when NVML cannot report it (see Error()).
     std::string DriverVersion();
+    // The card's NVML UUID ("GPU-..."); empty when unavailable.
+    std::string GpuUuid(unsigned index);
     // Power limit as percent of the driver default. Empty when NVML cannot
     // report the constraints (older cards, or a failed call; see Error()).
     std::optional<std::pair<int, int>> PowerLimitRangePct(unsigned index);

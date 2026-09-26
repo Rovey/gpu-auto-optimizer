@@ -14,6 +14,7 @@ std::string to_json(const Config& c) {
             {"core_mhz", p.core_mhz},
             {"mem_mhz", p.mem_mhz},
             {"driver", p.driver},
+            {"gpu", p.gpu},
             {"saved_at", p.saved_at},
         };
     }
@@ -42,9 +43,9 @@ Config from_json(const std::string& text) {
     const auto name = str("preset");
     const auto preset = name ? preset_from_name(*name) : std::nullopt;
     const auto power = num("power_pct"), core = num("core_mhz"), mem = num("mem_mhz");
-    const auto driver = str("driver"), saved_at = str("saved_at");
-    if (!preset || !power || !core || !mem || !driver || !saved_at) return c;
-    c.profile = Profile{*preset, *power, *core, *mem, *driver, *saved_at};
+    const auto driver = str("driver"), gpu = str("gpu"), saved_at = str("saved_at");
+    if (!preset || !power || !core || !mem || !driver || !gpu || !saved_at) return c;
+    c.profile = Profile{*preset, *power, *core, *mem, *driver, *gpu, *saved_at};
     return c;
 }
 

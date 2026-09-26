@@ -12,6 +12,7 @@ struct Profile {
     int core_mhz = 0;
     int mem_mhz = 0;
     std::string driver;     // driver version the profile was tested on
+    std::string gpu;        // NVML UUID of the card it was tested on
     std::string saved_at;   // local time, "YYYY-MM-DD HH:MM"
 };
 
