@@ -77,8 +77,12 @@ add_library(hw STATIC
 target_include_directories(hw PUBLIC src)
 target_link_libraries(hw PUBLIC core d3d11 dxgi d3dcompiler shell32 ole32 PRIVATE gao_warnings gao_hardening)
 
+# UI-independent application logic shared by both executables.
+add_library(app STATIC src/app/common.hpp src/app/common.cpp)
+target_link_libraries(app PUBLIC core hw PRIVATE gao_warnings gao_hardening)
+
 add_executable(gao src/app/main.cpp src/app/gao.manifest)
-target_link_libraries(gao PRIVATE core hw gao_warnings gao_hardening)
+target_link_libraries(gao PRIVATE app gao_warnings gao_hardening)
 # d3dcompiler_47.dll, d3d11.dll and dxgi.dll are not KnownDLLs: delay-load
 # them so they resolve after SetDefaultDllDirectories(SYSTEM32) in main(),
 # never from the exe's folder.
@@ -107,4 +111,4 @@ add_executable(core_tests
 target_link_libraries(core_tests PRIVATE core doctest gao_warnings)
 add_test(NAME core_tests COMMAND core_tests)
 
-set_target_properties(core hw gao core_tests PROPERTIES COMPILE_WARNING_AS_ERROR ON)
+set_target_properties(core hw app gao core_tests PROPERTIES COMPILE_WARNING_AS_ERROR ON)

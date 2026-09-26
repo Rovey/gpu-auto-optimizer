@@ -1,23 +1,17 @@
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
-#include "core/types.hpp"
+#include "app/common.hpp"
 #include "core/stability.hpp"
 #include "core/version.hpp"
+#include "hw/app_files.hpp"
+#include "hw/boot_task.hpp"
+#include "hw/gpu_control.hpp"
 #include "hw/nvapi.hpp"
 #include "hw/nvml.hpp"
 #include "hw/stress.hpp"
-#include "core/boot.hpp"
-#include "core/config.hpp"
-#include "core/journal.hpp"
-#include "core/objectives.hpp"
-#include "core/search.hpp"
-#include "core/task_xml.hpp"
-#include "hw/gpu_control.hpp"
-#include "hw/app_files.hpp"
-#include "hw/boot_task.hpp"
 #include <atomic>
-#include <ctime>
+#include <filesystem>
 #include <string>
 #include <cerrno>
 #include <climits>
@@ -79,10 +73,7 @@ static int probe() {
     return 0;
 }
 
-// GPU index is fixed at 0: none of --set-core/--set-mem/--reset take a GPU
-// selector yet (see task-5-brief.md's own example commands), and this
-// machine has exactly one NVIDIA GPU.
-static constexpr unsigned kGpu = 0;
+using gao::app::kGpu;
 
 // Shared by --set-core and --set-mem. Prints "requested X, read back Y" and
 // OK/MISMATCH. Always prints the read-back, even on success -- the number
@@ -220,112 +211,17 @@ static BOOL WINAPI OnConsoleCtrl(DWORD type) {
     return FALSE;
 }
 
-static bool IsElevated() {
-    HANDLE token = nullptr;
-    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) return false;
-    TOKEN_ELEVATION elevation{};
-    DWORD size = 0;
-    const bool ok = GetTokenInformation(token, TokenElevation, &elevation, sizeof(elevation), &size);
-    CloseHandle(token);
-    return ok && elevation.TokenIsElevated;
-}
-
-static std::string now_text() {
-    const std::time_t t = std::time(nullptr);
-    std::tm tm{};
-    localtime_s(&tm, &t);
-    char buf[32];
-    std::strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M", &tm);
-    return buf;
-}
-
-static gao::Config load_config() {
-    const auto text = gao::read_file(gao::config_path());
-    return text ? gao::from_json(*text) : gao::Config{};
-}
-
-static bool save_config(const gao::Config& c) {
-    return !gao::config_path().empty() && gao::write_file_atomic(gao::config_path(), gao::to_json(c));
-}
-
-static void boot_log(const std::string& msg) {
-    gao::append_line_durable(gao::boot_log_path(), now_text() + "  " + msg);
-}
-
-// Every elevated command that reads or writes state calls this first: it
-// creates, or verifies and re-secures, the admin-only state folder. Nothing
-// in a folder a user could have prepared is ever trusted.
-static bool prepare_state(std::string* why) { return gao::ensure_app_dir(why); }
-
-static std::string profile_text(const gao::Profile& p) {
-    return std::string(gao::preset_name(p.preset)) + ": power " + std::to_string(p.power_pct) + " %, core +" +
-           std::to_string(p.core_mhz) + " MHz, mem +" + std::to_string(p.mem_mhz) + " MHz (driver " + p.driver +
-           ", saved " + p.saved_at + ")";
-}
-
-static std::string decision_text(gao::BootDecision d, const gao::Config& c, const std::string& driver) {
-    switch (d) {
-        case gao::BootDecision::NoProfile: return "no saved profile; run `gao --optimize` first";
-        case gao::BootDecision::TooManyStrikes:
-            return "disabled after " + std::to_string(gao::kMaxBootStrikes) + " crashes; run `gao --boot on` to retry";
-        case gao::BootDecision::DriverChanged:
-            if (driver.empty()) return "driver version unknown (NVML did not report it); not applied";
-            return "driver changed (" + c.profile->driver + " -> " + driver + "); run `gao --optimize` again";
-        case gao::BootDecision::GpuChanged:
-            return "this is not the card the profile was tested on; run `gao --optimize` again";
-        case gao::BootDecision::Apply: return "apply";
-    }
-    return "unknown";
-}
-
 static int optimize(gao::Preset preset) {
-    if (!IsElevated()) {
-        std::printf("--optimize changes clocks and power limits and needs an elevated (administrator) shell\n");
-        return 1;
-    }
-    std::string why;
-    if (!prepare_state(&why)) { std::printf("%s\n", why.c_str()); return 1; }
-    gao::Nvml nvml;
-    if (!nvml.Init()) { std::printf("NVML init failed: %s\n", nvml.Error().c_str()); return 1; }
-    gao::Nvapi nvapi;
-    if (!nvapi.Init()) { std::printf("NVAPI init failed: %s\n", nvapi.Error().c_str()); return 1; }
-    gao::Stress load;
-    if (!load.Init()) { std::printf("stress init failed: %s\n", load.Error().c_str()); return 1; }
-    const gao::GpuControl gpu = gao::make_gpu_control(nvml, nvapi, kGpu);
-
-    const auto path = gao::journal_path();
-    if (path.empty()) { std::printf("ProgramData is not set; cannot keep the crash journal\n"); return 1; }
-    const auto lines = gao::read_lines(path);
-    if (!lines) { std::printf("the crash journal %s exists but cannot be read; not tuning without it\n", path.string().c_str()); return 1; }
-    gao::Journal journal(*lines, [&path](const std::string& l) { return gao::append_line_durable(path, l); });
-    // Prove the journal is writable before any clock is touched; the parser
-    // ignores lines without an id, so this one never becomes a ceiling.
-    if (!gao::append_line_durable(path, "{\"session\":\"" + now_text() + "\"}")) {
-        std::printf("cannot write the crash journal %s; not tuning without it\n", path.string().c_str());
-        return 1;
-    }
-    for (const auto& f : journal.freezes())
-        std::printf("warning: a previous run froze the machine at %s; staying below it from now on\n", f.c_str());
-    if (!gpu.set_power_limit) std::printf("power limit: not adjustable on this card, skipped\n");
-    if (!gpu.set_fan_pct) std::printf("fan: not controllable on this card, skipped\n");
-
-    g_gpu = &gpu;
-    SetConsoleCtrlHandler(OnConsoleCtrl, TRUE);
-    gao::OptimizeIo io;
-    io.probe = [&](double seconds, int max_temp) {
-        return gao::run_stability([&] { return load.Batch(); }, gpu.read, seconds, max_temp);
+    gao::app::OptimizeHooks hooks;
+    hooks.aborted = [] { return g_abort.load(); };
+    hooks.log = [](const std::string& msg) { std::printf("  %s\n", msg.c_str()); };
+    hooks.active_gpu = [](const gao::GpuControl* gpu) {
+        g_gpu = gpu;
+        SetConsoleCtrlHandler(OnConsoleCtrl, gpu ? TRUE : FALSE);
     };
-    io.aborted = [] { return g_abort.load(); };
-    io.log = [](const std::string& m) { std::printf("  %s\n", m.c_str()); };
-    io.bandwidth = [&] {
-        const auto gbps = load.MeasureBandwidth();
-        if (!gbps) std::printf("  bandwidth measurement failed: %s\n", load.Error().c_str());
-        return gbps;
-    };
-    const gao::OptimizeResult r = gao::optimize(gpu, gao::objectives_for(preset), journal, io);
-    SetConsoleCtrlHandler(OnConsoleCtrl, FALSE);
-    g_gpu = nullptr;
-
+    const auto out = gao::app::run_optimize(preset, hooks);
+    if (!out.ran) { std::printf("%s\n", out.error.c_str()); return 1; }
+    const gao::OptimizeResult& r = out.result;
     if (!r.ok) {
         std::printf("RESULT: not applied -- %s (%s)\n", r.reason.c_str(),
                     r.stock_restored ? "card at stock" : "reset to stock FAILED, run `gao --reset`");
@@ -337,92 +233,52 @@ static int optimize(gao::Preset preset) {
                 r.baseline.score, r.baseline.avg_core_mhz, r.baseline.avg_mem_mhz, r.baseline.peak_temp_c, r.baseline.avg_power_w);
     std::printf("  after:  score=%.0f it/s  core=%d MHz  mem=%d MHz  peak=%d C  power=%d W\n",
                 r.soak.score, r.soak.avg_core_mhz, r.soak.avg_mem_mhz, r.soak.peak_temp_c, r.soak.avg_power_w);
-    const std::string driver = nvml.DriverVersion(), gpu_id = nvml.GpuUuid(kGpu);
-    if (driver.empty() || gpu_id.empty()) {
-        std::printf("not saved: NVML did not report the driver version or GPU id, so the profile could never be re-applied\n");
-    } else {
-        gao::Config cfg = load_config();
-        cfg.profile = gao::Profile{preset, r.power_pct, r.core_mhz, r.mem_mhz, driver, gpu_id, now_text()};
-        cfg.boot_strikes = 0;   // strikes belong to the profile they were earned by
-        if (save_config(cfg)) std::printf("Saved: `gao --apply` re-applies it, `gao --boot on` applies it at every logon.\n");
-        else std::printf("warning: could not save the profile to %s\n", gao::config_path().string().c_str());
-    }
+    if (out.saved) std::printf("Saved: `gao --apply` re-applies it, `gao --boot on` applies it at every logon.\n");
+    else std::printf("not saved: %s\n", out.save_note.c_str());
     std::printf("Applied until reboot. `gao --reset` returns to stock.\n");
     return 0;
 }
 
 static int apply() {
-    if (!IsElevated()) { std::printf("--apply needs an elevated (administrator) shell\n"); return 1; }
+    if (!gao::app::is_elevated()) { std::printf("--apply needs an elevated (administrator) shell\n"); return 1; }
     std::string why;
-    if (!prepare_state(&why)) { std::printf("%s\n", why.c_str()); return 1; }
+    if (!gao::app::prepare_state(&why)) { std::printf("%s\n", why.c_str()); return 1; }
     gao::Nvml nvml;
     if (!nvml.Init()) { std::printf("NVML init failed: %s\n", nvml.Error().c_str()); return 1; }
     gao::Nvapi nvapi;
     if (!nvapi.Init()) { std::printf("NVAPI init failed: %s\n", nvapi.Error().c_str()); return 1; }
-    gao::Config cfg = load_config();
+    gao::Config cfg = gao::app::load_config();
     cfg.boot_strikes = 0;   // strikes only gate boot-apply
     const std::string driver = nvml.DriverVersion();
     const auto d = gao::decide_boot(cfg, driver, nvml.GpuUuid(kGpu));
-    if (d != gao::BootDecision::Apply) { std::printf("not applied: %s\n", decision_text(d, cfg, driver).c_str()); return 1; }
+    if (d != gao::BootDecision::Apply) {
+        std::printf("not applied: %s\n", gao::app::decision_text(d, cfg, driver).c_str());
+        return 1;
+    }
     const gao::GpuControl gpu = gao::make_gpu_control(nvml, nvapi, kGpu);
     if (!gao::apply_profile(gpu, *cfg.profile, &why)) { std::printf("not applied: %s\n", why.c_str()); return 1; }
-    std::printf("applied %s\nOK\n", profile_text(*cfg.profile).c_str());
+    std::printf("applied %s\nOK\n", gao::app::profile_text(*cfg.profile).c_str());
     return 0;
 }
 
 static int boot(bool on) {
-    if (!IsElevated()) { std::printf("--boot needs an elevated (administrator) shell\n"); return 1; }
-    std::string why;
-    if (!prepare_state(&why)) { std::printf("%s\n", why.c_str()); return 1; }
-    if (!on) {
-        const int code = gao::boot_task_remove();
-        gao::boot_task_remove_legacy();   // the pre-P4b task, if any
-        gao::uninstall_exe();
-        std::error_code ec;
-        const bool copy_left = std::filesystem::exists(gao::installed_exe_path(), ec);
-        std::printf("boot-apply off: task %s, installed copy %s\n", code == 0 ? "removed" : "not removed",
-                    copy_left ? "still there (is it running? run --boot off from the build folder)" : "removed");
-        return code == 0 && !copy_left ? 0 : 1;
-    }
-    const std::string sid = gao::current_user_sid();
-    if (sid.empty()) { std::printf("could not determine the current user's SID\n"); return 1; }
-    wchar_t self[MAX_PATH];
-    const DWORD n = GetModuleFileNameW(nullptr, self, MAX_PATH);
-    if (n == 0 || n >= MAX_PATH) { std::printf("could not find gao.exe's own path\n"); return 1; }
-    if (!gao::install_exe(self, &why)) {
-        std::printf("%s\n(if boot-apply is running right now, wait 2 minutes and retry)\n", why.c_str());
-        return 1;
-    }
-    const auto exe = gao::installed_exe_path();
-    const auto u8 = exe.u8string();
-    const std::string xml = gao::boot_task_xml(std::string(u8.begin(), u8.end()), sid);
-    const auto xml_path = gao::app_dir() / L"BootApply.xml";
-    if (!gao::write_utf16_file(xml_path, xml)) { std::printf("could not write %s\n", xml_path.string().c_str()); return 1; }
-    const int code = gao::boot_task_create_xml(xml_path);
-    std::error_code ec;
-    std::filesystem::remove(xml_path, ec);
-    if (code != 0) { std::printf("could not create the task (schtasks exit %d)\n", code); return 1; }
-    gao::boot_task_remove_legacy();   // only once the new task exists
-    gao::Config cfg = load_config();
-    cfg.boot_strikes = 0;
-    if (!save_config(cfg)) { std::printf("task created, but could not reset the strike counter\n"); return 1; }
-    std::printf("boot-apply on: %s runs at every logon (strikes reset)\n", exe.string().c_str());
-    if (!cfg.profile) std::printf("note: there is no saved profile yet; run `gao --optimize` first\n");
-    return 0;
+    std::string message;
+    const bool ok = on ? gao::app::enable_boot(&message) : gao::app::disable_boot(&message);
+    std::printf("%s\n", message.c_str());
+    return ok ? 0 : 1;
 }
 
 static int status() {
     const auto text = gao::read_file(gao::config_path());
     const gao::Config cfg = text ? gao::from_json(*text) : gao::Config{};
-    if (cfg.profile) std::printf("profile:    %s\n", profile_text(*cfg.profile).c_str());
+    if (cfg.profile) std::printf("profile:    %s\n", gao::app::profile_text(*cfg.profile).c_str());
     else if (text) std::printf("profile:    none valid in %s\n", gao::config_path().string().c_str());
     else std::printf("profile:    none (run `gao --optimize`)\n");
     gao::Nvml nvml;
     const std::string driver = nvml.Init() ? nvml.DriverVersion() : std::string();
-    if (cfg.profile)
+    if (cfg.profile) {
         std::printf("driver:     %s (%s)\n", driver.empty() ? "unknown" : driver.c_str(),
                     !driver.empty() && driver == cfg.profile->driver ? "matches" : "CHANGED -- run `gao --optimize` again");
-    if (cfg.profile) {
         const std::string gpu_id = nvml.GpuUuid(kGpu);
         std::printf("gpu:        %s\n", !gpu_id.empty() && gpu_id == cfg.profile->gpu
                                          ? "matches the profile" : "DIFFERENT card or unknown -- run `gao --optimize` again");
@@ -454,38 +310,11 @@ static int status() {
 static int boot_apply() {
     FreeConsole();
     std::string why;
-    if (!prepare_state(&why)) return 1;   // nothing can be logged without the folder
-    gao::Nvml nvml;
-    if (!nvml.Init()) { boot_log("NVML init failed: " + nvml.Error()); return 1; }
-    gao::Config cfg = load_config();
-    const std::string driver = nvml.DriverVersion();
-    const auto d = gao::decide_boot(cfg, driver, nvml.GpuUuid(kGpu));
-    if (d != gao::BootDecision::Apply) { boot_log("not applied: " + decision_text(d, cfg, driver)); return 1; }
-    // The strike is on disk before the hardware is touched: a crash from here
-    // on counts.
-    ++cfg.boot_strikes;
-    if (!save_config(cfg)) { boot_log("could not record the strike; not applying"); return 1; }
-    gao::Nvapi nvapi;
-    if (!nvapi.Init()) { boot_log("NVAPI init failed: " + nvapi.Error()); return 1; }
-    const gao::GpuControl gpu = gao::make_gpu_control(nvml, nvapi, kGpu);
-    if (!gao::apply_profile(gpu, *cfg.profile, &why)) { boot_log("apply failed: " + why); return 1; }
-    boot_log("applied " + profile_text(*cfg.profile) + ", strike " + std::to_string(cfg.boot_strikes) +
-             " clears in 2 minutes");
+    if (!gao::app::prepare_state(&why)) return 1;   // nothing can be logged without the folder
+    if (!gao::app::apply_at_logon().applied) return 1;
     Sleep(2 * 60 * 1000);
-    // Reload: --optimize may have saved a new profile meanwhile; only the
-    // counter is ours to change. If the file cannot be read, or reads without
-    // the profile it had a moment ago, writing would destroy it: leave the
-    // strike (fails safe) and say so.
-    for (int attempt = 0; attempt < 3; ++attempt) {
-        const auto text = gao::read_file(gao::config_path());
-        gao::Config latest = text ? gao::from_json(*text) : gao::Config{};
-        if (!latest.profile) { boot_log("could not re-read gao.json to clear the strike; it stays"); return 1; }
-        latest.boot_strikes = 0;
-        if (save_config(latest)) { boot_log("ran 2 minutes without a crash; strike cleared"); return 0; }
-        Sleep(1000);
-    }
-    boot_log("could not save gao.json to clear the strike; it stays");
-    return 1;
+    gao::app::clear_boot_strike();
+    return 0;
 }
 
 static int bandwidth() {

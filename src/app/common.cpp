@@ -1,0 +1,213 @@
+#include "app/common.hpp"
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#include "core/journal.hpp"
+#include "core/stability.hpp"
+#include "core/task_xml.hpp"
+#include "hw/app_files.hpp"
+#include "hw/boot_task.hpp"
+#include "hw/gpu_control.hpp"
+#include "hw/nvapi.hpp"
+#include "hw/nvml.hpp"
+#include "hw/stress.hpp"
+#include <ctime>
+#include <filesystem>
+
+namespace gao::app {
+
+bool is_elevated() {
+    HANDLE token = nullptr;
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) return false;
+    TOKEN_ELEVATION elevation{};
+    DWORD size = 0;
+    const bool ok = GetTokenInformation(token, TokenElevation, &elevation, sizeof(elevation), &size);
+    CloseHandle(token);
+    return ok && elevation.TokenIsElevated;
+}
+
+std::string now_text() {
+    const std::time_t t = std::time(nullptr);
+    std::tm tm{};
+    localtime_s(&tm, &t);
+    char buf[32];
+    std::strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M", &tm);
+    return buf;
+}
+
+Config load_config() {
+    const auto text = read_file(config_path());
+    return text ? from_json(*text) : Config{};
+}
+
+bool save_config(const Config& c) {
+    return !config_path().empty() && write_file_atomic(config_path(), to_json(c));
+}
+
+void boot_log(const std::string& msg) {
+    append_line_durable(boot_log_path(), now_text() + "  " + msg);
+}
+
+bool prepare_state(std::string* why) { return ensure_app_dir(why); }
+
+std::string profile_text(const Profile& p) {
+    return std::string(preset_name(p.preset)) + ": power " + std::to_string(p.power_pct) + " %, core +" +
+           std::to_string(p.core_mhz) + " MHz, mem +" + std::to_string(p.mem_mhz) + " MHz (driver " + p.driver +
+           ", saved " + p.saved_at + ")";
+}
+
+std::string decision_text(BootDecision d, const Config& c, const std::string& driver) {
+    switch (d) {
+        case BootDecision::NoProfile: return "no saved profile; run an optimize first";
+        case BootDecision::TooManyStrikes:
+            return "disabled after " + std::to_string(kMaxBootStrikes) + " crashes; turn boot-apply on again to retry";
+        case BootDecision::DriverChanged:
+            if (driver.empty()) return "driver version unknown (NVML did not report it); not applied";
+            return "driver changed (" + c.profile->driver + " -> " + driver + "); optimize again";
+        case BootDecision::GpuChanged: return "this is not the card the profile was tested on; optimize again";
+        case BootDecision::Apply: return "apply";
+    }
+    return "unknown";
+}
+
+OptimizeOutcome run_optimize(Preset preset, const OptimizeHooks& hooks) {
+    OptimizeOutcome out;
+    auto log = [&](const std::string& m) { if (hooks.log) hooks.log(m); };
+    auto fail = [&](const std::string& why) { out.error = why; return out; };
+    if (!is_elevated()) return fail("optimizing changes clocks and power limits and needs administrator rights");
+    std::string why;
+    if (!prepare_state(&why)) return fail(why);
+    Nvml nvml;
+    if (!nvml.Init()) return fail("NVML init failed: " + nvml.Error());
+    Nvapi nvapi;
+    if (!nvapi.Init()) return fail("NVAPI init failed: " + nvapi.Error());
+    Stress load;
+    if (!load.Init()) return fail("stress init failed: " + load.Error());
+    const GpuControl gpu = make_gpu_control(nvml, nvapi, kGpu);
+
+    const auto path = journal_path();
+    if (path.empty()) return fail("the ProgramData folder could not be resolved; cannot keep the crash journal");
+    const auto lines = read_lines(path);
+    if (!lines) return fail("the crash journal " + path.string() + " exists but cannot be read; not tuning without it");
+    Journal journal(*lines, [&path](const std::string& l) { return append_line_durable(path, l); });
+    // Prove the journal is writable before any clock is touched; the parser
+    // ignores lines without an id, so this one never becomes a ceiling.
+    if (!append_line_durable(path, "{\"session\":\"" + now_text() + "\"}"))
+        return fail("cannot write the crash journal " + path.string() + "; not tuning without it");
+    for (const auto& f : journal.freezes())
+        log("warning: a previous run froze the machine at " + f + "; staying below it from now on");
+    if (!gpu.set_power_limit) log("power limit: not adjustable on this card, skipped");
+    if (!gpu.set_fan_pct) log("fan: not controllable on this card, skipped");
+
+    OptimizeIo io;
+    io.probe = [&](double seconds, int max_temp) {
+        return run_stability([&] { return load.Batch(); }, gpu.read, seconds, max_temp);
+    };
+    io.aborted = hooks.aborted;
+    io.log = hooks.log;
+    io.bandwidth = [&] {
+        const auto gbps = load.MeasureBandwidth();
+        if (!gbps) log("bandwidth measurement failed: " + load.Error());
+        return gbps;
+    };
+    if (hooks.active_gpu) hooks.active_gpu(&gpu);
+    out.result = optimize(gpu, objectives_for(preset), journal, io);
+    if (hooks.active_gpu) hooks.active_gpu(nullptr);
+    out.ran = true;
+    if (!out.result.ok) return out;
+
+    const std::string driver = nvml.DriverVersion(), gpu_id = nvml.GpuUuid(kGpu);
+    if (driver.empty() || gpu_id.empty()) {
+        out.save_note = "NVML did not report the driver version or GPU id, so the profile could never be re-applied";
+        return out;
+    }
+    Config cfg = load_config();
+    cfg.profile = Profile{preset, out.result.power_pct, out.result.core_mhz, out.result.mem_mhz, driver, gpu_id, now_text()};
+    cfg.boot_strikes = 0;   // strikes belong to the profile they were earned by
+    out.saved = save_config(cfg);
+    if (!out.saved) out.save_note = "could not write " + config_path().string();
+    return out;
+}
+
+BootApplyOutcome apply_at_logon() {
+    BootApplyOutcome out;
+    auto done = [&](const std::string& msg) { out.message = msg; boot_log(msg); return out; };
+    Nvml nvml;
+    if (!nvml.Init()) return done("NVML init failed: " + nvml.Error());
+    Config cfg = load_config();
+    const std::string driver = nvml.DriverVersion();
+    const auto d = decide_boot(cfg, driver, nvml.GpuUuid(kGpu));
+    if (d != BootDecision::Apply) return done("not applied: " + decision_text(d, cfg, driver));
+    // The strike is on disk before the hardware is touched: a crash from here
+    // on counts.
+    ++cfg.boot_strikes;
+    if (!save_config(cfg)) return done("could not record the strike; not applying");
+    Nvapi nvapi;
+    if (!nvapi.Init()) return done("NVAPI init failed: " + nvapi.Error());
+    std::string why;
+    if (!apply_profile(make_gpu_control(nvml, nvapi, kGpu), *cfg.profile, &why)) return done("apply failed: " + why);
+    out.applied = true;
+    out.profile = *cfg.profile;
+    return done("applied " + profile_text(*cfg.profile) + ", strike " + std::to_string(cfg.boot_strikes) +
+                " clears in 2 minutes");
+}
+
+void clear_boot_strike() {
+    // Reload: an optimize may have saved a new profile meanwhile; only the
+    // counter is ours to change. If the file cannot be read, or reads without
+    // a profile, writing would destroy it: leave the strike (fails safe).
+    for (int attempt = 0; attempt < 3; ++attempt) {
+        const auto text = read_file(config_path());
+        Config latest = text ? from_json(*text) : Config{};
+        if (!latest.profile) { boot_log("could not re-read gao.json to clear the strike; it stays"); return; }
+        latest.boot_strikes = 0;
+        if (save_config(latest)) { boot_log("ran 2 minutes without a crash; strike cleared"); return; }
+        Sleep(1000);
+    }
+    boot_log("could not save gao.json to clear the strike; it stays");
+}
+
+bool enable_boot(std::string* message) {
+    auto say = [&](const std::string& m, bool ok) { if (message) *message = m; return ok; };
+    if (!is_elevated()) return say("boot-apply needs administrator rights", false);
+    std::string why;
+    if (!prepare_state(&why)) return say(why, false);
+    const std::string sid = current_user_sid();
+    if (sid.empty()) return say("could not determine the current user's SID", false);
+    wchar_t self[MAX_PATH];
+    const DWORD n = GetModuleFileNameW(nullptr, self, MAX_PATH);
+    if (n == 0 || n >= MAX_PATH) return say("could not find this program's own path", false);
+    if (!install_exe(self, &why)) return say(why + " (if boot-apply is running right now, wait 2 minutes and retry)", false);
+    const auto exe = installed_exe_path();
+    const auto u8 = exe.u8string();
+    const std::string xml = boot_task_xml(std::string(u8.begin(), u8.end()), sid);
+    const auto xml_path = app_dir() / L"BootApply.xml";
+    if (!write_utf16_file(xml_path, xml)) return say("could not write " + xml_path.string(), false);
+    const int code = boot_task_create_xml(xml_path);
+    std::error_code ec;
+    std::filesystem::remove(xml_path, ec);
+    if (code != 0) return say("could not create the task (schtasks exit " + std::to_string(code) + ")", false);
+    boot_task_remove_legacy();   // only once the new task exists
+    Config cfg = load_config();
+    cfg.boot_strikes = 0;
+    if (!save_config(cfg)) return say("task created, but could not reset the strike counter", false);
+    return say("boot-apply on: " + exe.string() + " runs at every logon (strikes reset)" +
+               (cfg.profile ? "" : "; note: there is no saved profile yet, optimize first"), true);
+}
+
+bool disable_boot(std::string* message) {
+    auto say = [&](const std::string& m, bool ok) { if (message) *message = m; return ok; };
+    if (!is_elevated()) return say("boot-apply needs administrator rights", false);
+    std::string why;
+    if (!prepare_state(&why)) return say(why, false);
+    const int code = boot_task_remove();
+    boot_task_remove_legacy();   // the pre-P4b task, if any
+    uninstall_exe();
+    std::error_code ec;
+    const bool copy_left = std::filesystem::exists(installed_exe_path(), ec);
+    return say(std::string("boot-apply off: task ") + (code == 0 ? "removed" : "not removed") + ", installed copy " +
+                   (copy_left ? "still there (is it running? turn boot-apply off from the build folder)" : "removed"),
+               code == 0 && !copy_left);
+}
+
+}
