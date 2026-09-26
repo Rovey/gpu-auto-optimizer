@@ -177,10 +177,13 @@ bool enable_boot(std::string* message) {
     wchar_t self[MAX_PATH];
     const DWORD n = GetModuleFileNameW(nullptr, self, MAX_PATH);
     if (n == 0 || n >= MAX_PATH) return say("could not find this program's own path", false);
-    if (!install_exe(self, &why)) return say(why + " (if boot-apply is running right now, wait 2 minutes and retry)", false);
-    const auto exe = installed_exe_path();
+    if (!install_app(std::filesystem::path(self).parent_path(), &why))
+        return say(why + " (if the tray app is running from Program Files, exit it and retry)", false);
+    // The logon task starts the tray app, which applies the tune and stays
+    // resident to keep it applied: no time limit.
+    const auto exe = installed_tray_path();
     const auto u8 = exe.u8string();
-    const std::string xml = boot_task_xml(std::string(u8.begin(), u8.end()), sid);
+    const std::string xml = boot_task_xml(std::string(u8.begin(), u8.end()), "--tray", sid, "PT0S");
     const auto xml_path = app_dir() / L"BootApply.xml";
     if (!write_utf16_file(xml_path, xml)) return say("could not write " + xml_path.string(), false);
     const int code = boot_task_create_xml(xml_path);
@@ -191,7 +194,7 @@ bool enable_boot(std::string* message) {
     Config cfg = load_config();
     cfg.boot_strikes = 0;
     if (!save_config(cfg)) return say("task created, but could not reset the strike counter", false);
-    return say("boot-apply on: " + exe.string() + " runs at every logon (strikes reset)" +
+    return say("boot-apply on: " + exe.string() + " --tray runs at every logon and keeps the tune applied (strikes reset)" +
                (cfg.profile ? "" : "; note: there is no saved profile yet, optimize first"), true);
 }
 
@@ -202,9 +205,9 @@ bool disable_boot(std::string* message) {
     if (!prepare_state(&why)) return say(why, false);
     const int code = boot_task_remove();
     boot_task_remove_legacy();   // the pre-P4b task, if any
-    uninstall_exe();
+    uninstall_app();
     std::error_code ec;
-    const bool copy_left = std::filesystem::exists(installed_exe_path(), ec);
+    const bool copy_left = std::filesystem::exists(installed_exe_path(), ec) || std::filesystem::exists(installed_tray_path(), ec);
     return say(std::string("boot-apply off: task ") + (code == 0 ? "removed" : "not removed") + ", installed copy " +
                    (copy_left ? "still there (is it running? turn boot-apply off from the build folder)" : "removed"),
                code == 0 && !copy_left);

@@ -3,11 +3,13 @@
 
 namespace gao {
 
-// Task Scheduler definition for the logon task: starts on battery, at most
-// 5 minutes, one instance, 15 s after logon of `user_id` (a SID string),
-// with highest privileges. The caller writes it as UTF-16LE with a BOM.
-// The path goes in <Command> on its own (arguments are separate), so it
+// Task Scheduler definition for the logon task: starts on battery, one
+// instance, 15 s after logon of `user_id` (a SID string), with highest
+// privileges, stopped after `time_limit` (ISO 8601 duration; "PT0S" = never,
+// for the resident tray process). The caller writes it as UTF-16LE with a
+// BOM. The path goes in <Command> on its own (arguments are separate), so it
 // needs XML escaping, not shell quoting.
-std::string boot_task_xml(const std::string& exe_path_utf8, const std::string& user_id);
+std::string boot_task_xml(const std::string& exe_path_utf8, const std::string& arguments,
+                          const std::string& user_id, const std::string& time_limit);
 
 }

@@ -33,30 +33,35 @@ static int run_schtasks(const std::wstring& args) {
     return static_cast<int>(code);
 }
 
-std::filesystem::path installed_exe_path() {
+std::filesystem::path installed_dir() {
     const auto pf = program_files_dir();
-    return pf.empty() ? pf : pf / L"GpuAutoOptimizer" / L"gao.exe";
+    return pf.empty() ? pf : pf / L"GpuAutoOptimizer";
 }
+std::filesystem::path installed_exe_path() { return installed_dir() / L"gao.exe"; }
+std::filesystem::path installed_tray_path() { return installed_dir() / L"GpuAutoOptimizer.exe"; }
 
-bool install_exe(const std::filesystem::path& self, std::string* why) {
-    const auto dst = installed_exe_path();
+bool install_app(const std::filesystem::path& from_dir, std::string* why) {
+    const auto dst = installed_dir();
     if (dst.empty()) { if (why) *why = "the Program Files folder could not be resolved"; return false; }
     std::error_code ec;
-    if (std::filesystem::equivalent(self, dst, ec)) return true;   // running the installed copy already
-    std::filesystem::create_directories(dst.parent_path(), ec);
-    if (!CopyFileW(self.c_str(), dst.c_str(), FALSE)) {
-        if (why) *why = "could not copy gao.exe to " + dst.string() + " (error " + std::to_string(GetLastError()) + ")";
-        return false;
+    if (std::filesystem::equivalent(from_dir, dst, ec)) return true;   // running the installed copy already
+    std::filesystem::create_directories(dst, ec);
+    for (const wchar_t* name : kAppExes) {
+        const auto src = from_dir / name;
+        if (!CopyFileW(src.c_str(), (dst / name).c_str(), FALSE)) {
+            if (why) *why = "could not copy " + src.string() + " to " + dst.string() + " (error " + std::to_string(GetLastError()) + ")";
+            return false;
+        }
     }
     return true;
 }
 
-void uninstall_exe() {
-    const auto dst = installed_exe_path();
+void uninstall_app() {
+    const auto dst = installed_dir();
     if (dst.empty()) return;
     std::error_code ec;
-    std::filesystem::remove(dst, ec);
-    std::filesystem::remove(dst.parent_path(), ec);   // only succeeds when empty
+    for (const wchar_t* name : kAppExes) std::filesystem::remove(dst / name, ec);
+    std::filesystem::remove(dst, ec);   // only succeeds when empty
 }
 
 bool files_equal(const std::filesystem::path& a, const std::filesystem::path& b) {

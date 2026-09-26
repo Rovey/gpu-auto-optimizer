@@ -19,7 +19,8 @@ std::string xml_escape(const std::string& s) {
 }
 }
 
-std::string boot_task_xml(const std::string& exe_path_utf8, const std::string& user_id) {
+std::string boot_task_xml(const std::string& exe_path_utf8, const std::string& arguments,
+                          const std::string& user_id, const std::string& time_limit) {
     const std::string user = xml_escape(user_id);
     return "<?xml version=\"1.0\" encoding=\"UTF-16\"?>\n"
            "<Task version=\"1.2\" xmlns=\"http://schemas.microsoft.com/windows/2004/02/mit/task\">\n"
@@ -35,11 +36,11 @@ std::string boot_task_xml(const std::string& exe_path_utf8, const std::string& u
            "    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>\n"
            "    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>\n"
            "    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>\n"
-           "    <ExecutionTimeLimit>PT5M</ExecutionTimeLimit>\n"
+           "    <ExecutionTimeLimit>" + xml_escape(time_limit) + "</ExecutionTimeLimit>\n"
            "    <Enabled>true</Enabled>\n"
            "  </Settings>\n"
            "  <Actions Context=\"Author\">\n"
-           "    <Exec><Command>" + xml_escape(exe_path_utf8) + "</Command><Arguments>--boot-apply</Arguments></Exec>\n"
+           "    <Exec><Command>" + xml_escape(exe_path_utf8) + "</Command><Arguments>" + xml_escape(arguments) + "</Arguments></Exec>\n"
            "  </Actions>\n"
            "</Task>\n";
 }

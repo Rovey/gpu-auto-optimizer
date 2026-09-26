@@ -8,10 +8,15 @@ namespace gao {
 // in %ProgramFiles%, which only administrators can replace. schtasks calls
 // return its exit code (0 = success), or -1 when it could not be started.
 
-std::filesystem::path installed_exe_path();   // %ProgramFiles%\GpuAutoOptimizer\gao.exe
-// Copies `self` there (overwriting); a no-op when `self` already is that file.
-bool install_exe(const std::filesystem::path& self, std::string* why);
-void uninstall_exe();                          // removes the copy and, if empty, its folder
+// The executables that make up the app; both are installed together.
+inline constexpr const wchar_t* kAppExes[] = {L"gao.exe", L"GpuAutoOptimizer.exe"};
+std::filesystem::path installed_dir();        // %ProgramFiles%\GpuAutoOptimizer
+std::filesystem::path installed_exe_path();   // ...\gao.exe
+std::filesystem::path installed_tray_path();  // ...\GpuAutoOptimizer.exe
+// Copies both executables from `from_dir` into installed_dir() (overwriting);
+// a no-op when `from_dir` already is that folder.
+bool install_app(const std::filesystem::path& from_dir, std::string* why);
+void uninstall_app();                          // removes both copies and, if empty, the folder
 bool files_equal(const std::filesystem::path& a, const std::filesystem::path& b);
 
 std::string current_user_sid();                // e.g. "S-1-5-21-..."; empty on failure
