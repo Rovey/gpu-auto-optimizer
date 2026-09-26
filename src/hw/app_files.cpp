@@ -100,6 +100,7 @@ std::optional<std::vector<std::string>> read_lines(const std::filesystem::path& 
     std::ifstream in(p, std::ios::binary);
     if (!in) return std::nullopt;
     for (std::string line; std::getline(in, line);) lines.push_back(line);
+    if (in.bad()) return std::nullopt;   // a truncated journal could drop a ceiling
     return lines;
 }
 

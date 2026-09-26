@@ -1,6 +1,6 @@
 {
   "version": 6,
-  "cmakeMinimumRequired": { "major": 3, "minor": 28, "patch": 0 },
+  "cmakeMinimumRequired": { "major": 4, "minor": 2, "patch": 0 },
   "configurePresets": [
     {
       "name": "default",
@@ -23,9 +23,9 @@
     { "name": "asan", "configurePreset": "asan", "configuration": "RelWithDebInfo" }
   ],
   "testPresets": [
-    { "name": "debug", "configurePreset": "default", "configuration": "Debug", "output": { "outputOnFailure": true } },
-    { "name": "release", "configurePreset": "default", "configuration": "Release", "output": { "outputOnFailure": true } },
-    { "name": "asan", "configurePreset": "asan", "configuration": "RelWithDebInfo", "output": { "outputOnFailure": true } }
+    { "name": "debug", "configurePreset": "default", "configuration": "Debug", "output": { "outputOnFailure": true }, "execution": { "noTestsAction": "error" } },
+    { "name": "release", "configurePreset": "default", "configuration": "Release", "output": { "outputOnFailure": true }, "execution": { "noTestsAction": "error" } },
+    { "name": "asan", "configurePreset": "asan", "configuration": "RelWithDebInfo", "output": { "outputOnFailure": true }, "execution": { "noTestsAction": "error" } }
   ],
   "workflowPresets": [
     {

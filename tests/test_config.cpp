@@ -1,5 +1,6 @@
 #include "doctest/doctest.h"
 #include "core/config.hpp"
+#include "core/boot.hpp"
 
 using namespace gao;
 
@@ -80,7 +81,7 @@ TEST_CASE("a strike count that is not a sane integer fails closed") {
     for (const char* bad : {R"({"boot_strikes":3.0})", R"({"boot_strikes":-1})", R"({"boot_strikes":4294967296})",
                             R"({"boot_strikes":"x"})", R"({"boot_strikes":1001})", R"({"boot_strikes":null})"}) {
         CAPTURE(bad);
-        CHECK(from_json(bad).boot_strikes >= 3);
+        CHECK(from_json(bad).boot_strikes == kMaxBootStrikes);
     }
     CHECK(from_json(R"({"boot_strikes":0})").boot_strikes == 0);
     CHECK(from_json(R"({"boot_strikes":2})").boot_strikes == 2);

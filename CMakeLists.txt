@@ -17,6 +17,12 @@ if(GAO_ASAN)
   add_link_options(/INCREMENTAL:NO)
 endif()
 
+# Exploit mitigations for code that runs elevated: Control Flow Guard (every
+# indirect call, including the NVAPI function pointers in hw/), SDL checks.
+# The linker half (/GUARD:CF /CETCOMPAT) is on the executable.
+add_library(gao_hardening INTERFACE)
+target_compile_options(gao_hardening INTERFACE /guard:cf /sdl)
+
 # Warning set for our own code (cpp-best-practices MSVC list). Third-party
 # headers are SYSTEM includes and stay quiet through /external:W0.
 add_library(gao_warnings INTERFACE)
@@ -55,7 +61,7 @@ add_library(core STATIC
 )
 target_include_directories(core PUBLIC src)
 target_include_directories(core SYSTEM PRIVATE third_party)
-target_link_libraries(core PRIVATE gao_warnings)
+target_link_libraries(core PRIVATE gao_warnings gao_hardening)
 
 # The only code allowed to touch hardware.
 add_library(hw STATIC
@@ -67,20 +73,18 @@ add_library(hw STATIC
   src/hw/boot_task.hpp src/hw/boot_task.cpp
 )
 target_include_directories(hw PUBLIC src)
-target_link_libraries(hw PUBLIC core d3d11 dxgi d3dcompiler shell32 ole32 PRIVATE gao_warnings)
+target_link_libraries(hw PUBLIC core d3d11 dxgi d3dcompiler shell32 ole32 PRIVATE gao_warnings gao_hardening)
 
 add_executable(gao src/app/main.cpp src/app/gao.manifest)
-target_link_libraries(gao PRIVATE core hw gao_warnings)
+target_link_libraries(gao PRIVATE core hw gao_warnings gao_hardening)
 # d3dcompiler_47.dll, d3d11.dll and dxgi.dll are not KnownDLLs: delay-load
 # them so they resolve after SetDefaultDllDirectories(SYSTEM32) in main(),
 # never from the exe's folder.
 target_link_libraries(gao PRIVATE delayimp)
 target_link_options(gao PRIVATE /DELAYLOAD:d3dcompiler_47.dll /DELAYLOAD:d3d11.dll /DELAYLOAD:dxgi.dll
                    /DEPENDENTLOADFLAG:0x800)
-# Exploit mitigations for an exe that runs elevated: Control Flow Guard, CET
-# shadow stack compatibility, SDL checks. (/DYNAMICBASE and /HIGHENTROPYVA are
-# already the x64 defaults.)
-target_compile_options(gao PRIVATE /guard:cf /sdl)
+# Linker half of the mitigations: Control Flow Guard tables, CET shadow stack
+# compatibility. (/DYNAMICBASE and /HIGHENTROPYVA are already x64 defaults.)
 target_link_options(gao PRIVATE /GUARD:CF /CETCOMPAT)
 
 enable_testing()

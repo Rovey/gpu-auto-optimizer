@@ -19,7 +19,7 @@
 
 ## Quick start
 
-Requires an x64 Windows machine with Visual Studio 2026 (C++ and CMake workload) and CMake >= 3.28. From a Developer PowerShell, in the repo root:
+Requires an x64 Windows machine with Visual Studio 2026 (C++ and CMake workload), whose bundled CMake (4.2 or newer) knows the VS 2026 generator. From a Developer PowerShell, in the repo root:
 
 ```powershell
 cmake --workflow --preset ci    # configure, build Release, run the tests
@@ -105,7 +105,7 @@ cmake --build --preset asan
 ctest --preset asan               # needs the MSVC bin\Hostx64\x64 folder on PATH
 ```
 
-Our code builds at `/W4 /permissive-` with warnings as errors; `third_party/` is a system include. `gao.exe` is linked with Control Flow Guard and CET compatibility and carries an application manifest.
+Our code builds at `/W4 /permissive-` with warnings as errors; `third_party/` is a system include. All of it is compiled with Control Flow Guard and SDL checks; `gao.exe` is linked CET-compatible and carries an application manifest.
 
 `core_tests` is the only test binary. It covers `src/core/` -- presets, config round-trip, and the `GpuControl` seam that lets tests drive fake hardware through lambdas -- and needs no GPU, which is why CI runs it on a GitHub-hosted `windows-2025` runner, once normally and once under AddressSanitizer. `src/hw/` (NVML, NVAPI) is verified manually on real hardware instead, through [`docs/hardware-checks.md`](docs/hardware-checks.md); CI still builds the full `gao.exe` so a link error in the hardware layer is caught there rather than on a developer's machine.
 
