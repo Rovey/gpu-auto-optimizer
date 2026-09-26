@@ -1,5 +1,6 @@
 #pragma once
 #include <functional>
+#include <utility>
 #include <vector>
 
 namespace gao {
@@ -31,6 +32,7 @@ struct GpuControl {
     std::function<bool(int)> set_core_offset;   // MHz, verified by read-back
     std::function<bool(int)> set_mem_offset;    // MHz, verified by read-back
     std::function<bool(int)> set_power_limit;   // percent of default
+    std::function<std::pair<int, int>()> power_limit_range_pct;   // {min, max}, percent of default
     std::function<bool(int)> set_fan_pct;       // percent, -1 restores automatic
     std::function<bool()> reset_to_stock;
 };
