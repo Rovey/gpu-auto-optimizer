@@ -13,10 +13,17 @@ the user is in another language — translate, never paste non-English text into
 
 ```powershell
 $bin = "C:\Program Files\Microsoft Visual Studio\18\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin"
-& "$bin\cmake.exe" -S . -B build -A x64
-& "$bin\cmake.exe" --build build --config Release
-& "$bin\ctest.exe" --test-dir build -C Release --output-on-failure
+& "$bin\cmake.exe" --workflow --preset ci          # configure, build Release, test
+& "$bin\cmake.exe" --build --preset debug; & "$bin\ctest.exe" --preset debug
 ```
+
+Everything we compile is `/W4 /WX`; fix warnings, do not suppress them.
+
+## Layout
+
+Two executables on one engine: `gao.exe` (CLI, `src/app/main.cpp`) and
+`GpuAutoOptimizer.exe` (window + tray + watchdog, `src/app/gui/`). Logic both
+need lives in `src/app/common.*`, never in either entry point.
 
 ## Rules the design depends on
 

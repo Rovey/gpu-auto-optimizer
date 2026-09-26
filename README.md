@@ -12,7 +12,7 @@
 </div>
 
 > [!IMPORTANT]
-> `main` is being rewritten from Python to C++ (see [the design spec](docs/superpowers/specs/2026-09-20-cpp-rewrite-design.md)). What's here today is the repository skeleton, the hardware layer and the stress load: it can read live telemetry, write clock offsets and fan speed verified against the driver, and run a DX11 load that checks every value it computes and ends in a stability verdict. It can also tune: `--optimize` searches power limit, core and memory offsets against that verdict, saves the result, and `--boot on` re-applies it at every logon. **There is no GUI yet** -- that is a later phase. v1.0 will be the finished C++ application. The previous, working Python version (search engine, risk profiles, tray GUI) is preserved at the `v0.9-python` git tag and still works as it always did; it just isn't what lives on `main` anymore.
+> `main` is being rewritten from Python to C++ (see [the design spec](docs/superpowers/specs/2026-09-20-cpp-rewrite-design.md)). What's here today is the repository skeleton, the hardware layer and the stress load: it can read live telemetry, write clock offsets and fan speed verified against the driver, and run a DX11 load that checks every value it computes and ends in a stability verdict. It can also tune: `--optimize` searches power limit, core and memory offsets against that verdict, saves the result, and `--boot on` re-applies it at every logon. `GpuAutoOptimizer.exe` is the window and tray app on top of the same engine; its tray process keeps the tune applied for the whole session. v1.0 will be the finished C++ application. The previous, working Python version (search engine, risk profiles, tray GUI) is preserved at the `v0.9-python` git tag and still works as it always did; it just isn't what lives on `main` anymore.
 
 > [!WARNING]
 > The commands below that write to the GPU (`--set-core`, `--set-mem`, `--set-fan`, `--reset`, `--optimize`, `--apply`, `--boot`) change clocks, power limit and fan behavior directly through the driver. Every write is verified by reading the value back rather than trusting the driver's return code, but a wrong offset can still make a card unstable. Use at your own risk.
@@ -25,7 +25,15 @@ Requires an x64 Windows machine with Visual Studio 2026 (C++ and CMake workload)
 cmake --workflow --preset ci    # configure, build Release, run the tests
 ```
 
-That builds `.\build\Release\gao.exe` -- a command-line tool; there is no GUI yet.
+That builds two programs in `.\build\Release\`: `GpuAutoOptimizer.exe`, the window and tray app, and `gao.exe`, the command-line tool. Both use the same engine and the same saved state.
+
+### The app
+
+Start `GpuAutoOptimizer.exe`. The window shows the GPU, live telemetry, the saved tune and what is applied right now; pick a preset and press **Optimize** (it offers to restart as administrator first, because tuning writes clocks and power limits). The run screen shows temperature, power and every probe as it happens; **Abort** restores stock. The results screen compares before and after and can turn on **apply at every logon**.
+
+With apply-at-logon on, Windows starts the app in the tray at every logon. It applies the saved tune and then keeps it applied: every 30 seconds it reads back what the driver reports. If the tune was reset (a driver reset or TDR), it applies it again; if that happens four times within an hour it stops and tells you the tune is probably not stable; if another program such as MSI Afterburner changed the settings, it leaves them alone and tells you; after a driver update it does not apply the old tune and tells you to optimize again. Closing the window keeps it in the tray; **Exit** in the tray menu quits.
+
+### The command line
 
 ```powershell
 .\build\Release\gao.exe --version
@@ -74,9 +82,11 @@ src/hw/       the only code that touches hardware: NVML, NVAPI and D3D11.
   stress.*        DX11 compute stress load; the GPU checks every value it computes
   app_files.*     gao.json (atomic writes), the crash journal and boot.log, all flushed to disk
   boot_task.*     the logon task, via schtasks.exe
-src/app/      entry point -- currently a command-line probe (gao.exe); an ImGui UI is a later phase.
+src/app/      common.*: application logic both programs share (optimize, boot-apply, logon task)
+  main.cpp        gao.exe, the command line
+  gui/            GpuAutoOptimizer.exe: window, tray, optimize worker thread, watchdog loop
 tests/        doctest, core only.
-third_party/  doctest, nlohmann/json -- vendored as source, no package manager.
+third_party/  doctest, nlohmann/json, Dear ImGui -- vendored as source, no package manager.
 docs/hardware-checks.md   the manual checklist for what CI can't test (the runner has no GPU)
 ```
 
@@ -111,7 +121,7 @@ Our code builds at `/W4 /permissive-` with warnings as errors; `third_party/` is
 
 ## Status and roadmap
 
-Phases 0-4 of the rewrite are done: repository migration, the CMake/CI skeleton, the hardware layer (NVML telemetry and power limit, NVAPI clock offsets, NVAPI fan control), the DX11 stress load with its stability verdict, the search with its crash-safe journal, and persistence with boot-apply. The phases after this one -- the ImGui screens and tray, and finally the release workflow -- are not started. See [the design spec](docs/superpowers/specs/2026-09-20-cpp-rewrite-design.md) for the full phase table and the reasoning behind each decision (why NVAPI + NVML directly, why the Afterburner route was abandoned, why undervolting ships opt-in).
+Phases 0-5 of the rewrite are done: repository migration, the CMake/CI skeleton, the hardware layer (NVML telemetry and power limit, NVAPI clock offsets, NVAPI fan control), the DX11 stress load with its stability verdict, the search with its crash-safe journal, persistence with boot-apply, and the window and tray app with its tune watchdog. What remains is phase 6: the release workflow and packaging. See [the design spec](docs/superpowers/specs/2026-09-20-cpp-rewrite-design.md) for the full phase table and the reasoning behind each decision (why NVAPI + NVML directly, why the Afterburner route was abandoned, why undervolting ships opt-in).
 
 ## License
 

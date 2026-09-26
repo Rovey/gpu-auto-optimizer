@@ -52,6 +52,13 @@ root; adjust the path for a Debug build.
 | 26 | State folder is admin-only | `icacls "%ProgramData%\GpuAutoOptimizer"`; `--status` unelevated; a user-created folder is refused | no / yes | SYSTEM and Administrators full, Users read & execute, no inherited entries; `--status` works; a folder created by the user before the first elevated run makes `--optimize` refuse | |
 | 27 | No DLL planting | copy `C:\Windows\System32\version.dll` next to the exe as `d3d11.dll`, `dxgi.dll`, `d3dcompiler_47.dll`, `msvcp140.dll`, `vcruntime140.dll` and `vcruntime140_1.dll`; run `--stress 5`, `--bandwidth`, `--status`; delete the copies | no | all three work normally (a loaded fake would break the import) | Pass (2026-09-27, driver 610.74). `--stress 5` `STABLE` (5768 it/s), `--bandwidth` 491.8 GB/s, `--status` normal. `dumpbin /dependents`: static imports only `KERNEL32`, `ADVAPI32`, `SHELL32`, `ole32` (KnownDLLs; the CRT is linked statically); `d3d11`, `dxgi`, `D3DCOMPILER_47` delay-loaded after `SetDefaultDllDirectories`. |
 | 28 | Old journal is not imported | first elevated run after the move | yes | the new journal starts empty; nothing under `%LOCALAPPDATA%` is read by the elevated process | Dropped as a migration on 2026-09-27: reading a user-writable file from the elevated process could be redirected to disclose other files (P4b review). The old journal on the reference machine had no open entries (136 lines, 0 freezes), so no ceiling was lost. |
+| 29 | The window renders and idles | start `GpuAutoOptimizer.exe` unelevated | no | GPU name, driver, telemetry, saved/applied tune and presets shown; under 1 % of one CPU core while idle | Pass (2026-09-27): all shown (screenshot); 0.05 CPU-seconds over 5 s idle (~1 %). |
+| 30 | Optimize from the window | Restart as administrator, pick Best, Optimize | yes | run screen with live temperature/power and the probe log; results screen with before/after | |
+| 31 | Abort from the window | Abort during the core search | yes | the run ends with `aborted`, card at stock | |
+| 32 | Tray app at logon | apply at logon on, log off and on | yes (task) | tray icon present, tune applied, `boot.log` `applied`, strike cleared after 2 min | |
+| 33 | Watchdog re-applies after a TDR | tray running, `dxcap -forcetdr`, wait 45 s, `gao --status` | yes | `applied:` equals the saved tune again; `boot.log` has `watchdog: ... re-applied`; a balloon said so | |
+| 34 | Watchdog backs off from another tool | tray running, set an offset in MSI Afterburner and Apply | no | a balloon says another program changed the settings; the watchdog does not fight it | |
+| 35 | One instance | start the app twice | no | the second start brings the first window forward and exits | |
 
 ## Notes
 
