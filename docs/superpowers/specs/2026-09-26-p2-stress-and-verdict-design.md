@@ -116,12 +116,14 @@ VERDICT: STABLE  score=815 it/s  peak=67 C  avg power=197 W
 One line per second of accumulated run time. `--max-temp` defaults to 85. Exit codes:
 `0` Stable, `2` WrongResult or DeviceLost, `3` TooHot or NoTelemetry, `1` init failure.
 
-Hidden self-test flag for hardware checks that stock hardware cannot trigger:
+Hidden self-test flag and tool for hardware checks that stock hardware cannot trigger:
 - `--stress-selftest wrong` flips one value of the uploaded reference; the run must end
   in WrongResult. This proves the whole chain from shader counter to verdict.
-- `--stress-selftest tdr` issues one deliberately long dispatch (> 2 s) so Windows resets the
-  driver (screen black for 1–2 s, then recovers); the run must end in DeviceLost, and a
-  following `gao --stress` must work again. Approved by the user; it touches no settings.
+- A TDR is forced from outside with `dxcap -forcetdr` (Windows Graphics Tools) while
+  `gao --stress` runs; the run must end in DeviceLost and a following `gao --stress` must work.
+  *Revised 2026-09-26:* the originally planned `--stress-selftest tdr` (one > 2 s dispatch)
+  was removed after hardware testing showed the GPU preempts long compute dispatches, so no
+  TDR fires.
 
 ## 7. Testing
 
@@ -140,7 +142,7 @@ New rows in `docs/hardware-checks.md`:
 |---|---|---|
 | 10 | `gao --stress 60` on stock | STABLE, avg power ≥ 95 % of limit |
 | 11 | `gao --stress 10 --stress-selftest wrong` | WrongResult, exit 2 |
-| 12 | `gao --stress 10 --stress-selftest tdr` | DeviceLost, exit 2; next `--stress` works |
+| 12 | `gao --stress 30` + elevated `dxcap -forcetdr` | DeviceLost, exit 2; next `--stress` works |
 
 Checks 3 and 5 get their open cross-check completed: run `gao --stress` in a second window
 and compare clocks before and after `--set-core 25` / `--set-mem 100`.

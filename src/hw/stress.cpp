@@ -23,15 +23,11 @@ constexpr UINT kNvidiaVendorId = 0x10DE;
 constexpr int kTile = 32;   // output tile per thread group (16x16 threads, 2x2 outputs each)
 constexpr double kTargetBatchMs = 250.0;
 constexpr int kMaxDispatches = 4096;
-// ~1 ms per pass on an RTX 4070; 20000 passes is far beyond the 2 s TDR limit.
-constexpr UINT kTdrPasses = 20000;
 
 // Tiled, register-blocked matmul: every thread computes a 2x2 block of
 // C = A * B (four FMAs per shared-memory load pair; on an RTX 4070 this
 // draws ~173 of 200 W versus ~132 W for one output per thread), compares
-// each element with the reference,
-// and counts mismatches. `passes` repeats the whole
-// computation; it is 1 except for the TDR self-test.
+// each element with the reference, and counts mismatches.
 const char kShader[] = R"(
 #define N 1024
 #define T 32
@@ -39,7 +35,6 @@ StructuredBuffer<float> A : register(t0);
 StructuredBuffer<float> B : register(t1);
 StructuredBuffer<float> Ref : register(t2);
 RWStructuredBuffer<uint> Errors : register(u0);
-cbuffer Params : register(b0) { uint passes; uint3 pad; };
 groupshared float As[T][T];
 groupshared float Bs[T][T];
 [numthreads(16, 16, 1)]
@@ -47,23 +42,20 @@ void main(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID) {
     uint r0 = gid.y * T + tid.y * 2;
     uint c0 = gid.x * T + tid.x * 2;
     float c00 = 0, c01 = 0, c10 = 0, c11 = 0;
-    [loop] for (uint p = 0; p < passes; ++p) {
-        c00 = 0; c01 = 0; c10 = 0; c11 = 0;
-        [loop] for (uint k0 = 0; k0 < N; k0 += T) {
-            [unroll] for (uint i = 0; i < 2; ++i)
-                [unroll] for (uint j = 0; j < 2; ++j) {
-                    As[tid.y * 2 + i][tid.x * 2 + j] = A[(r0 + i) * N + k0 + tid.x * 2 + j];
-                    Bs[tid.y * 2 + i][tid.x * 2 + j] = B[(k0 + tid.y * 2 + i) * N + c0 + j];
-                }
-            GroupMemoryBarrierWithGroupSync();
-            [unroll] for (uint k = 0; k < T; ++k) {
-                float x0 = As[tid.y * 2][k], x1 = As[tid.y * 2 + 1][k];
-                float y0 = Bs[k][tid.x * 2], y1 = Bs[k][tid.x * 2 + 1];
-                c00 = mad(x0, y0, c00); c01 = mad(x0, y1, c01);
-                c10 = mad(x1, y0, c10); c11 = mad(x1, y1, c11);
+    [loop] for (uint k0 = 0; k0 < N; k0 += T) {
+        [unroll] for (uint i = 0; i < 2; ++i)
+            [unroll] for (uint j = 0; j < 2; ++j) {
+                As[tid.y * 2 + i][tid.x * 2 + j] = A[(r0 + i) * N + k0 + tid.x * 2 + j];
+                Bs[tid.y * 2 + i][tid.x * 2 + j] = B[(k0 + tid.y * 2 + i) * N + c0 + j];
             }
-            GroupMemoryBarrierWithGroupSync();
+        GroupMemoryBarrierWithGroupSync();
+        [unroll] for (uint k = 0; k < T; ++k) {
+            float x0 = As[tid.y * 2][k], x1 = As[tid.y * 2 + 1][k];
+            float y0 = Bs[k][tid.x * 2], y1 = Bs[k][tid.x * 2 + 1];
+            c00 = mad(x0, y0, c00); c01 = mad(x0, y1, c01);
+            c10 = mad(x1, y0, c10); c11 = mad(x1, y1, c11);
         }
+        GroupMemoryBarrierWithGroupSync();
     }
     uint errs = (c00 != Ref[r0 * N + c0]) + (c01 != Ref[r0 * N + c0 + 1])
               + (c10 != Ref[(r0 + 1) * N + c0]) + (c11 != Ref[(r0 + 1) * N + c0 + 1]);
@@ -90,7 +82,7 @@ struct Stress::Impl {
     ComPtr<ID3D11DeviceContext> ctx;
     ComPtr<ID3D11ComputeShader> cs;
     ComPtr<ID3D11ShaderResourceView> a, b, ref;
-    ComPtr<ID3D11Buffer> errors, staging, params;
+    ComPtr<ID3D11Buffer> errors, staging;
     ComPtr<ID3D11UnorderedAccessView> errors_uav;
     std::vector<float> ha, hb, href;   // host copies, kept for device recreation
 };
@@ -111,7 +103,7 @@ bool Stress::CreateDevice() {
     Impl& d = *impl_;
     d.device.Reset(); d.ctx.Reset(); d.cs.Reset();
     d.a.Reset(); d.b.Reset(); d.ref.Reset();
-    d.errors.Reset(); d.staging.Reset(); d.params.Reset(); d.errors_uav.Reset();
+    d.errors.Reset(); d.staging.Reset(); d.errors_uav.Reset();
 
     ComPtr<IDXGIFactory1> factory;
     HRESULT hr = CreateDXGIFactory1(IID_PPV_ARGS(&factory));
@@ -176,13 +168,6 @@ bool Stress::CreateDevice() {
     if (FAILED(hr = d.device->CreateBuffer(&sd, nullptr, &d.staging))) {
         error_ = Hr("staging buffer", hr); return false;
     }
-    D3D11_BUFFER_DESC pd{};
-    pd.ByteWidth = 16;
-    pd.Usage = D3D11_USAGE_DEFAULT;
-    pd.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
-    if (FAILED(hr = d.device->CreateBuffer(&pd, nullptr, &d.params))) {
-        error_ = Hr("constant buffer", hr); return false;
-    }
     return true;
 }
 
@@ -197,11 +182,6 @@ StressBatch Stress::Batch() {
     Impl& d = *impl_;
     if (!d.device && !CreateDevice()) { out.device_lost = true; return finish(); }
 
-    const bool tdr = selftest_ == StressSelftest::Tdr;
-    selftest_ = tdr ? StressSelftest::None : selftest_;   // the TDR self-test fires once
-    const UINT params[4] = {tdr ? kTdrPasses : 1u, 0, 0, 0};
-    d.ctx->UpdateSubresource(d.params.Get(), 0, nullptr, params, 0, 0);
-
     const UINT zero[4] = {0, 0, 0, 0};
     d.ctx->ClearUnorderedAccessViewUint(d.errors_uav.Get(), zero);
     d.ctx->CSSetShader(d.cs.Get(), nullptr, 0);
@@ -209,10 +189,8 @@ StressBatch Stress::Batch() {
     d.ctx->CSSetShaderResources(0, 3, srvs);
     ID3D11UnorderedAccessView* uavs[] = {d.errors_uav.Get()};
     d.ctx->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
-    ID3D11Buffer* cbs[] = {d.params.Get()};
-    d.ctx->CSSetConstantBuffers(0, 1, cbs);
 
-    const int dispatches = tdr ? 1 : dispatches_;
+    const int dispatches = dispatches_;
     constexpr UINT groups = kStressN / kTile;
     for (int i = 0; i < dispatches; ++i) d.ctx->Dispatch(groups, groups, 1);
     d.ctx->CopyResource(d.staging.Get(), d.errors.Get());
@@ -233,7 +211,7 @@ StressBatch Stress::Batch() {
     d.ctx->Unmap(d.staging.Get(), 0);
     out.iterations = dispatches;
     finish();
-    if (!tdr && out.elapsed_ms < kTargetBatchMs * 0.6 && dispatches_ < kMaxDispatches) dispatches_ *= 2;
+    if (out.elapsed_ms < kTargetBatchMs * 0.6 && dispatches_ < kMaxDispatches) dispatches_ *= 2;
     return out;
 }
 

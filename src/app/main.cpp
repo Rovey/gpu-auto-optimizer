@@ -213,8 +213,7 @@ int main(int argc, char** argv) {
                 }
             } else if (std::strcmp(argv[i], "--stress-selftest") == 0) {
                 if (std::strcmp(argv[i + 1], "wrong") == 0) selftest = gao::StressSelftest::WrongResult;
-                else if (std::strcmp(argv[i + 1], "tdr") == 0) selftest = gao::StressSelftest::Tdr;
-                else { std::printf("--stress-selftest expects 'wrong' or 'tdr', got '%s'\n", argv[i + 1]); return 1; }
+                else { std::printf("--stress-selftest expects 'wrong', got '%s'\n", argv[i + 1]); return 1; }
             } else {
                 std::printf("unknown --stress option '%s'\n", argv[i]);
                 return 1;

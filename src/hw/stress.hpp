@@ -5,12 +5,13 @@
 
 namespace gao {
 
-// Hidden test modes for hardware checks 11 and 12: stock hardware never
-// produces a wrong value or a TDR on its own.
+// Hidden test mode for hardware check 11: stock hardware never produces a
+// wrong value on its own. (Check 12 forces a TDR with `dxcap -forcetdr`
+// instead: a long dispatch does not trigger one, because the GPU preempts
+// compute work rather than letting Windows reset the driver.)
 enum class StressSelftest {
     None,
     WrongResult,   // one reference value is corrupted before upload
-    Tdr,           // the first batch is one dispatch far longer than the 2 s TDR limit
 };
 
 // The DX11 compute stress load. Multiplies two exact-float matrices (see
