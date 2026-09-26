@@ -11,7 +11,7 @@
 #include "core/objectives.hpp"
 #include "core/search.hpp"
 #include "hw/gpu_control.hpp"
-#include "hw/journal_file.hpp"
+#include "hw/app_files.hpp"
 #include <atomic>
 #include <string>
 #include <cerrno>

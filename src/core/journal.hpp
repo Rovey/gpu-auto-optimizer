@@ -17,7 +17,7 @@ struct Ceilings {
 // production, flushed to disk) before the candidate is applied; complete()
 // after its probe. A begin with no complete therefore marks the candidate
 // that froze the machine, and it becomes a ceiling for every later run.
-// Pure: the file lives in hw/journal_file, reached through `append`.
+// Pure: the file lives in hw/app_files, reached through `append`.
 class Journal {
 public:
     using Append = std::function<bool(const std::string&)>;

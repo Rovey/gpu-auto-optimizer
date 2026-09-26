@@ -16,6 +16,8 @@ public:
     // with a real zero reading.
     int DeviceCount();
     Telemetry Read(unsigned index);
+    // e.g. "610.74"; empty when NVML cannot report it (see Error()).
+    std::string DriverVersion();
     // Power limit as percent of the driver default. Empty when NVML cannot
     // report the constraints (older cards, or a failed call; see Error()).
     std::optional<std::pair<int, int>> PowerLimitRangePct(unsigned index);

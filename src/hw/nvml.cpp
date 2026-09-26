@@ -33,6 +33,8 @@ typedef nvmlReturn_t (*fn_pl_set)(nvmlDevice_t, unsigned);
 static fn_pl_default     p_pl_default = nullptr;
 static fn_pl_constraints p_pl_constraints = nullptr;
 static fn_pl_set         p_pl_set = nullptr;
+typedef nvmlReturn_t (*fn_driver)(char*, unsigned);
+static fn_driver p_driver = nullptr;
 
 bool Nvml::Init() {
     HMODULE h = LoadLibraryA("nvml.dll");
@@ -51,6 +53,7 @@ bool Nvml::Init() {
     p_pl_default     = (fn_pl_default)GetProcAddress(h, "nvmlDeviceGetPowerManagementDefaultLimit");
     p_pl_constraints = (fn_pl_constraints)GetProcAddress(h, "nvmlDeviceGetPowerManagementLimitConstraints");
     p_pl_set         = (fn_pl_set)GetProcAddress(h, "nvmlDeviceSetPowerManagementLimit");
+    p_driver = (fn_driver)GetProcAddress(h, "nvmlSystemGetDriverVersion");
     if (!p_init || !p_byIndex) { error_ = "required NVML entry points not found"; return false; }
     inited_ = (p_init() == NVML_SUCCESS);
     if (!inited_) error_ = "nvmlInit_v2 failed";
@@ -140,6 +143,15 @@ bool Nvml::SetPowerLimitPct(unsigned index, int pct) {
         return false;
     }
     return true;
+}
+
+std::string Nvml::DriverVersion() {
+    char buf[96] = {};
+    if (!inited_ || !p_driver || p_driver(buf, sizeof(buf)) != NVML_SUCCESS) {
+        error_ = "nvmlSystemGetDriverVersion failed";
+        return {};
+    }
+    return buf;
 }
 
 Nvml::~Nvml() {

@@ -39,7 +39,8 @@ add_library(hw STATIC
   src/hw/nvapi.hpp src/hw/nvapi.cpp
   src/hw/gpu_control.hpp src/hw/gpu_control.cpp
   src/hw/stress.hpp src/hw/stress.cpp
-  src/hw/journal_file.hpp src/hw/journal_file.cpp
+  src/hw/app_files.hpp src/hw/app_files.cpp
+  src/hw/boot_task.hpp src/hw/boot_task.cpp
 )
 target_include_directories(hw PUBLIC src)
 target_link_libraries(hw PUBLIC core d3d11 dxgi d3dcompiler)
