@@ -33,18 +33,19 @@ That builds `.\build\Release\gao.exe` -- a command-line tool; there is no GUI ye
 .\build\Release\gao.exe --version
 .\build\Release\gao.exe --probe
 .\build\Release\gao.exe --stress 60
+.\build\Release\gao.exe --bandwidth
 .\build\Release\gao.exe --optimize best   # elevated
 .\build\Release\gao.exe --apply           # elevated: re-apply the saved result
 .\build\Release\gao.exe --boot on         # elevated: re-apply at every logon
 .\build\Release\gao.exe --status
 ```
 
-`--optimize` runs baseline → power → core → memory → 60 s soak (~5 minutes), leaves the result applied until reboot, and keeps a crash journal in `%LOCALAPPDATA%\GpuAutoOptimizer` so a setting that froze the machine is never tried again. Ctrl+C restores stock.
+`--optimize` runs baseline → power → core → memory → 60 s soak (~10 minutes), leaves the result applied until reboot, and keeps a crash journal so a setting that froze the machine is never tried again. Ctrl+C restores stock. The core and memory edges it finds are each re-checked with a 30 s probe before the safety margin is applied, and the memory search stops at the **bandwidth peak** rather than at the highest offset that does not produce errors: GDDR6X and GDDR6 retry failed transfers, so an excessive memory clock costs speed long before it produces a wrong result. `--bandwidth` prints the current memory bandwidth.
 
-`--optimize` saves its result to `%LOCALAPPDATA%\GpuAutoOptimizer\gao.json`. `--boot on` registers a logon task that re-applies it; if the machine crashes within 2 minutes of three logons in a row, or the NVIDIA driver version changes, boot-apply stops and `--status` / `boot.log` say why. A profile only applies to the card it was tuned on (NVML UUID).
+All state (`gao.json`, the crash journal, `boot.log`) lives in `%ProgramData%\GpuAutoOptimizer`, which users can read but only administrators can write. `--boot on` copies `gao.exe` to `%ProgramFiles%\GpuAutoOptimizer\` and registers a logon task (`\GpuAutoOptimizer\BootApply`) that runs that copy and re-applies the saved profile; `--status` says whether the installed copy matches your build; if the machine crashes within 2 minutes of three logons in a row, or the NVIDIA driver version changes, boot-apply stops and `--status` / `boot.log` say why. A profile only applies to the card it was tuned on (NVML UUID).
 
-> [!CAUTION]
-> The logon task runs `gao.exe` **with administrator rights from wherever you built it**. A build folder under your user profile is writable without elevation, so any program running as you could replace `gao.exe` there and have it run elevated at the next logon. `gao` itself loads NVML/NVAPI and `schtasks.exe` from System32 only and refuses profile values outside its search range, but it cannot protect its own executable. Until release builds install to Program Files (phase 6), only use `--boot on` on a machine where that trade-off is acceptable.
+> [!NOTE]
+> The logon task runs with administrator rights, so everything it touches is admin-only: the exe in Program Files and the state folder in ProgramData. `gao` loads every DLL from System32 only (`d3dcompiler_47.dll` is delay-loaded after that is set), and refuses profile values outside its search range.
 
 `--stress` runs a DX11 compute load that checks every value it computes and ends with a verdict (`STABLE`, `WRONG RESULT`, `DEVICE LOST`, `TOO HOT`, `NO TELEMETRY`); it changes no settings and needs no elevation.
 

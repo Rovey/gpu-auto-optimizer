@@ -49,6 +49,10 @@ target_link_libraries(hw PUBLIC core d3d11 dxgi d3dcompiler)
 
 add_executable(gao src/app/main.cpp)
 target_link_libraries(gao PRIVATE core hw)
+# d3dcompiler_47.dll is not a KnownDLL: delay-load it so it resolves after
+# SetDefaultDllDirectories(SYSTEM32) in main(), never from the exe's folder.
+target_link_libraries(gao PRIVATE delayimp)
+target_link_options(gao PRIVATE /DELAYLOAD:d3dcompiler_47.dll /DEPENDENTLOADFLAG:0x800)
 
 enable_testing()
 add_executable(core_tests

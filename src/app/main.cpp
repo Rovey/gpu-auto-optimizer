@@ -12,6 +12,7 @@
 #include "core/journal.hpp"
 #include "core/objectives.hpp"
 #include "core/search.hpp"
+#include "core/task_xml.hpp"
 #include "hw/gpu_control.hpp"
 #include "hw/app_files.hpp"
 #include "hw/boot_task.hpp"
@@ -246,6 +247,18 @@ static void boot_log(const std::string& msg) {
     gao::append_line_durable(gao::boot_log_path(), now_text() + "  " + msg);
 }
 
+// Every elevated command that writes state calls this first: creates or
+// verifies the protected folder, and imports the pre-P4b journal once so its
+// freeze ceilings survive the move.
+static bool prepare_state(std::string* why) {
+    if (!gao::ensure_app_dir(why)) return false;
+    std::error_code ec;
+    const auto legacy = gao::legacy_journal_path();
+    if (!std::filesystem::exists(gao::journal_path(), ec) && !legacy.empty() && std::filesystem::exists(legacy, ec))
+        for (const auto& line : gao::read_lines(legacy)) gao::append_line_durable(gao::journal_path(), line);
+    return true;
+}
+
 static std::string profile_text(const gao::Profile& p) {
     return std::string(gao::preset_name(p.preset)) + ": power " + std::to_string(p.power_pct) + " %, core +" +
            std::to_string(p.core_mhz) + " MHz, mem +" + std::to_string(p.mem_mhz) + " MHz (driver " + p.driver +
@@ -272,6 +285,8 @@ static int optimize(gao::Preset preset) {
         std::printf("--optimize changes clocks and power limits and needs an elevated (administrator) shell\n");
         return 1;
     }
+    std::string why;
+    if (!prepare_state(&why)) { std::printf("%s\n", why.c_str()); return 1; }
     gao::Nvml nvml;
     if (!nvml.Init()) { std::printf("NVML init failed: %s\n", nvml.Error().c_str()); return 1; }
     gao::Nvapi nvapi;
@@ -281,7 +296,7 @@ static int optimize(gao::Preset preset) {
     const gao::GpuControl gpu = gao::make_gpu_control(nvml, nvapi, kGpu);
 
     const auto path = gao::journal_path();
-    if (path.empty()) { std::printf("LOCALAPPDATA is not set; cannot keep the crash journal\n"); return 1; }
+    if (path.empty()) { std::printf("ProgramData is not set; cannot keep the crash journal\n"); return 1; }
     gao::Journal journal(gao::read_lines(path), [&path](const std::string& l) { return gao::append_line_durable(path, l); });
     for (const auto& f : journal.freezes())
         std::printf("warning: a previous run froze the machine at %s; staying below it from now on\n", f.c_str());
@@ -341,19 +356,33 @@ static int apply() {
 
 static int boot(bool on) {
     if (!IsElevated()) { std::printf("--boot needs an elevated (administrator) shell\n"); return 1; }
+    std::string why;
+    if (!prepare_state(&why)) { std::printf("%s\n", why.c_str()); return 1; }
+    gao::boot_task_remove_legacy();   // the pre-P4b task, if any
     if (!on) {
         const int code = gao::boot_task_remove();
-        std::printf(code == 0 ? "boot-apply off: task removed\n" : "could not remove the task (schtasks exit %d)\n", code);
+        gao::uninstall_exe();
+        std::printf(code == 0 ? "boot-apply off: task and installed copy removed\n"
+                              : "task not removed (schtasks exit %d); installed copy removed\n", code);
         return code == 0 ? 0 : 1;
     }
-    wchar_t exe[MAX_PATH];
-    if (!GetModuleFileNameW(nullptr, exe, MAX_PATH)) { std::printf("could not find gao.exe's own path\n"); return 1; }
-    const int code = gao::boot_task_create(exe);
+    wchar_t self[MAX_PATH];
+    const DWORD n = GetModuleFileNameW(nullptr, self, MAX_PATH);
+    if (n == 0 || n >= MAX_PATH) { std::printf("could not find gao.exe's own path\n"); return 1; }
+    if (!gao::install_exe(self, &why)) { std::printf("%s\n", why.c_str()); return 1; }
+    const auto exe = gao::installed_exe_path();
+    const auto u8 = exe.u8string();
+    const std::string xml = gao::boot_task_xml(std::string(u8.begin(), u8.end()), gao::current_user_sid());
+    const auto xml_path = gao::app_dir() / L"BootApply.xml";
+    if (!gao::write_utf16_file(xml_path, xml)) { std::printf("could not write %s\n", xml_path.string().c_str()); return 1; }
+    const int code = gao::boot_task_create_xml(xml_path);
+    std::error_code ec;
+    std::filesystem::remove(xml_path, ec);
     if (code != 0) { std::printf("could not create the task (schtasks exit %d)\n", code); return 1; }
     gao::Config cfg = load_config();
     cfg.boot_strikes = 0;
     if (!save_config(cfg)) { std::printf("task created, but could not reset the strike counter\n"); return 1; }
-    std::printf("boot-apply on: the saved profile is applied at every logon (strikes reset)\n");
+    std::printf("boot-apply on: %s runs at every logon (strikes reset)\n", exe.string().c_str());
     if (!cfg.profile) std::printf("note: there is no saved profile yet; run `gao --optimize` first\n");
     return 0;
 }
@@ -375,6 +404,15 @@ static int status() {
                                          ? "matches the profile" : "DIFFERENT card or unknown -- run `gao --optimize` again");
     }
     std::printf("boot-apply: %s\n", gao::boot_task_exists() ? "on (logon task registered)" : "off");
+    if (gao::boot_task_legacy_exists())
+        std::printf("            an older logon task (\\GpuAutoOptimizer) is still registered; run `gao --boot on` to replace it\n");
+    const auto installed = gao::installed_exe_path();
+    wchar_t self[MAX_PATH];
+    const DWORD n = GetModuleFileNameW(nullptr, self, MAX_PATH);
+    std::error_code ec;
+    if (!std::filesystem::exists(installed, ec)) std::printf("boot copy:  not installed\n");
+    else if (n && n < MAX_PATH && gao::files_equal(self, installed)) std::printf("boot copy:  up to date\n");
+    else std::printf("boot copy:  OUTDATED -- run `gao --boot on` to install this build\n");
     std::printf("strikes:    %d of %d\n", cfg.boot_strikes, gao::kMaxBootStrikes);
     const auto log = gao::read_lines(gao::boot_log_path());
     if (!log.empty()) std::printf("last boot:  %s\n", log.back().c_str());
@@ -384,6 +422,8 @@ static int status() {
 // Run by the logon task. No console, no prompts: everything goes to boot.log.
 static int boot_apply() {
     FreeConsole();
+    std::string why;
+    if (!prepare_state(&why)) return 1;   // nothing can be logged without the folder
     gao::Nvml nvml;
     if (!nvml.Init()) { boot_log("NVML init failed: " + nvml.Error()); return 1; }
     gao::Config cfg = load_config();
@@ -397,7 +437,6 @@ static int boot_apply() {
     gao::Nvapi nvapi;
     if (!nvapi.Init()) { boot_log("NVAPI init failed: " + nvapi.Error()); return 1; }
     const gao::GpuControl gpu = gao::make_gpu_control(nvml, nvapi, kGpu);
-    std::string why;
     if (!gao::apply_profile(gpu, *cfg.profile, &why)) { boot_log("apply failed: " + why); return 1; }
     boot_log("applied " + profile_text(*cfg.profile) + ", strike " + std::to_string(cfg.boot_strikes) +
              " clears in 2 minutes");
@@ -428,6 +467,9 @@ static int bandwidth() {
 }
 
 int main(int argc, char** argv) {
+    // Before anything loads a DLL: System32 only (the delay-loaded
+    // d3dcompiler_47.dll included), never the exe's own folder.
+    SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32);
     if (argc > 1 && std::strcmp(argv[1], "--version") == 0) {
         std::printf("%s %s\n", gao::kProductName.data(), gao::kVersion.data());
         return 0;
