@@ -71,6 +71,7 @@ struct FakeCard {
     int core_edge = 150, mem_edge = 800;
     bool stock_unstable = false;
     int soak_failures = 0;           // how many 60 s probes fail before one passes
+    int noisy_power_pct = -1;        // a 20 s probe at this power reads 10 % low
     int fail_core_set_at = -1;       // set_core_offset(this) returns false
     int max_core_seen = 0;
     int probes = 0, power_probes = 0;
@@ -103,6 +104,7 @@ struct FakeCard {
             r.seconds = seconds;
             r.peak_temp_c = static_cast<int>(40 + 0.3 * power);
             r.score = 1000.0 * std::min(power, 90) / 90;
+            if (seconds == 20 && power == noisy_power_pct) r.score *= 0.9;
             if (stock_unstable || core > core_edge || mem > mem_edge) r.verdict = Verdict::WrongResult;
             else if (seconds == 60 && soak_failures > 0) { --soak_failures; r.verdict = Verdict::WrongResult; }
             else if (r.peak_temp_c > max_temp) r.verdict = Verdict::TooHot;
@@ -260,4 +262,14 @@ TEST_CASE("every clock candidate is closed in the journal") {
     run.go(Preset::BestOfMyGpu);
     Journal reread(run.card.journal, [](const std::string&) { return true; });
     CHECK(reread.freezes().empty());
+}
+
+TEST_CASE("efficiency reference ignores one noisy low probe at the cap") {
+    // Probes scatter a few percent; measured on the 4070, the cap probe read
+    // 3 % below its neighbour and quiet ended up costing 4 %, not < 2 %.
+    Run run;
+    run.card.noisy_power_pct = 120;
+    const auto r = run.go(Preset::Quiet);
+    REQUIRE(r.ok);
+    CHECK(r.power_pct == 90);
 }

@@ -123,11 +123,16 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
             if (!stopped.empty()) return finish_fail(stopped);
             r.power_pct = cap;
             if (obj.perf_push < kEfficiencyBelowPush) {
-                const auto ref = seen.count(cap) ? std::optional<StabilityResult>(seen[cap]) : run_power(cap);
-                if (!ref) return finish_fail(stopped);
+                // Reference = best stable score at or below the cap (baseline
+                // included). One probe scatters a few percent; using a single
+                // low reading as the reference let quiet cost 4 % on the 4070.
+                if (!seen.count(cap) && !run_power(cap)) return finish_fail(stopped);
+                double ref_score = cap >= 100 ? r.baseline.score : 0;
+                for (const auto& [pct, s] : seen)
+                    if (pct <= cap && s.verdict == Verdict::Stable) ref_score = std::max(ref_score, s.score);
                 r.power_pct = lowest_passing(grid_lo, cap, kPowerStep, [&](int pct) {
                     const auto s = run_power(pct);
-                    return s && s->verdict == Verdict::Stable && s->score >= kEfficiencyScore * ref->score;
+                    return s && s->verdict == Verdict::Stable && s->score >= kEfficiencyScore * ref_score;
                 });
                 if (!stopped.empty()) return finish_fail(stopped);
             }
