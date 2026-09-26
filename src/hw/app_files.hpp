@@ -23,7 +23,9 @@ std::filesystem::path program_files_dir();
 // would trust. false + *why when the folder cannot be trusted.
 bool ensure_app_dir(std::string* why);
 
-std::vector<std::string> read_lines(const std::filesystem::path& p);
+// Empty when the file does not exist; nullopt when it exists but cannot be
+// read (a journal that silently read as empty would drop its ceilings).
+std::optional<std::vector<std::string>> read_lines(const std::filesystem::path& p);
 std::optional<std::string> read_file(const std::filesystem::path& p);
 // Appends line + '\n' and forces it to disk before returning, so the line
 // survives a freeze that follows immediately after.

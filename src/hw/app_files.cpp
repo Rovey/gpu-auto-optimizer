@@ -93,9 +93,12 @@ bool ensure_app_dir(std::string* why) {
     return ok;
 }
 
-std::vector<std::string> read_lines(const std::filesystem::path& p) {
+std::optional<std::vector<std::string>> read_lines(const std::filesystem::path& p) {
     std::vector<std::string> lines;
+    std::error_code ec;
+    if (!std::filesystem::exists(p, ec)) return ec ? std::nullopt : std::optional(lines);
     std::ifstream in(p, std::ios::binary);
+    if (!in) return std::nullopt;
     for (std::string line; std::getline(in, line);) lines.push_back(line);
     return lines;
 }
@@ -130,7 +133,9 @@ bool write_file_atomic(const std::filesystem::path& p, const std::string& text) 
     if (h == INVALID_HANDLE_VALUE) return false;
     const bool ok = write_all(h, text);
     CloseHandle(h);
-    return ok && MoveFileExW(tmp.c_str(), p.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH);
+    if (ok && MoveFileExW(tmp.c_str(), p.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) return true;
+    DeleteFileW(tmp.c_str());   // never leave a stale .tmp behind
+    return false;
 }
 
 }

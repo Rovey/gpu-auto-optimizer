@@ -114,7 +114,10 @@ static int reset() {
     if (!ok) std::printf("%s\n", nvapi.Error().c_str());
     // Power limit back to the driver default, where the card supports it.
     gao::Nvml nvml;
-    if (nvml.Init() && nvml.PowerLimitRangePct(kGpu)) {
+    if (!nvml.Init()) {
+        std::printf("power limit: not restored (NVML: %s)\n", nvml.Error().c_str());
+        ok = false;
+    } else if (nvml.PowerLimitRangePct(kGpu)) {
         const bool power_ok = nvml.SetPowerLimitPct(kGpu, 100);
         std::printf("power limit: default %s\n", power_ok ? "restored" : nvml.Error().c_str());
         ok = ok && power_ok;
@@ -155,13 +158,11 @@ static int stress(int seconds, int max_temp_c, gao::StressSelftest selftest) {
     double t = 0, next_print = 1.0;
     long long window_its = 0;
     double window_s = 0;
-    int last_wrong = 0;
     auto batch = [&] {
         const gao::StressBatch b = load.Batch();
         t += b.elapsed_ms / 1000.0;
         window_s += b.elapsed_ms / 1000.0;
         window_its += b.iterations;
-        last_wrong = b.wrong_values;
         return b;
     };
     auto read = [&] {
@@ -172,8 +173,8 @@ static int stress(int seconds, int max_temp_c, gao::StressSelftest selftest) {
             FormatField(mem, sizeof(mem), tel.mem_mhz, "");
             FormatField(temp, sizeof(temp), tel.temp_c, "");
             FormatField(power, sizeof(power), tel.power_w, "");
-            std::printf("  t=%.0fs  score=%.0f it/s  core=%s MHz  mem=%s MHz  temp=%s C  power=%s/%d W  errors=%d\n",
-                        t, window_its / window_s, core, mem, temp, power, tel.power_limit_w, last_wrong);
+            std::printf("  t=%.0fs  score=%.0f it/s  core=%s MHz  mem=%s MHz  temp=%s C  power=%s/%d W\n",
+                        t, window_its / window_s, core, mem, temp, power, tel.power_limit_w);
             window_its = 0;
             window_s = 0;
             next_print = t + 1.0;
@@ -181,9 +182,13 @@ static int stress(int seconds, int max_temp_c, gao::StressSelftest selftest) {
         return tel;
     };
     const gao::StabilityResult r = gao::run_stability(batch, read, seconds, max_temp_c);
-    std::printf("VERDICT: %s  score=%.0f it/s  %.1f s  peak=%d C  avg power=%d W  avg core=%d MHz  avg mem=%d MHz\n",
-                gao::verdict_name(r.verdict), r.score, r.seconds, r.peak_temp_c, r.avg_power_w,
-                r.avg_core_mhz, r.avg_mem_mhz);
+    char peak[8], power[8], core[8], mem[8];
+    FormatField(peak, sizeof(peak), r.peak_temp_c, "");
+    FormatField(power, sizeof(power), r.avg_power_w, "");
+    FormatField(core, sizeof(core), r.avg_core_mhz, "");
+    FormatField(mem, sizeof(mem), r.avg_mem_mhz, "");
+    std::printf("VERDICT: %s  score=%.0f it/s  %.1f s  peak=%s C  avg power=%s W  avg core=%s MHz  avg mem=%s MHz\n",
+                gao::verdict_name(r.verdict), r.score, r.seconds, peak, power, core, mem);
     switch (r.verdict) {
         case gao::Verdict::Stable: return 0;
         case gao::Verdict::WrongResult:
@@ -264,8 +269,8 @@ static std::string decision_text(gao::BootDecision d, const gao::Config& c, cons
         case gao::BootDecision::TooManyStrikes:
             return "disabled after " + std::to_string(gao::kMaxBootStrikes) + " crashes; run `gao --boot on` to retry";
         case gao::BootDecision::DriverChanged:
-            return "driver changed (" + c.profile->driver + " -> " + (driver.empty() ? "unknown" : driver) +
-                   "); run `gao --optimize` again";
+            if (driver.empty()) return "driver version unknown (NVML did not report it); not applied";
+            return "driver changed (" + c.profile->driver + " -> " + driver + "); run `gao --optimize` again";
         case gao::BootDecision::GpuChanged:
             return "this is not the card the profile was tested on; run `gao --optimize` again";
         case gao::BootDecision::Apply: return "apply";
@@ -290,7 +295,15 @@ static int optimize(gao::Preset preset) {
 
     const auto path = gao::journal_path();
     if (path.empty()) { std::printf("ProgramData is not set; cannot keep the crash journal\n"); return 1; }
-    gao::Journal journal(gao::read_lines(path), [&path](const std::string& l) { return gao::append_line_durable(path, l); });
+    const auto lines = gao::read_lines(path);
+    if (!lines) { std::printf("the crash journal %s exists but cannot be read; not tuning without it\n", path.string().c_str()); return 1; }
+    gao::Journal journal(*lines, [&path](const std::string& l) { return gao::append_line_durable(path, l); });
+    // Prove the journal is writable before any clock is touched; the parser
+    // ignores lines without an id, so this one never becomes a ceiling.
+    if (!gao::append_line_durable(path, "{\"session\":\"" + now_text() + "\"}")) {
+        std::printf("cannot write the crash journal %s; not tuning without it\n", path.string().c_str());
+        return 1;
+    }
     for (const auto& f : journal.freezes())
         std::printf("warning: a previous run froze the machine at %s; staying below it from now on\n", f.c_str());
     if (!gpu.set_power_limit) std::printf("power limit: not adjustable on this card, skipped\n");
@@ -324,11 +337,16 @@ static int optimize(gao::Preset preset) {
                 r.baseline.score, r.baseline.avg_core_mhz, r.baseline.avg_mem_mhz, r.baseline.peak_temp_c, r.baseline.avg_power_w);
     std::printf("  after:  score=%.0f it/s  core=%d MHz  mem=%d MHz  peak=%d C  power=%d W\n",
                 r.soak.score, r.soak.avg_core_mhz, r.soak.avg_mem_mhz, r.soak.peak_temp_c, r.soak.avg_power_w);
-    gao::Config cfg = load_config();
-    cfg.profile = gao::Profile{preset, r.power_pct, r.core_mhz, r.mem_mhz, nvml.DriverVersion(),
-                               nvml.GpuUuid(kGpu), now_text()};
-    if (save_config(cfg)) std::printf("Saved: `gao --apply` re-applies it, `gao --boot on` applies it at every logon.\n");
-    else std::printf("warning: could not save the profile to %s\n", gao::config_path().string().c_str());
+    const std::string driver = nvml.DriverVersion(), gpu_id = nvml.GpuUuid(kGpu);
+    if (driver.empty() || gpu_id.empty()) {
+        std::printf("not saved: NVML did not report the driver version or GPU id, so the profile could never be re-applied\n");
+    } else {
+        gao::Config cfg = load_config();
+        cfg.profile = gao::Profile{preset, r.power_pct, r.core_mhz, r.mem_mhz, driver, gpu_id, now_text()};
+        cfg.boot_strikes = 0;   // strikes belong to the profile they were earned by
+        if (save_config(cfg)) std::printf("Saved: `gao --apply` re-applies it, `gao --boot on` applies it at every logon.\n");
+        else std::printf("warning: could not save the profile to %s\n", gao::config_path().string().c_str());
+    }
     std::printf("Applied until reboot. `gao --reset` returns to stock.\n");
     return 0;
 }
@@ -421,7 +439,7 @@ static int status() {
     else std::printf("boot copy:  OUTDATED -- run `gao --boot on` to install this build\n");
     std::printf("strikes:    %d of %d\n", cfg.boot_strikes, gao::kMaxBootStrikes);
     const auto log = gao::read_lines(gao::boot_log_path());
-    if (!log.empty()) std::printf("last boot:  %s\n", log.back().c_str());
+    if (log && !log->empty()) std::printf("last boot:  %s\n", log->back().c_str());
     return 0;
 }
 

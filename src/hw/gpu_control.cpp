@@ -12,7 +12,8 @@ GpuControl make_gpu_control(Nvml& nvml, Nvapi& nvapi, unsigned gpu) {
     const bool power = nvml.PowerLimitRangePct(gpu).has_value();
     if (power) {
         c.set_power_limit = [&nvml, gpu](int pct) { return nvml.SetPowerLimitPct(gpu, pct); };
-        c.power_limit_range_pct = [&nvml, gpu] { return *nvml.PowerLimitRangePct(gpu); };
+        // {0, 0} when the query fails later on; the power step skips such a range.
+        c.power_limit_range_pct = [&nvml, gpu] { return nvml.PowerLimitRangePct(gpu).value_or(std::pair{0, 0}); };
     }
     // Stock = offsets 0 and, where the card allows it, the default power limit.
     c.reset_to_stock = [&nvapi, &nvml, gpu, power] {
