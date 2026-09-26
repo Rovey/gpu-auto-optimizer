@@ -11,19 +11,46 @@ permissions:
 jobs:
   build-and-test:
     name: Build and test (x64)
-    runs-on: windows-latest
+    # Pinned: the windows-latest label moves to new images (and toolchains)
+    # without warning.
+    runs-on: windows-2025
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Toolchain
+        run: cmake --version
+
+      # Configure, build Release and run the tests (CMakePresets.json). The
+      # full executable is built even though the runner has no GPU: that still
+      # catches link errors in the hardware layer.
+      - name: Build and test
+        run: cmake --workflow --preset ci
+
+  asan:
+    name: Unit tests under AddressSanitizer
+    runs-on: windows-2025
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       - name: Configure
-        run: cmake -S . -B build -A x64
+        run: cmake --preset asan
 
-      # The full executable is built, not just the test target: the runner has no
-      # GPU, but it still catches link errors in the hardware layer.
       - name: Build
-        run: cmake --build build --config Release
+        run: cmake --build --preset asan
 
+      # The MSVC ASan runtime DLL lives next to the compiler; put it on PATH or
+      # the test binary cannot start. Fail loudly rather than skip.
       - name: Test
-        run: ctest --test-dir build -C Release --output-on-failure
+        shell: pwsh
+        run: |
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+          $tools = Get-ChildItem "$vs\VC\Tools\MSVC\*\bin\Hostx64\x64" | Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not (Test-Path (Join-Path $tools.FullName 'clang_rt.asan_dynamic-x86_64.dll'))) { throw "ASan runtime not found under $vs" }
+          $env:PATH = "$($tools.FullName);$env:PATH"
+          ctest --preset asan
