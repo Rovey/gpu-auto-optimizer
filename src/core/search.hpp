@@ -34,6 +34,7 @@ struct OptimizeIo {
 struct OptimizeResult {
     bool ok = false;
     std::string reason;        // why it stopped, when !ok
+    bool stock_restored = false;   // when !ok: did the reset to stock succeed?
     int power_pct = 100;
     int core_mhz = 0;
     int mem_mhz = 0;

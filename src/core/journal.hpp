@@ -35,7 +35,13 @@ public:
     bool complete(int id, const std::string& verdict);
 
 private:
+    bool write(const std::string& line);
+
     Append append_;
+    // The existing file ended in an unparseable line -- most likely one torn
+    // by a power cut, without its newline. The next write starts with '\n'
+    // so it is not glued onto that fragment.
+    bool torn_tail_ = false;
     Ceilings ceilings_;
     std::vector<std::string> freezes_;
     int next_id_ = 1;

@@ -72,6 +72,10 @@ struct FakeCard {
     bool stock_unstable = false;
     int soak_failures = 0;           // how many 60 s probes fail before one passes
     int noisy_power_pct = -1;        // a 20 s probe at this power reads 10 % low
+    int soak_extra_heat = 0;         // a 60 s probe peaks this much hotter than a 20 s one
+    bool abort_on_soak = false;      // Ctrl+C arrives while the soak probe runs
+    bool aborted_now = false;
+    int reset_calls = 0, reset_fails_from = -1;   // reset_to_stock fails from this call on
     int fail_core_set_at = -1;       // set_core_offset(this) returns false
     int max_core_seen = 0;
     int probes = 0, power_probes = 0;
@@ -89,7 +93,10 @@ struct FakeCard {
             core = v; max_core_seen = std::max(max_core_seen, v); return true;
         };
         g.set_mem_offset = [this](int v) { mem = v; return true; };
-        g.reset_to_stock = [this] { power = 100; core = 0; mem = 0; return true; };
+        g.reset_to_stock = [this] {
+            if (reset_fails_from >= 0 && ++reset_calls > reset_fails_from) return false;
+            power = 100; core = 0; mem = 0; return true;
+        };
         if (with_power) {
             g.set_power_limit = [this](int p) { power = p; return true; };
             g.power_limit_range_pct = [range] { return range; };
@@ -102,7 +109,8 @@ struct FakeCard {
             if (seconds == 20) ++power_probes;
             StabilityResult r;
             r.seconds = seconds;
-            r.peak_temp_c = static_cast<int>(40 + 0.3 * power);
+            r.peak_temp_c = static_cast<int>(40 + 0.3 * power) + (seconds == 60 ? soak_extra_heat : 0);
+            if (seconds == 60 && abort_on_soak) aborted_now = true;
             r.score = 1000.0 * std::min(power, 90) / 90;
             if (seconds == 20 && power == noisy_power_pct) r.score *= 0.9;
             if (stock_unstable || core > core_edge || mem > mem_edge) r.verdict = Verdict::WrongResult;
@@ -121,7 +129,7 @@ struct Run {
         Journal j(card.journal, [this](const std::string& l) { card.journal.push_back(l); return true; });
         OptimizeIo io;
         io.probe = card.probe();
-        io.aborted = [this] { return abort_after_probes >= 0 && card.probes >= abort_after_probes; };
+        io.aborted = [this] { return card.aborted_now || (abort_after_probes >= 0 && card.probes >= abort_after_probes); };
         io.log = [this](const std::string& m) { log.push_back(m); };
         return optimize(gpu, objectives_for(preset), j, io);
     }
@@ -191,6 +199,7 @@ TEST_CASE("an unstable stock card aborts before tuning") {
     CHECK(run.card.probes == 1);
     CHECK(run.card.core == 0);
     CHECK(run.card.power == 100);
+    CHECK(r.stock_restored);
 }
 
 TEST_CASE("a failed soak steps both clocks down once and succeeds") {
@@ -272,4 +281,39 @@ TEST_CASE("efficiency reference ignores one noisy low probe at the cap") {
     const auto r = run.go(Preset::Quiet);
     REQUIRE(r.ok);
     CHECK(r.power_pct == 90);
+}
+
+TEST_CASE("Ctrl+C during the soak still restores stock") {
+    Run run;
+    run.card.abort_on_soak = true;   // the soak itself would pass
+    const auto r = run.go(Preset::BestOfMyGpu);
+    CHECK_FALSE(r.ok);
+    CHECK(r.reason == "aborted");
+    CHECK(run.card.core == 0);
+    CHECK(run.card.mem == 0);
+    CHECK(run.card.power == 100);
+}
+
+TEST_CASE("a failed reset is reported, not claimed as stock") {
+    Run run;
+    run.card.stock_unstable = true;
+    run.card.reset_fails_from = 1;   // the first reset (before baseline) works, the stop path's fails
+    const auto r = run.go(Preset::BestOfMyGpu);
+    CHECK_FALSE(r.ok);
+    CHECK_FALSE(r.stock_restored);
+    bool told = false;
+    for (const auto& m : run.log) told |= m.find("reset FAILED") != std::string::npos;
+    CHECK(told);
+}
+
+TEST_CASE("a soak that runs too hot lowers power, not clocks") {
+    // 20 s power probes read cooler than a 60 s soak; lower clocks barely
+    // change temperature, lower power does.
+    Run run;
+    run.card.soak_extra_heat = 2;    // at 115 %: 74 + 2 = 76 > 75
+    const auto r = run.go(Preset::BestOfMyGpu);
+    REQUIRE(r.ok);
+    CHECK(r.power_pct == 110);
+    CHECK(r.core_mhz == 105);
+    CHECK(r.mem_mhz == 550);
 }

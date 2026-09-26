@@ -120,6 +120,14 @@ bool Nvml::SetPowerLimitPct(unsigned index, int pct) {
         error_ = "nvmlDeviceGetPowerManagementDefaultLimit failed"; return false;
     }
     const unsigned target = static_cast<unsigned>(static_cast<unsigned long long>(def) * pct / 100);
+    auto close_enough = [&](unsigned mw) {
+        const long long diff = static_cast<long long>(mw) - static_cast<long long>(target);
+        return (diff < 0 ? -diff : diff) <= def / 100;
+    };
+    // Already there: no write. Some cards report constraints but refuse the
+    // set call; without this, resetting to a default they already have
+    // would fail and block every run.
+    if (p_powerlimit && p_powerlimit(dev, &now) == NVML_SUCCESS && close_enough(now)) return true;
     if (!p_pl_set || p_pl_set(dev, target) != NVML_SUCCESS) {
         error_ = "nvmlDeviceSetPowerManagementLimit failed (elevated?)"; return false;
     }
@@ -127,8 +135,7 @@ bool Nvml::SetPowerLimitPct(unsigned index, int pct) {
     if (!p_powerlimit || p_powerlimit(dev, &now) != NVML_SUCCESS) {
         error_ = "nvmlDeviceGetPowerManagementLimit failed after set"; return false;
     }
-    const long long diff = static_cast<long long>(now) - static_cast<long long>(target);
-    if ((diff < 0 ? -diff : diff) > def / 100) {
+    if (!close_enough(now)) {
         error_ = "power limit read back " + std::to_string(now / 1000) + " W, requested " + std::to_string(target / 1000) + " W";
         return false;
     }

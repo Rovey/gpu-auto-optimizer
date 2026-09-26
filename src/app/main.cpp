@@ -190,13 +190,21 @@ static int stress(int seconds, int max_temp_c, gao::StressSelftest selftest) {
 }
 
 static std::atomic<bool> g_abort{false};
+static const gao::GpuControl* g_gpu = nullptr;   // set while --optimize runs
 
 // Ctrl+C / Ctrl+Break do not kill the process during --optimize: they ask
 // the search to stop, and the search restores stock before returning.
+// Closing the window, logoff and shutdown do kill it (Windows allows ~5 s),
+// so those reset to stock right here instead of leaving a candidate applied.
 static BOOL WINAPI OnConsoleCtrl(DWORD type) {
     if (type == CTRL_C_EVENT || type == CTRL_BREAK_EVENT) {
         g_abort = true;
         std::printf("\nabort requested -- finishing the current probe, then restoring stock\n");
+        return TRUE;
+    }
+    if (type == CTRL_CLOSE_EVENT || type == CTRL_LOGOFF_EVENT || type == CTRL_SHUTDOWN_EVENT) {
+        g_abort = true;
+        if (g_gpu && g_gpu->reset_to_stock) g_gpu->reset_to_stock();
         return TRUE;
     }
     return FALSE;
@@ -233,6 +241,7 @@ static int optimize(gao::Preset preset) {
     if (!gpu.set_power_limit) std::printf("power limit: not adjustable on this card, skipped\n");
     if (!gpu.set_fan_pct) std::printf("fan: not controllable on this card, skipped\n");
 
+    g_gpu = &gpu;
     SetConsoleCtrlHandler(OnConsoleCtrl, TRUE);
     gao::OptimizeIo io;
     io.probe = [&](double seconds, int max_temp) {
@@ -242,8 +251,13 @@ static int optimize(gao::Preset preset) {
     io.log = [](const std::string& m) { std::printf("  %s\n", m.c_str()); };
     const gao::OptimizeResult r = gao::optimize(gpu, gao::objectives_for(preset), journal, io);
     SetConsoleCtrlHandler(OnConsoleCtrl, FALSE);
+    g_gpu = nullptr;
 
-    if (!r.ok) { std::printf("RESULT: not applied -- %s (card at stock)\n", r.reason.c_str()); return 1; }
+    if (!r.ok) {
+        std::printf("RESULT: not applied -- %s (%s)\n", r.reason.c_str(),
+                    r.stock_restored ? "card at stock" : "reset to stock FAILED, run `gao --reset`");
+        return 1;
+    }
     std::printf("RESULT: power %d %%, core +%d MHz (max stable +%d), mem +%d MHz (max stable +%d)\n",
                 r.power_pct, r.core_mhz, r.core_max_stable, r.mem_mhz, r.mem_max_stable);
     std::printf("  before: score=%.0f it/s  core=%d MHz  mem=%d MHz  peak=%d C  power=%d W\n",

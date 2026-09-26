@@ -91,3 +91,22 @@ TEST_CASE("a failed append reports -1 and does not advance") {
     CHECK(j.begin(15, std::nullopt) == -1);
     CHECK(j.next_id() == 1);
 }
+
+TEST_CASE("an append after a torn last line starts on a fresh line") {
+    // A power cut mid-append leaves a line without its newline; the next
+    // begin must not be glued onto it, or a freeze during it is lost.
+    const std::string torn = "{\"id\":4,\"co";
+    Sink s;
+    Journal j({torn}, s.append());
+    j.begin(15, std::nullopt);
+    std::string file = torn;
+    for (const auto& l : s.lines) file += l + "\n";   // what append_line_durable writes
+    std::vector<std::string> lines;
+    for (size_t a = 0, b; a < file.size(); a = b + 1) {
+        b = file.find('\n', a);
+        if (b == std::string::npos) b = file.size();
+        lines.push_back(file.substr(a, b - a));
+    }
+    Journal after(lines, s.append());
+    CHECK(after.ceilings().core_mhz == 15);
+}

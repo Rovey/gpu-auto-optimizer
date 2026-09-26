@@ -62,10 +62,11 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
     std::string stopped;   // non-empty once the run must end; later probes become no-ops
     auto log = [&](const std::string& m) { if (io.log) io.log(m); };
     auto finish_fail = [&](const std::string& why) {
-        if (gpu.reset_to_stock) gpu.reset_to_stock();
+        r.stock_restored = gpu.reset_to_stock && gpu.reset_to_stock();
         r.ok = false;
         r.reason = why;
-        log("stopped: " + why + " -- card restored to stock");
+        log("stopped: " + why + (r.stock_restored ? " -- card restored to stock"
+                                                   : " -- reset FAILED, run `gao --reset`"));
         return r;
     };
     bool power_ctl = obj.power && gpu.set_power_limit && gpu.power_limit_range_pct;   // false once skipped
@@ -100,6 +101,7 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
     if (base->verdict != Verdict::Stable) return finish_fail(std::string("stock is not stable (") + verdict_name(base->verdict) + ")");
 
     // Power.
+    int power_floor = 100;   // lowest power the soak may fall back to
     if (power_ctl) {
         const auto [min_pct, max_pct] = gpu.power_limit_range_pct();
         if (min_pct > 100 || max_pct < 100 || min_pct >= max_pct) {
@@ -107,6 +109,7 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
             power_ctl = false;
         } else {
             const int grid_lo = 100 - (100 - min_pct) / kPowerStep * kPowerStep;
+            power_floor = grid_lo;
             std::map<int, StabilityResult> seen;
             auto run_power = [&](int pct) -> std::optional<StabilityResult> {
                 if (!stopped.empty()) return std::nullopt;
@@ -169,7 +172,8 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
         log("mem: highest stable +" + std::to_string(r.mem_max_stable) + ", applying +" + std::to_string(r.mem_mhz));
     }
 
-    // Soak, stepping both clocks down on failure.
+    // Soak. On failure: too hot -> one power step down (lower clocks barely
+    // cool the card); anything else -> both clocks one step down.
     for (int attempt = 0; attempt <= kSoakRetries; ++attempt) {
         if (io.aborted && io.aborted()) return finish_fail("aborted");
         const int id = journal.begin(obj.core_oc ? std::optional<int>(r.core_mhz) : std::nullopt,
@@ -182,10 +186,16 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
         journal.complete(id, s ? verdict_name(s->verdict) : "NOT RUN");
         if (!s) return finish_fail(stopped);
         log("soak: " + describe(*s));
+        // The soak is the longest probe; Ctrl+C during it must still win.
+        if (io.aborted && io.aborted()) return finish_fail("aborted");
         if (s->verdict == Verdict::Stable) {
             r.soak = *s;
             r.ok = true;
             return r;
+        }
+        if (s->verdict == Verdict::TooHot && power_ctl && r.power_pct - kPowerStep >= power_floor) {
+            r.power_pct -= kPowerStep;
+            continue;
         }
         if (obj.core_oc) r.core_mhz = std::max(0, r.core_mhz - kCoreStep);
         if (obj.mem_oc) r.mem_mhz = std::max(0, r.mem_mhz - kMemStep);

@@ -31,7 +31,9 @@ Journal::Journal(const std::vector<std::string>& existing_lines, Append append)
     for (std::string line : existing_lines) {
         if (!line.empty() && line.back() == '\r') line.pop_back();
         const nlohmann::json j = nlohmann::json::parse(line, nullptr, /*allow_exceptions=*/false);
-        if (j.is_discarded() || !j.is_object()) continue;
+        const bool parsed = !j.is_discarded() && j.is_object();
+        torn_tail_ = !line.empty() && !parsed;   // only the last line's value survives the loop
+        if (!parsed) continue;
         const auto id = int_field(j, "id");
         const auto state = j.find("state");
         if (!id || state == j.end() || !state->is_string()) continue;
@@ -51,13 +53,19 @@ int Journal::begin(std::optional<int> core, std::optional<int> mem) {
     nlohmann::json j = {{"id", next_id_}, {"state", "begin"}};
     if (core) j["core"] = *core;
     if (mem) j["mem"] = *mem;
-    if (!append_(j.dump())) return -1;
+    if (!write(j.dump())) return -1;
     return next_id_++;
 }
 
 bool Journal::complete(int id, const std::string& verdict) {
     const nlohmann::json j = {{"id", id}, {"state", "complete"}, {"verdict", verdict}};
-    return append_(j.dump());
+    return write(j.dump());
+}
+
+bool Journal::write(const std::string& line) {
+    if (!append_(torn_tail_ ? "\n" + line : line)) return false;
+    torn_tail_ = false;
+    return true;
 }
 
 }
