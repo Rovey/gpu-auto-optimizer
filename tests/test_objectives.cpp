@@ -1,5 +1,6 @@
 #include "doctest/doctest.h"
 #include "core/objectives.hpp"
+#include <string>
 
 using namespace gao;
 
@@ -42,4 +43,13 @@ TEST_CASE("no preset ever enables undervolting") {
                            Preset::CoolAndEfficient, Preset::MaxPerformance}) {
         CHECK_FALSE(objectives_for(p).undervolt);
     }
+}
+
+TEST_CASE("preset names round-trip and unknown names are rejected") {
+    for (Preset p : {Preset::BestOfMyGpu, Preset::Quiet, Preset::CoolAndEfficient, Preset::MaxPerformance})
+        CHECK(preset_from_name(preset_name(p)) == p);
+    CHECK(std::string(preset_name(Preset::BestOfMyGpu)) == "best");
+    CHECK(std::string(preset_name(Preset::CoolAndEfficient)) == "cool");
+    CHECK_FALSE(preset_from_name("turbo").has_value());
+    CHECK_FALSE(preset_from_name("").has_value());
 }

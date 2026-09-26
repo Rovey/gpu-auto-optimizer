@@ -1,4 +1,6 @@
 #pragma once
+#include <optional>
+#include <string>
 
 namespace gao {
 
@@ -17,5 +19,9 @@ struct Objectives {
 };
 
 Objectives objectives_for(Preset preset);
+
+// Short names used on the command line and in gao.json.
+const char* preset_name(Preset preset);
+std::optional<Preset> preset_from_name(const std::string& name);
 
 }
