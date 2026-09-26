@@ -58,8 +58,8 @@ TEST_CASE("a profile with a wrong type, a missing field or an unknown preset is 
 }
 
 TEST_CASE("strike count is sanitized") {
-    CHECK(from_json(R"({"boot_strikes":-4})").boot_strikes == 0);
-    CHECK(from_json(R"({"boot_strikes":"three"})").boot_strikes == 0);
+    CHECK(from_json(R"({"boot_strikes":-4})").boot_strikes == 3);
+    CHECK(from_json(R"({"boot_strikes":"three"})").boot_strikes == 3);
     CHECK(from_json(R"({"boot_strikes":3})").boot_strikes == 3);
 }
 
@@ -72,4 +72,17 @@ TEST_CASE("an old-format config loads without error") {
 
 TEST_CASE("a profile saved before GPU identity existed is no profile") {
     CHECK_FALSE(from_json(R"({"profile":{"preset":"best","power_pct":105,"core_mhz":135,"mem_mhz":1050,"driver":"610.74","saved_at":"y"}})").profile);
+}
+
+TEST_CASE("a strike count that is not a sane integer fails closed") {
+    // Anything but a whole number in 0..1000 must disable boot-apply rather
+    // than silently re-enable it.
+    for (const char* bad : {R"({"boot_strikes":3.0})", R"({"boot_strikes":-1})", R"({"boot_strikes":4294967296})",
+                            R"({"boot_strikes":"x"})", R"({"boot_strikes":1001})", R"({"boot_strikes":null})"}) {
+        CAPTURE(bad);
+        CHECK(from_json(bad).boot_strikes >= 3);
+    }
+    CHECK(from_json(R"({"boot_strikes":0})").boot_strikes == 0);
+    CHECK(from_json(R"({"boot_strikes":2})").boot_strikes == 2);
+    CHECK(from_json(R"({})").boot_strikes == 0);
 }

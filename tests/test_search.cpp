@@ -78,6 +78,7 @@ struct FakeCard {
     bool abort_on_soak = false;      // Ctrl+C arrives while the soak probe runs
     bool aborted_now = false;
     int reset_calls = 0, reset_fails_from = -1;   // reset_to_stock fails from this call on
+    int completes_ok = -1;           // journal 'complete' writes that succeed before they fail
     int fail_core_set_at = -1;       // set_core_offset(this) returns false
     int max_core_seen = 0;
     std::vector<int> confirm_fail_core;   // a 30 s probe at these core offsets fails
@@ -137,7 +138,12 @@ struct Run {
     std::vector<std::string> log;
     int abort_after_probes = -1;
     OptimizeResult go(Preset preset, GpuControl gpu) {
-        Journal j(card.journal, [this](const std::string& l) { card.journal.push_back(l); return true; });
+        Journal j(card.journal, [this](const std::string& l) {
+            if (l.find("\"complete\"") != std::string::npos && card.completes_ok >= 0 && card.completes_ok-- == 0)
+                return false;
+            card.journal.push_back(l);
+            return true;
+        });
         OptimizeIo io;
         io.probe = card.probe();
         io.aborted = [this] { return card.aborted_now || (abort_after_probes >= 0 && card.probes >= abort_after_probes); };
@@ -457,4 +463,16 @@ TEST_CASE("bandwidth noise wider than one step does not pick a higher offset") {
         return MemSample{true, 500.0 * (1 + (((v / 50) % 3) - 1) * 0.0045)};
     });
     CHECK(r == 0);
+}
+
+TEST_CASE("a journal entry that cannot be closed stops the run at stock") {
+    // An open entry would blacklist the candidate forever as if it had frozen
+    // the machine; carrying on would hide that the journal is failing.
+    Run run;
+    run.card.completes_ok = 2;
+    const auto r = run.go(Preset::BestOfMyGpu);
+    CHECK_FALSE(r.ok);
+    CHECK(r.reason.find("journal") != std::string::npos);
+    CHECK(run.card.core == 0);
+    CHECK(run.card.power == 100);
 }

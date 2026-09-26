@@ -110,3 +110,23 @@ TEST_CASE("an append after a torn last line starts on a fresh line") {
     Journal after(lines, s.append());
     CHECK(after.ceilings().core_mhz == 15);
 }
+
+TEST_CASE("ids and clock values outside sane bounds are ignored") {
+    // A hand-edited journal must not overflow next_id or ceiling - 1.
+    Sink s;
+    const std::vector<std::string> lines = {
+        "{\"id\":2147483647,\"core\":150,\"state\":\"begin\"}",
+        "{\"id\":0,\"core\":150,\"state\":\"begin\"}",
+        "{\"id\":-3,\"mem\":400,\"state\":\"begin\"}",
+        "{\"id\":7,\"core\":-2147483648,\"state\":\"begin\"}",
+        "{\"id\":8,\"mem\":200000,\"state\":\"begin\"}",
+        "{\"id\":4294967305,\"core\":60,\"state\":\"begin\"}",   // would truncate to id 9
+        "{\"id\":6,\"core\":4294967356,\"state\":\"begin\"}",    // would truncate to core 60
+        "{\"id\":9,\"core\":90,\"state\":\"begin\"}",
+    };
+    Journal j(lines, s.append());
+    CHECK(j.ceilings().core_mhz == 90);
+    CHECK(j.ceilings().mem_mhz == INT_MAX);
+    CHECK(j.next_id() == 10);
+    CHECK(j.begin(15, std::nullopt) == 10);
+}

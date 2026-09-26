@@ -1,4 +1,5 @@
 #include "core/config.hpp"
+#include "core/boot.hpp"
 #include "nlohmann/json.hpp"
 #include <algorithm>
 
@@ -25,8 +26,13 @@ Config from_json(const std::string& text) {
     Config c;
     const nlohmann::json j = nlohmann::json::parse(text, nullptr, /*allow_exceptions=*/false);
     if (j.is_discarded() || !j.is_object()) return c;
-    if (const auto it = j.find("boot_strikes"); it != j.end() && it->is_number_integer())
-        c.boot_strikes = std::max(0, it->get<int>());
+    // Fail closed: a strike count that is present but not a whole number in
+    // 0..1000 disables boot-apply instead of silently re-enabling it.
+    if (const auto it = j.find("boot_strikes"); it != j.end()) {
+        const bool sane = it->is_number_integer() && it->get<long long>() >= 0 && it->get<long long>() <= 1000 &&
+                          !(it->is_number_unsigned() && it->get<unsigned long long>() > 1000);
+        c.boot_strikes = sane ? static_cast<int>(it->get<long long>()) : kMaxBootStrikes;
+    }
 
     const auto pj = j.find("profile");
     if (pj == j.end() || !pj->is_object()) return c;

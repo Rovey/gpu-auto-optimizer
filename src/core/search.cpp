@@ -188,7 +188,10 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
         if (!set_state(r.power_pct, core, mem)) { journal.complete(id, "SET FAILED"); return std::nullopt; }
         const auto s = probe(seconds, obj.max_temp_c);
         if (s && s->verdict == Verdict::Stable && extra) extra();
-        journal.complete(id, s ? verdict_name(s->verdict) : "NOT RUN");
+        if (!journal.complete(id, s ? verdict_name(s->verdict) : "NOT RUN")) {
+            stopped = "could not write the journal";
+            return std::nullopt;
+        }
         if (!s) return std::nullopt;
         log(std::string(seconds == kConfirmProbeS ? "confirm " : "") + "core +" + std::to_string(core) +
             " / mem +" + std::to_string(mem) + ": " + describe(*s));
@@ -257,7 +260,8 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
         log("soak: 60 s at power " + std::to_string(r.power_pct) + " %, core +" + std::to_string(r.core_mhz) +
             ", mem +" + std::to_string(r.mem_mhz));
         const auto s = probe(kSoakS, obj.max_temp_c);
-        journal.complete(id, s ? verdict_name(s->verdict) : "NOT RUN");
+        if (!journal.complete(id, s ? verdict_name(s->verdict) : "NOT RUN"))
+            return finish_fail("could not write the journal");
         if (!s) return finish_fail(stopped);
         log("soak: " + describe(*s));
         // The soak is the longest probe; Ctrl+C during it must still win.
