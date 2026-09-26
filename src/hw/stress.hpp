@@ -1,0 +1,40 @@
+#pragma once
+#include "core/stability.hpp"
+#include <memory>
+#include <string>
+
+namespace gao {
+
+// Hidden test modes for hardware checks 11 and 12: stock hardware never
+// produces a wrong value or a TDR on its own.
+enum class StressSelftest {
+    None,
+    WrongResult,   // one reference value is corrupted before upload
+    Tdr,           // the first batch is one dispatch far longer than the 2 s TDR limit
+};
+
+// The DX11 compute stress load. Multiplies two exact-float matrices (see
+// core/stress_math.hpp) and has the GPU count every output element that
+// differs from the uploaded CPU reference. Changes no GPU settings.
+class Stress {
+public:
+    Stress();
+    ~Stress();
+    bool Init(StressSelftest selftest = StressSelftest::None);
+    // One batch of dispatches. Batches start at one dispatch and double until
+    // they take ~250 ms. After a lost device, the next call recreates it.
+    StressBatch Batch();
+    const std::string& Error() const { return error_; }
+    const std::string& AdapterName() const { return adapter_name_; }
+
+private:
+    struct Impl;
+    std::unique_ptr<Impl> impl_;   // keeps D3D headers out of every includer
+    StressSelftest selftest_ = StressSelftest::None;
+    std::string error_;
+    std::string adapter_name_;
+    int dispatches_ = 1;
+    bool CreateDevice();
+};
+
+}

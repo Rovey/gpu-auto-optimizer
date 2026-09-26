@@ -32,9 +32,10 @@ add_library(hw STATIC
   src/hw/nvml.hpp src/hw/nvml.cpp
   src/hw/nvapi.hpp src/hw/nvapi.cpp
   src/hw/gpu_control.hpp src/hw/gpu_control.cpp
+  src/hw/stress.hpp src/hw/stress.cpp
 )
 target_include_directories(hw PUBLIC src)
-target_link_libraries(hw PUBLIC core)
+target_link_libraries(hw PUBLIC core d3d11 dxgi d3dcompiler)
 
 add_executable(gao src/app/main.cpp)
 target_link_libraries(gao PRIVATE core hw)
