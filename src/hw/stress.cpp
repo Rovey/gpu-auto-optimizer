@@ -20,45 +20,57 @@ namespace gao {
 namespace {
 
 constexpr UINT kNvidiaVendorId = 0x10DE;
-constexpr int kTile = 32;   // output tile per thread group (16x16 threads, 2x2 outputs each)
+constexpr int kTile = 64;   // output tile per thread group (16x16 threads, 4x4 outputs each)
 constexpr double kTargetBatchMs = 250.0;
 constexpr int kMaxDispatches = 4096;
 
-// Tiled, register-blocked matmul: every thread computes a 2x2 block of
-// C = A * B (four FMAs per shared-memory load pair; on an RTX 4070 this
-// draws ~173 of 200 W versus ~132 W for one output per thread), compares
-// each element with the reference, and counts mismatches.
+// Tiled, register-blocked matmul: every thread computes a 4x4 block of
+// C = A * B (16 FMAs per 8 shared-memory reads), compares each element with
+// the reference, and counts mismatches. The group stages a 64x16 slice of A
+// and a 16x64 slice of B per step; each of the 256 threads loads 4 of each.
 const char kShader[] = R"(
 #define N 1024
-#define T 32
+#define TM 64
+#define TK 16
 StructuredBuffer<float> A : register(t0);
 StructuredBuffer<float> B : register(t1);
 StructuredBuffer<float> Ref : register(t2);
 RWStructuredBuffer<uint> Errors : register(u0);
-groupshared float As[T][T];
-groupshared float Bs[T][T];
+groupshared float As[TM][TK];
+groupshared float Bs[TK][TM];
 [numthreads(16, 16, 1)]
 void main(uint3 gid : SV_GroupID, uint3 tid : SV_GroupThreadID) {
-    uint r0 = gid.y * T + tid.y * 2;
-    uint c0 = gid.x * T + tid.x * 2;
-    float c00 = 0, c01 = 0, c10 = 0, c11 = 0;
-    [loop] for (uint k0 = 0; k0 < N; k0 += T) {
-        [unroll] for (uint i = 0; i < 2; ++i)
-            [unroll] for (uint j = 0; j < 2; ++j) {
-                As[tid.y * 2 + i][tid.x * 2 + j] = A[(r0 + i) * N + k0 + tid.x * 2 + j];
-                Bs[tid.y * 2 + i][tid.x * 2 + j] = B[(k0 + tid.y * 2 + i) * N + c0 + j];
-            }
+    uint lin = tid.y * 16 + tid.x;
+    uint r0 = gid.y * TM + tid.y * 4;
+    uint c0 = gid.x * TM + tid.x * 4;
+    // Four float4 rows instead of a float[4][4]: FXC takes minutes to
+    // compile a fully unrolled local array, and seconds for this.
+    float4 acc0 = 0, acc1 = 0, acc2 = 0, acc3 = 0;
+    [loop] for (uint k0 = 0; k0 < N; k0 += TK) {
+        [unroll] for (uint l = 0; l < 4; ++l) {
+            uint e = lin + l * 256;
+            uint ar = e / TK, ac = e % TK;
+            As[ar][ac] = A[(gid.y * TM + ar) * N + k0 + ac];
+            uint br = e / TM, bc = e % TM;
+            Bs[br][bc] = B[(k0 + br) * N + gid.x * TM + bc];
+        }
         GroupMemoryBarrierWithGroupSync();
-        [unroll] for (uint k = 0; k < T; ++k) {
-            float x0 = As[tid.y * 2][k], x1 = As[tid.y * 2 + 1][k];
-            float y0 = Bs[k][tid.x * 2], y1 = Bs[k][tid.x * 2 + 1];
-            c00 = mad(x0, y0, c00); c01 = mad(x0, y1, c01);
-            c10 = mad(x1, y0, c10); c11 = mad(x1, y1, c11);
+        [unroll] for (uint k = 0; k < TK; ++k) {
+            float4 b = float4(Bs[k][tid.x * 4], Bs[k][tid.x * 4 + 1], Bs[k][tid.x * 4 + 2], Bs[k][tid.x * 4 + 3]);
+            acc0 = mad(As[tid.y * 4][k], b, acc0);
+            acc1 = mad(As[tid.y * 4 + 1][k], b, acc1);
+            acc2 = mad(As[tid.y * 4 + 2][k], b, acc2);
+            acc3 = mad(As[tid.y * 4 + 3][k], b, acc3);
         }
         GroupMemoryBarrierWithGroupSync();
     }
-    uint errs = (c00 != Ref[r0 * N + c0]) + (c01 != Ref[r0 * N + c0 + 1])
-              + (c10 != Ref[(r0 + 1) * N + c0]) + (c11 != Ref[(r0 + 1) * N + c0 + 1]);
+    uint base = r0 * N + c0;
+    float4 ref0 = float4(Ref[base], Ref[base + 1], Ref[base + 2], Ref[base + 3]);
+    float4 ref1 = float4(Ref[base + N], Ref[base + N + 1], Ref[base + N + 2], Ref[base + N + 3]);
+    float4 ref2 = float4(Ref[base + 2 * N], Ref[base + 2 * N + 1], Ref[base + 2 * N + 2], Ref[base + 2 * N + 3]);
+    float4 ref3 = float4(Ref[base + 3 * N], Ref[base + 3 * N + 1], Ref[base + 3 * N + 2], Ref[base + 3 * N + 3]);
+    uint4 bad = (acc0 != ref0) + (acc1 != ref1) + (acc2 != ref2) + (acc3 != ref3);
+    uint errs = bad.x + bad.y + bad.z + bad.w;
     if (errs) InterlockedAdd(Errors[0], errs);
 }
 )";
