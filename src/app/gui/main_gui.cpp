@@ -80,6 +80,7 @@ struct App {
     bool watch = false;   // keep the saved tune applied (off after a revert or a reset by choice)
     bool worker_was_running = false;
     bool strike_pending = false;   // a logon apply whose 2-minute grace has not passed yet
+    bool told_about_tray = false;  // the "still running in the tray" balloon, once per session
 
     // Crash dumps are written by a thread created up front (a crashing thread
     // may have no stack or heap left to do it itself).
@@ -539,13 +540,13 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return 0;
         }
         case WM_CLOSE:
-            // With a tune to keep applied, or a run in progress, the window
-            // hides and the tray stays. Otherwise there is nothing to stay for.
-            if (g.watch || g.worker->running()) {
-                ShowWindow(hwnd, SW_HIDE);
-                g.visible = false;
-            } else {
-                g.exit_requested = true;
+            // Closing hides to the tray, like other tray apps; Exit in the tray
+            // menu quits. Say so the first time, or it looks like a quit.
+            ShowWindow(hwnd, SW_HIDE);
+            g.visible = false;
+            if (!g.told_about_tray) {
+                g.told_about_tray = true;
+                tray_icon(NIM_MODIFY, nullptr, L"Still running in the tray. Right-click the icon and choose Exit to quit.");
             }
             return 0;
         case WM_TIMER:

@@ -60,7 +60,7 @@ root; adjust the path for a Debug build.
 | 34 | Watchdog backs off from another tool | tray running, set an offset in MSI Afterburner and Apply | no | a balloon says another program changed the settings; the watchdog does not fight it | |
 | 35 | One instance | start the app twice | no | the second start brings the first window forward and exits | Pass (2026-09-27, after the P5 fix pass): the second start exits with code 0, the first keeps running. |
 | 36 | CLI and tray side by side | tray running with the tune kept applied; `gao --reset`, wait 45 s, `gao --status`; then `gao --optimize` from a shell while the window runs an optimize | yes | after `--reset` the card stays at stock (the tray notes it and does not re-apply); after `gao --apply` the tray keeps the tune applied again; the second optimize refuses with `another optimize is already running` | Pass for reset and apply (2026-09-27): after `gao --reset` the card stayed at stock for 45 s with the tray running (no watchdog line); `gao --apply` applied the tune again. Two optimizes at once not yet tried. |
-| 37 | Closing the window | close the window with no tune applied, then again with a tune kept applied | no / yes | without a tune the app exits; with one it hides to the tray | Pass without a tune (2026-09-27): the app exits on close. |
+| 37 | Closing the window | close the window, then choose Exit in the tray menu | no | closing hides the window to the tray (a balloon says so the first time); Exit quits | |
 
 ## Notes
 
