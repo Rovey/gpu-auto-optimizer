@@ -97,7 +97,7 @@ static int set_offset(const char* label, int mhz, bool core) {
 static int reset() {
     // Stock by choice: tell a running tray app first, or a watchdog tick
     // between the writes and the notice would take it for a TDR and re-apply.
-    gao::app::tell_tray_stock_by_choice();
+    gao::app::tell_tray(gao::app::TrayNotice::StockByChoice);
     gao::Nvapi nvapi;
     if (!nvapi.Init()) { std::printf("NVAPI init failed: %s\n", nvapi.Error().c_str()); return 1; }
     bool ok = nvapi.ResetOffsets(kGpu);
@@ -239,7 +239,7 @@ static int optimize(gao::Preset preset) {
     if (out.saved) std::printf("Saved: `gao --apply` re-applies it, `gao --boot on` applies it at every logon.\n");
     else std::printf("not saved: %s\n", out.save_note.c_str());
     std::printf("Applied until reboot. `gao --reset` returns to stock.\n");
-    return 0;
+    return out.saved ? 0 : 2;   // 2: tuned and applied, but --apply and boot-apply cannot use it
 }
 
 static int apply() {
@@ -260,6 +260,7 @@ static int apply() {
     }
     const gao::GpuControl gpu = gao::make_gpu_control(nvml, nvapi, kGpu);
     if (!gao::apply_profile(gpu, *cfg.profile, &why)) { std::printf("not applied: %s\n", why.c_str()); return 1; }
+    gao::app::tell_tray(gao::app::TrayNotice::TuneApplied);   // a running tray keeps it applied from now on
     std::printf("applied %s\nOK\n", gao::app::profile_text(*cfg.profile).c_str());
     return 0;
 }

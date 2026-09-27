@@ -55,7 +55,7 @@ struct App {
     HWND hwnd = nullptr;
     HANDLE instance_mutex = nullptr;
     UINT taskbar_created = 0;
-    UINT stock_by_choice = 0;
+    UINT tray_notice = 0;
     bool visible = false;
     bool exit_requested = false;
     int input_frames = 0;   // frames still to draw after input, so hover/click feedback shows
@@ -430,9 +430,15 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         tray_icon(NIM_ADD);
         return 0;
     }
-    if (msg == g.stock_by_choice && g.stock_by_choice) {   // gao --reset in a shell
-        g.watch = false;
-        g.ui.watchdog_note = gao::app::now_text() + "  Set to stock from the command line; not re-applied until you apply it again.";
+    if (msg == g.tray_notice && g.tray_notice) {   // gao --reset / gao --apply in a shell
+        if (wp == static_cast<WPARAM>(gao::app::TrayNotice::TuneApplied)) {
+            g.watch = true;
+            g.watchdog = gao::Watchdog();
+            g.ui.watchdog_note = gao::app::now_text() + "  Applied from the command line; kept applied from now on.";
+        } else {
+            g.watch = false;
+            g.ui.watchdog_note = gao::app::now_text() + "  Set to stock from the command line; not re-applied until you apply it again.";
+        }
         refresh_status(false);
         return 0;
     }
@@ -561,11 +567,11 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdline, int) {
     DwmSetWindowAttribute(g.hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark, sizeof(dark));
 
     // Explorer runs unelevated; let its tray notifications and a relaunch's
-    // "come forward" reach an elevated window. Not the stock-by-choice notice:
-    // gao --reset is always elevated, and an unelevated process must not be
-    // able to switch the watchdog off.
+    // "come forward" reach an elevated window. Not the command-line notices:
+    // gao --reset and --apply are always elevated, and an unelevated process
+    // must not be able to switch the watchdog on or off.
     g.taskbar_created = RegisterWindowMessageW(L"TaskbarCreated");
-    g.stock_by_choice = gao::app::stock_by_choice_message();
+    g.tray_notice = gao::app::tray_notice_message();
     for (UINT m : {WM_APP_TRAY, g.taskbar_created, WM_APP_SHOW})
         ChangeWindowMessageFilterEx(g.hwnd, m, MSGFLT_ALLOW, nullptr);
 

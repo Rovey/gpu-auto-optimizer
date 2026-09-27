@@ -43,13 +43,14 @@ bool tuning_in_progress() {
     return r == WAIT_TIMEOUT;
 }
 
-unsigned stock_by_choice_message() {
-    static const UINT msg = RegisterWindowMessageW(L"GpuAutoOptimizer.StockByChoice");
+unsigned tray_notice_message() {
+    static const UINT msg = RegisterWindowMessageW(L"GpuAutoOptimizer.TrayNotice");
     return msg;
 }
 
-void tell_tray_stock_by_choice() {
-    if (const HWND tray = FindWindowW(kTrayWindowClass, nullptr)) PostMessageW(tray, stock_by_choice_message(), 0, 0);
+void tell_tray(TrayNotice notice) {
+    if (const HWND tray = FindWindowW(kTrayWindowClass, nullptr))
+        PostMessageW(tray, tray_notice_message(), static_cast<WPARAM>(notice), 0);
 }
 
 bool is_elevated() {

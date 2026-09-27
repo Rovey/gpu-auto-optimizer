@@ -43,11 +43,13 @@ private:
 // True while another thread or process holds the TuningLock.
 bool tuning_in_progress();
 
-// Tells a running tray app that the card was put back to stock on purpose
-// (gao --reset), so its watchdog must not re-apply the tune.
-void tell_tray_stock_by_choice();
-// The registered window message tell_tray_stock_by_choice() posts.
-unsigned stock_by_choice_message();
+// What the command line tells a running tray app, so its watchdog follows:
+// stock on purpose (gao --reset) stops it; the tune applied (gao --apply)
+// starts it again.
+enum class TrayNotice : unsigned { StockByChoice = 0, TuneApplied = 1 };
+void tell_tray(TrayNotice notice);
+// The registered window message tell_tray() posts; the notice is its wParam.
+unsigned tray_notice_message();
 
 struct OptimizeHooks {
     std::function<bool()> aborted;                        // polled between probes
