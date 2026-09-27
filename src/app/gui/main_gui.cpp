@@ -76,6 +76,7 @@ struct App {
     gao::Watchdog watchdog;
     bool watch = false;   // keep the saved tune applied (off after a revert or a reset by choice)
     bool worker_was_running = false;
+    bool strike_pending = false;   // a logon apply whose 2-minute grace has not passed yet
 
     // Crash dumps are written by a thread created up front (a crashing thread
     // may have no stack or heap left to do it itself).
@@ -113,8 +114,9 @@ LONG WINAPI on_crash(EXCEPTION_POINTERS* ep) {
     g.crash_thread = GetCurrentThreadId();
     SetEvent(g.dump_request);
     WaitForSingleObject(g.dump_done, 15000);
-    if (g.worker && g.worker->active_gpu() && g.worker->active_gpu()->reset_to_stock)
-        g.worker->active_gpu()->reset_to_stock();   // never leave a candidate applied
+    // Never leave a candidate applied. Through our own GpuControl, which lives
+    // as long as the process; the worker's may be mid-teardown.
+    if (g.worker && g.worker->running() && g.gpu.reset_to_stock) g.gpu.reset_to_stock();
     return EXCEPTION_EXECUTE_HANDLER;
 }
 
@@ -220,7 +222,7 @@ void show_window() {
 }
 
 void tray_menu(int x, int y) {
-    const bool busy = g.worker->running();
+    const bool busy = g.worker->running() || gao::app::tuning_in_progress();
     HMENU menu = CreatePopupMenu();
     AppendMenuW(menu, MF_STRING, kMenuOpen, L"Open");
     if (g.ui.elevated) {
@@ -259,8 +261,7 @@ void refresh_status(bool with_task) {
 
 void act_optimize(gao::Preset preset) {
     g.ui.message.clear();
-    g.watch = false;   // the search owns the GPU until it is done
-    g.worker->start(preset);
+    g.worker->start(preset);   // the watchdog skips while it runs
 }
 
 void act_abort() { g.worker->abort(); }
@@ -285,8 +286,15 @@ void act_restart_elevated() {
     }
 }
 
+bool refuse_while_tuning() {
+    if (g.worker->running()) return true;
+    if (!gao::app::tuning_in_progress()) return false;
+    g.ui.message = "An optimize is running on the command line; wait for it to finish.";
+    return true;
+}
+
 void act_apply() {
-    if (g.worker->running()) return;
+    if (refuse_while_tuning()) return;
     std::string why;
     if (!gao::app::prepare_state(&why)) { g.ui.message = why; return; }
     gao::Config cfg = gao::app::load_config();
@@ -302,7 +310,7 @@ void act_apply() {
 }
 
 void act_revert() {
-    if (g.worker->running()) return;
+    if (refuse_while_tuning()) return;
     const bool ok = g.gpu.reset_to_stock && g.gpu.reset_to_stock();
     g.watch = false;   // stock by choice: the watchdog must not undo it
     g.ui.message = ok ? "Back at stock. The saved tune is not re-applied until you apply it again."
@@ -356,8 +364,12 @@ void on_telemetry() {
     const bool running = g.worker->running();
     if (g.worker_was_running && !running) {
         const auto snap = g.worker->snapshot();
-        g.watch = snap.outcome && snap.outcome->ran && snap.outcome->result.ok;
-        g.watchdog = gao::Watchdog();
+        // A run that never started left the GPU alone: keep watching as before.
+        // One that ran ends either at its saved result or at stock.
+        if (snap.outcome && snap.outcome->ran) {
+            g.watch = snap.outcome->result.ok && snap.outcome->saved;
+            g.watchdog = gao::Watchdog();
+        }
         refresh_status(false);
     }
     g.worker_was_running = running;
@@ -402,6 +414,15 @@ void on_watchdog() {
 }
 
 // ---------------------------------------------------------------- window
+
+// The strike counts crashes during the first 2 minutes after a logon apply.
+// A clean exit or logoff in that time is not a crash: clear it then too.
+void clear_strike() {
+    if (!g.strike_pending) return;
+    g.strike_pending = false;
+    KillTimer(g.hwnd, kTimerStrike);
+    gao::app::clear_boot_strike();
+}
 
 LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     if (ImGui_ImplWin32_WndProcHandler(hwnd, msg, wp, lp)) return 1;
@@ -448,7 +469,7 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case WM_TIMER:
             if (wp == kTimerTelemetry) on_telemetry();
             else if (wp == kTimerWatchdog) on_watchdog();
-            else if (wp == kTimerStrike) { KillTimer(hwnd, kTimerStrike); gao::app::clear_boot_strike(); refresh_status(false); }
+            else if (wp == kTimerStrike) { clear_strike(); refresh_status(false); }
             return 0;
         case WM_APP_WAKE:
             g.input_frames = std::max(g.input_frames, 1);
@@ -481,7 +502,8 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return TRUE;
         case WM_ENDSESSION:
             if (wp) {   // the session really ends: stock now, the run cannot finish
-                if (const gao::GpuControl* gpu = g.worker->active_gpu(); gpu && gpu->reset_to_stock) gpu->reset_to_stock();
+                clear_strike();
+                if (g.worker->running() && g.gpu.reset_to_stock) g.gpu.reset_to_stock();
             }
             return 0;
         case WM_DESTROY:
@@ -573,6 +595,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdline, int) {
             const auto logon = gao::app::apply_at_logon();
             if (logon.applied) {
                 g.watch = true;
+                g.strike_pending = true;
                 SetTimer(g.hwnd, kTimerStrike, 2 * 60 * 1000, nullptr);
             } else if (logon.decision != gao::BootDecision::NoProfile) {
                 notify(logon.message);
@@ -600,6 +623,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdline, int) {
         }
         if (quit) break;
         if (g.exit_requested && !g.worker->running()) {
+            clear_strike();
             DestroyWindow(g.hwnd);
             continue;
         }

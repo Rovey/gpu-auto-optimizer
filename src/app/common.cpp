@@ -223,7 +223,7 @@ bool enable_boot(std::string* message) {
     const DWORD n = GetModuleFileNameW(nullptr, self, MAX_PATH);
     if (n == 0 || n >= MAX_PATH) return say("could not find this program's own path", false);
     if (!install_app(std::filesystem::path(self).parent_path(), &why))
-        return say(why + " (if the tray app is running from Program Files, exit it and retry)", false);
+        return say(why, false);
     // The logon task starts the tray app, which applies the tune and stays
     // resident to keep it applied: no time limit.
     const auto exe = installed_tray_path();

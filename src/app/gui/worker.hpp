@@ -28,8 +28,6 @@ public:
     void abort() { abort_ = true; }     // the run restores stock before it ends
     bool running() const { return running_; }
     Snapshot snapshot() const;
-    // The GPU being tuned right now (nullptr otherwise), for an emergency reset.
-    const GpuControl* active_gpu() const { return active_gpu_; }
 
 private:
     std::function<void()> wake_;
@@ -38,7 +36,6 @@ private:
     std::optional<app::OptimizeOutcome> outcome_;
     std::atomic<bool> running_{false};
     std::atomic<bool> abort_{false};
-    std::atomic<const GpuControl*> active_gpu_{nullptr};
     std::jthread thread_;
 };
 

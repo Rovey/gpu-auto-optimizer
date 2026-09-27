@@ -58,11 +58,20 @@ bool install_app(const std::filesystem::path& from_dir, std::string* why) {
     if (dst.empty()) { if (why) *why = "the Program Files folder could not be resolved"; return false; }
     std::error_code ec;
     if (std::filesystem::equivalent(from_dir, dst, ec)) return true;   // running the installed copy already
+    for (const wchar_t* name : kAppExes) {   // all or nothing: never a half-installed pair
+        if (!std::filesystem::is_regular_file(from_dir / name, ec)) {
+            if (why) *why = (from_dir / name).string() + " is missing; both executables must be in the same folder";
+            return false;
+        }
+    }
     std::filesystem::create_directories(dst, ec);
     for (const wchar_t* name : kAppExes) {
         const auto src = from_dir / name;
         const auto to = dst / name;
-        if (!CopyFileW(src.c_str(), to.c_str(), FALSE) && !(move_aside(to) && CopyFileW(src.c_str(), to.c_str(), FALSE))) {
+        bool copied = CopyFileW(src.c_str(), to.c_str(), FALSE);
+        if (!copied && (GetLastError() == ERROR_SHARING_VIOLATION || GetLastError() == ERROR_ACCESS_DENIED))
+            copied = move_aside(to) && CopyFileW(src.c_str(), to.c_str(), FALSE);   // a running copy
+        if (!copied) {
             if (why) *why = "could not copy " + src.string() + " to " + dst.string() + " (error " + std::to_string(GetLastError()) + ")";
             return false;
         }

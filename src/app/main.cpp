@@ -95,6 +95,9 @@ static int set_offset(const char* label, int mhz, bool core) {
 }
 
 static int reset() {
+    // Stock by choice: tell a running tray app first, or a watchdog tick
+    // between the writes and the notice would take it for a TDR and re-apply.
+    gao::app::tell_tray_stock_by_choice();
     gao::Nvapi nvapi;
     if (!nvapi.Init()) { std::printf("NVAPI init failed: %s\n", nvapi.Error().c_str()); return 1; }
     bool ok = nvapi.ResetOffsets(kGpu);
@@ -113,8 +116,6 @@ static int reset() {
         std::printf("power limit: default %s\n", power_ok ? "restored" : nvml.Error().c_str());
         ok = ok && power_ok;
     }
-    // A stock card by choice: a running tray app must not re-apply the tune.
-    if (ok) gao::app::tell_tray_stock_by_choice();
     std::printf("%s\n", ok ? "OK" : "MISMATCH");
     return ok ? 0 : 1;
 }
