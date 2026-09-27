@@ -28,6 +28,14 @@ public:
     bool SetPowerLimitPct(unsigned index, int pct);
     // Current limit as a (rounded) percent of the default; nullopt on failure.
     std::optional<int> PowerLimitPct(unsigned index);
+    // Fans. NVML reports several per card; they are always set together.
+    int FanCount(unsigned index);                                  // 0 when unknown or none
+    std::optional<std::pair<int, int>> FanRangePct(unsigned index);   // {min, max} manual speed
+    // Every fan to pct, then the target read back from each; needs elevation.
+    bool SetFanPct(unsigned index, int pct);
+    // Every fan back to the driver, then the policy read back from each.
+    bool SetFanAuto(unsigned index);
+    std::optional<FanReading> ReadFan(unsigned index);             // fan 0's policy and target
     const std::string& Error() const { return error_; }
 
 private:

@@ -246,6 +246,15 @@ static int status() {
         std::printf("applied:    power %d %%, core %+d MHz, mem %+d MHz\n", applied->power_pct, applied->core_mhz, applied->mem_mhz);
     else
         std::printf("applied:    unknown (could not read the driver)\n");
+    if (const auto fan = nvml.ReadFan(kGpu))
+        std::printf("fans:       %s\n", fan->manual ? ("manual " + std::to_string(fan->target_pct) + " %").c_str() : "driver control");
+    const auto curve = gao::active_fan_curve(cfg);
+    std::printf("fan curve:  %s", cfg.fan_control && curve ? "on" : "off");
+    if (curve) {
+        if (curve->stop_below_c) std::printf(", driver below %d C", *curve->stop_below_c);
+        for (const gao::FanPoint& p : curve->points) std::printf(", %d C %d %%", p.temp_c, p.pct);
+    }
+    std::printf("\n");
     std::printf("boot-apply: %s\n", gao::boot_task_exists() ? "on (logon task registered)" : "off");
     const auto installed = gao::installed_exe_path();
     wchar_t self[MAX_PATH];
@@ -261,6 +270,16 @@ static int status() {
     const auto log = gao::read_lines(gao::boot_log_path());
     if (log && !log->empty()) std::printf("last boot:  %s\n", log->back().c_str());
     return 0;
+}
+
+// Emergency exit: every fan back to the driver, whatever set it.
+static int fan_auto() {
+    gao::Nvml nvml;
+    if (!nvml.Init()) { std::printf("NVML init failed: %s\n", nvml.Error().c_str()); return 1; }
+    const bool ok = nvml.SetFanAuto(kGpu);
+    if (!ok) std::printf("%s\n", nvml.Error().c_str());
+    std::printf("fans: %s\n", ok ? "driver control -- OK" : "MISMATCH");
+    return ok ? 0 : 1;
 }
 
 static int bandwidth() {
@@ -328,6 +347,11 @@ int main(int argc, char** argv) {
         std::printf("--boot expects on or off, got '%s'\n", argv[2]);
         return 1;
     }
+    if (argc > 2 && std::strcmp(argv[1], "--fan") == 0) {
+        if (std::strcmp(argv[2], "auto") == 0) return fan_auto();
+        std::printf("--fan expects auto, got '%s'\n", argv[2]);
+        return 1;
+    }
     if (argc > 1 && std::strcmp(argv[1], "--status") == 0) return status();
     if (argc > 1 && std::strcmp(argv[1], "--optimize") == 0) {
         gao::Preset preset = gao::Preset::BestOfMyGpu;
@@ -343,6 +367,6 @@ int main(int argc, char** argv) {
     }
     std::printf("usage: gao [--version | --probe | --set-core <mhz> | --set-mem <mhz> | --reset\n"
                 "            | --stress <sec> [--max-temp <c>] | --bandwidth | --optimize [best|quiet|cool|max]\n"
-                "            | --apply | --boot on|off | --status]\n");
+                "            | --apply | --boot on|off | --fan auto | --status]\n");
     return argc > 1 ? 1 : 0;
 }

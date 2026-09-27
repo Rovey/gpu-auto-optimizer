@@ -29,6 +29,16 @@ GpuControl make_gpu_control(Nvml& nvml, Nvapi& nvapi, unsigned gpu) {
         if (!pct) return std::nullopt;
         return AppliedState{offsets->first, offsets->second, *pct};
     };
+    // Fans: only when NVML reports some and a manual range. Empty otherwise,
+    // so core code can tell the card has no fan control.
+    if (nvml.FanCount(gpu) > 0) {
+        if (const auto range = nvml.FanRangePct(gpu)) {
+            c.fan_min_pct = range->first;
+            c.set_fan_pct = [&nvml, gpu](int pct) { return nvml.SetFanPct(gpu, pct); };
+            c.set_fan_auto = [&nvml, gpu] { return nvml.SetFanAuto(gpu); };
+            c.read_fan = [&nvml, gpu] { return nvml.ReadFan(gpu); };
+        }
+    }
     return c;
 }
 

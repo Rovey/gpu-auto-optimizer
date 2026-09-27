@@ -37,6 +37,19 @@ typedef nvmlReturn_t (*fn_driver)(char*, unsigned);
 typedef nvmlReturn_t (*fn_uuid)(nvmlDevice_t, char*, unsigned);
 static fn_driver p_driver = nullptr;
 static fn_uuid p_uuid = nullptr;
+typedef nvmlReturn_t (*fn_fan_count)(nvmlDevice_t, unsigned*);
+typedef nvmlReturn_t (*fn_fan_range)(nvmlDevice_t, unsigned*, unsigned*);
+typedef nvmlReturn_t (*fn_fan_set)(nvmlDevice_t, unsigned, unsigned);
+typedef nvmlReturn_t (*fn_fan_default)(nvmlDevice_t, unsigned);
+typedef nvmlReturn_t (*fn_fan_get)(nvmlDevice_t, unsigned, unsigned*);
+static fn_fan_count   p_fan_count = nullptr;
+static fn_fan_range   p_fan_range = nullptr;
+static fn_fan_set     p_fan_set = nullptr;
+static fn_fan_default p_fan_default = nullptr;
+static fn_fan_get     p_fan_target = nullptr;
+static fn_fan_get     p_fan_policy = nullptr;
+constexpr unsigned kFanPolicyAuto = 0;     // NVML_FAN_POLICY_TEMPERATURE_CONTINOUS_SW
+constexpr unsigned kFanPolicyManual = 1;   // NVML_FAN_POLICY_MANUAL
 
 bool Nvml::Init() {
     // System32 only: gao runs elevated at logon, and the exe's own folder
@@ -58,6 +71,12 @@ bool Nvml::Init() {
     p_pl_set         = (fn_pl_set)GetProcAddress(h, "nvmlDeviceSetPowerManagementLimit");
     p_driver = (fn_driver)GetProcAddress(h, "nvmlSystemGetDriverVersion");
     p_uuid = (fn_uuid)GetProcAddress(h, "nvmlDeviceGetUUID");
+    p_fan_count   = (fn_fan_count)GetProcAddress(h, "nvmlDeviceGetNumFans");
+    p_fan_range   = (fn_fan_range)GetProcAddress(h, "nvmlDeviceGetMinMaxFanSpeed");
+    p_fan_set     = (fn_fan_set)GetProcAddress(h, "nvmlDeviceSetFanSpeed_v2");
+    p_fan_default = (fn_fan_default)GetProcAddress(h, "nvmlDeviceSetDefaultFanSpeed_v2");
+    p_fan_target  = (fn_fan_get)GetProcAddress(h, "nvmlDeviceGetTargetFanSpeed");
+    p_fan_policy  = (fn_fan_get)GetProcAddress(h, "nvmlDeviceGetFanControlPolicy_v2");
     if (!p_init || !p_byIndex) { error_ = "required NVML entry points not found"; return false; }
     inited_ = (p_init() == NVML_SUCCESS);
     if (!inited_) error_ = "nvmlInit_v2 failed";
@@ -180,6 +199,68 @@ std::string Nvml::GpuUuid(unsigned index) {
 Nvml::~Nvml() {
     if (inited_ && p_shutdown) p_shutdown();
     if (lib_) FreeLibrary((HMODULE)lib_);
+}
+
+int Nvml::FanCount(unsigned index) {
+    nvmlDevice_t dev = nullptr;
+    unsigned n = 0;
+    if (!inited_ || !p_fan_count || p_byIndex(index, &dev) != NVML_SUCCESS || p_fan_count(dev, &n) != NVML_SUCCESS) return 0;
+    return static_cast<int>(n);
+}
+
+std::optional<std::pair<int, int>> Nvml::FanRangePct(unsigned index) {
+    nvmlDevice_t dev = nullptr;
+    unsigned lo = 0, hi = 0;
+    if (!inited_ || !p_fan_range || p_byIndex(index, &dev) != NVML_SUCCESS || p_fan_range(dev, &lo, &hi) != NVML_SUCCESS)
+        return std::nullopt;
+    return std::make_pair(static_cast<int>(lo), static_cast<int>(hi));
+}
+
+bool Nvml::SetFanPct(unsigned index, int pct) {
+    nvmlDevice_t dev = nullptr;
+    const int fans = FanCount(index);
+    if (fans == 0 || !p_fan_set || !p_fan_target || p_byIndex(index, &dev) != NVML_SUCCESS) {
+        error_ = "fan control not available"; return false;
+    }
+    for (unsigned f = 0; f < static_cast<unsigned>(fans); ++f)
+        if (p_fan_set(dev, f, static_cast<unsigned>(pct)) != NVML_SUCCESS) {
+            error_ = "nvmlDeviceSetFanSpeed_v2 failed (elevated?)"; return false;
+        }
+    // Never trust the return code: read every fan's target back.
+    for (unsigned f = 0; f < static_cast<unsigned>(fans); ++f) {
+        unsigned target = 0;
+        if (p_fan_target(dev, f, &target) != NVML_SUCCESS || static_cast<int>(target) != pct) {
+            error_ = "fan " + std::to_string(f) + " target read back " + std::to_string(target) + " %, requested " +
+                     std::to_string(pct) + " %";
+            return false;
+        }
+    }
+    return true;
+}
+
+bool Nvml::SetFanAuto(unsigned index) {
+    nvmlDevice_t dev = nullptr;
+    const int fans = FanCount(index);
+    if (fans == 0 || !p_fan_default || !p_fan_policy || p_byIndex(index, &dev) != NVML_SUCCESS) {
+        error_ = "fan control not available"; return false;
+    }
+    bool ok = true;
+    for (unsigned f = 0; f < static_cast<unsigned>(fans); ++f) {   // every fan, even after one fails
+        unsigned policy = kFanPolicyManual;
+        if (p_fan_default(dev, f) != NVML_SUCCESS || p_fan_policy(dev, f, &policy) != NVML_SUCCESS || policy != kFanPolicyAuto) {
+            error_ = "fan " + std::to_string(f) + " did not return to driver control";
+            ok = false;
+        }
+    }
+    return ok;
+}
+
+std::optional<FanReading> Nvml::ReadFan(unsigned index) {
+    nvmlDevice_t dev = nullptr;
+    unsigned policy = 0, target = 0;
+    if (!inited_ || !p_fan_policy || !p_fan_target || p_byIndex(index, &dev) != NVML_SUCCESS) return std::nullopt;
+    if (p_fan_policy(dev, 0, &policy) != NVML_SUCCESS || p_fan_target(dev, 0, &target) != NVML_SUCCESS) return std::nullopt;
+    return FanReading{policy == kFanPolicyManual, static_cast<int>(target)};
 }
 
 }
