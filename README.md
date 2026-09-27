@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="docs/images/icon.png" width="96" alt="GPU Auto Optimizer icon">
+<img src="docs/images/logo.png" width="200" alt="GPU Auto Optimizer logo: a graphics card with a speedometer">
 
 # GPU Auto Optimizer
 
