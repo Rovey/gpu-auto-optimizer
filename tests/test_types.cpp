@@ -21,5 +21,5 @@ TEST_CASE("core code can drive a fake GpuControl") {
 
 TEST_CASE("an unset callback is detectable rather than crashing") {
     const GpuControl gpu;
-    CHECK_FALSE(static_cast<bool>(gpu.set_fan_pct));
+    CHECK_FALSE(static_cast<bool>(gpu.set_power_limit));
 }

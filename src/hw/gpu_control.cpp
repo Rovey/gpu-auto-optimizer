@@ -29,9 +29,6 @@ GpuControl make_gpu_control(Nvml& nvml, Nvapi& nvapi, unsigned gpu) {
         if (!pct) return std::nullopt;
         return AppliedState{offsets->first, offsets->second, *pct};
     };
-    if (nvapi.FanControlAvailable()) {
-        c.set_fan_pct = [&nvapi, gpu](int pct) { return nvapi.SetFanPct(gpu, pct); };
-    }
     return c;
 }
 

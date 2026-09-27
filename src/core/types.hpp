@@ -30,9 +30,6 @@ struct AppliedState {
     int power_pct = 100;
 };
 
-struct FanPoint { int temp_c; int fan_pct; };
-using FanCurve = std::vector<FanPoint>;   // four points, ascending by temp_c
-
 // The only way core code reaches hardware. hw/ fills these in production,
 // tests fill them with lambdas. An empty callback means "not supported here".
 struct GpuControl {
@@ -41,7 +38,6 @@ struct GpuControl {
     std::function<bool(int)> set_mem_offset;    // MHz, verified by read-back
     std::function<bool(int)> set_power_limit;   // percent of default
     std::function<std::pair<int, int>()> power_limit_range_pct;   // {min, max}, percent of default
-    std::function<bool(int)> set_fan_pct;       // percent, -1 restores automatic
     std::function<bool()> reset_to_stock;
     std::function<std::optional<AppliedState>()> read_applied;   // nullopt when a read fails
 };

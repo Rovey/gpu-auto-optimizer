@@ -133,8 +133,6 @@ int boot_task_create_xml(const std::filesystem::path& xml_file) {
     return run_schtasks(L"/Create /F /TN \\GpuAutoOptimizer\\BootApply /XML \"" + xml_file.wstring() + L"\"");
 }
 int boot_task_remove() { return run_schtasks(L"/Delete /F /TN \\GpuAutoOptimizer\\BootApply"); }
-int boot_task_remove_legacy() { return run_schtasks(L"/Delete /F /TN GpuAutoOptimizer"); }
 bool boot_task_exists() { return run_schtasks(L"/Query /TN \\GpuAutoOptimizer\\BootApply") == 0; }
-bool boot_task_legacy_exists() { return run_schtasks(L"/Query /TN GpuAutoOptimizer") == 0; }
 
 }

@@ -28,8 +28,6 @@ bool write_utf16_file(const std::filesystem::path& p, const std::string& utf8);
 
 int boot_task_create_xml(const std::filesystem::path& xml_file);
 int boot_task_remove();          // \GpuAutoOptimizer\BootApply
-int boot_task_remove_legacy();   // \GpuAutoOptimizer, the pre-P4b task
 bool boot_task_exists();
-bool boot_task_legacy_exists();
 
 }

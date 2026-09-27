@@ -21,8 +21,8 @@
 #include <cstring>
 
 // std::atoi silently returns 0 for anything it cannot parse, so a typo like
-// "--set-fan off" would parse to 0 and pin the fan there -- 0 is in range,
-// so the CLI's own range check cannot catch it. strtol plus this end-pointer
+// "--set-core +x" would parse to 0 and silently reset the offset -- 0 is in
+// range, so the CLI's own range check cannot catch it. strtol plus this end-pointer
 // check rejects any argument that is not fully numeric, instead of guessing.
 static bool ParseIntArg(const char* text, int* out) {
     if (!text || *text == '\0') return false;
@@ -86,7 +86,7 @@ static int set_offset(const char* label, int mhz, bool core) {
     std::printf("%s: requested %d MHz, read back ", label, mhz);
     if (readback) std::printf("%d MHz\n", core ? readback->first : readback->second);
     else std::printf("unavailable (%s)\n", nvapi.Error().c_str());
-    // Print the diagnostic before the verdict, same as set_fan(): "clamped to
+    // Print the diagnostic before the verdict: "clamped to
     // 210 MHz" and "the call never reached an unelevated driver" both show
     // MISMATCH here, and without this line they are indistinguishable.
     if (!ok) std::printf("%s\n", nvapi.Error().c_str());
@@ -116,24 +116,6 @@ static int reset() {
         std::printf("power limit: default %s\n", power_ok ? "restored" : nvml.Error().c_str());
         ok = ok && power_ok;
     }
-    std::printf("%s\n", ok ? "OK" : "MISMATCH");
-    return ok ? 0 : 1;
-}
-
-// pct is 0-100; -1 restores automatic control. Prints the same OK/MISMATCH
-// verdict as set_offset() -- SetFanPct() already verified the change through
-// NVML before returning, so the return value alone is trustworthy here.
-static int set_fan(int pct) {
-    gao::Nvapi nvapi;
-    if (!nvapi.Init()) { std::printf("NVAPI init failed: %s\n", nvapi.Error().c_str()); return 1; }
-    if (!nvapi.FanControlAvailable()) {
-        std::printf("fan control unavailable: %s\n", nvapi.Error().c_str());
-        return 1;
-    }
-    if (pct < 0) std::printf("fan: restoring automatic control\n");
-    else std::printf("fan: requested %d%%\n", pct);
-    const bool ok = nvapi.SetFanPct(kGpu, pct);
-    if (!ok) std::printf("%s\n", nvapi.Error().c_str());
     std::printf("%s\n", ok ? "OK" : "MISMATCH");
     return ok ? 0 : 1;
 }
@@ -295,8 +277,6 @@ static int status() {
     else
         std::printf("applied:    unknown (could not read the driver)\n");
     std::printf("boot-apply: %s\n", gao::boot_task_exists() ? "on (logon task registered)" : "off");
-    if (gao::boot_task_legacy_exists())
-        std::printf("            an older logon task (\\GpuAutoOptimizer) is still registered; run `gao --boot on` to replace it\n");
     const auto installed = gao::installed_exe_path();
     wchar_t self[MAX_PATH];
     const DWORD n = GetModuleFileNameW(nullptr, self, MAX_PATH);
@@ -310,17 +290,6 @@ static int status() {
     std::printf("strikes:    %d of %d\n", cfg.boot_strikes, gao::kMaxBootStrikes);
     const auto log = gao::read_lines(gao::boot_log_path());
     if (log && !log->empty()) std::printf("last boot:  %s\n", log->back().c_str());
-    return 0;
-}
-
-// Run by the logon task. No console, no prompts: everything goes to boot.log.
-static int boot_apply() {
-    FreeConsole();
-    std::string why;
-    if (!gao::app::prepare_state(&why)) return 1;   // nothing can be logged without the folder
-    if (!gao::app::apply_at_logon().applied) return 1;
-    Sleep(2 * 60 * 1000);
-    gao::app::clear_boot_strike();
     return 0;
 }
 
@@ -356,11 +325,6 @@ int main(int argc, char** argv) {
         return set_offset("mem offset", mhz, false);
     }
     if (argc > 1 && std::strcmp(argv[1], "--reset") == 0) return reset();
-    if (argc > 2 && std::strcmp(argv[1], "--set-fan") == 0) {
-        int pct = 0;
-        if (!ParseIntArg(argv[2], &pct)) { std::printf("--set-fan expects an integer percentage (or -1), got '%s'\n", argv[2]); return 1; }
-        return set_fan(pct);
-    }
     if (argc > 2 && std::strcmp(argv[1], "--stress") == 0) {
         int seconds = 0;
         if (!ParseIntArg(argv[2], &seconds) || seconds < 1 || seconds > 3600) {
@@ -395,7 +359,6 @@ int main(int argc, char** argv) {
         return 1;
     }
     if (argc > 1 && std::strcmp(argv[1], "--status") == 0) return status();
-    if (argc > 1 && std::strcmp(argv[1], "--boot-apply") == 0) return boot_apply();
     if (argc > 1 && std::strcmp(argv[1], "--optimize") == 0) {
         gao::Preset preset = gao::Preset::BestOfMyGpu;
         if (argc > 2) {
@@ -408,7 +371,7 @@ int main(int argc, char** argv) {
         }
         return optimize(preset);
     }
-    std::printf("usage: gao [--version | --probe | --set-core <mhz> | --set-mem <mhz> | --reset | --set-fan <pct>\n"
+    std::printf("usage: gao [--version | --probe | --set-core <mhz> | --set-mem <mhz> | --reset\n"
                 "            | --stress <sec> [--max-temp <c>] | --bandwidth | --optimize [best|quiet|cool|max]\n"
                 "            | --apply | --boot on|off | --status]\n");
     return argc > 1 ? 1 : 0;

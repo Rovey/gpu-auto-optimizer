@@ -15,11 +15,6 @@ namespace gao {
 // engineered and proved against this exact hardware by the project's earlier
 // Python implementation (src/backends/nvapi.py, tag v0.9-python). See
 // nvapi.cpp for the byte offsets.
-//
-// Fan control is different: unlike the offsets above, its ids are not
-// proven against this hardware by any prior implementation of this project.
-// See the block comment in nvapi.cpp for where the ids came from and why
-// only the older SetCoolerLevels API is ever actually called.
 class Nvapi {
 public:
     bool Init();
@@ -28,22 +23,6 @@ public:
     bool SetMemOffsetMhz(unsigned gpu, int mhz);
     bool ResetOffsets(unsigned gpu);
     std::optional<std::pair<int, int>> ReadOffsetsMhz(unsigned gpu);  // {core, mem}, MHz
-
-    // Fan control through NvAPI_GPU_SetCoolerLevels (the older, fully
-    // specified API -- see nvapi.cpp for why the newer client fan-cooler ids
-    // are known but never called). pct is 0-100; -1 restores automatic
-    // (driver) control. A manual level is verified by reading the fan
-    // percentage back through NVML after a settle delay; a restore is
-    // verified by reading the cooler policy back through NVAPI itself --
-    // never trust NVAPI's return code alone for either. On any failure,
-    // best-effort hands control back to the driver before returning, so a
-    // failed write does not also strand the fan pinned at manual.
-    bool SetFanPct(unsigned gpu, int pct);
-    // False until Init() has confirmed, read-only, that this GPU answers to
-    // the fan-control calls; also flips to false if a later SetFanPct() call
-    // resolves fine but fails to verify. Mirrors the offsets' "a resolved id
-    // is not proof it works" discipline.
-    bool FanControlAvailable() const { return fan_available_; }
 
     const std::string& Error() const { return error_; }
 
@@ -61,32 +40,10 @@ private:
     // nullptr (never calls anything) if the id doesn't resolve.
     void* QueryFn(unsigned id);
 
-    // Read-only, side-effect-free check run once from Init(): resolves the
-    // fan-control calls and queries current cooler settings to confirm this
-    // GPU actually answers, before make_gpu_control() ever offers the
-    // callback to core code.
-    void DetectFanControl();
-    // Fills buf (kCoolerSettingsSize bytes) via NvAPI_GPU_GetCoolerSettings.
-    bool GetCoolerSettings(unsigned gpu, unsigned char* buf);
-    // Sets every cooler NvAPI_GPU_GetCoolerSettings reports to pct, manual
-    // policy, via NvAPI_GPU_SetCoolerLevels.
-    bool ApplyCoolerLevels(unsigned gpu, int pct);
-    // Hands fan control back to the driver via NvAPI_GPU_RestoreCoolerSettings.
-    bool RestoreCoolerLevels(unsigned gpu);
-    // Settles, then verifies the change actually took. For target_pct >= 0,
-    // reads fan_pct back through NVML and compares to target_pct. For
-    // target_pct < 0 (a restore), NVML's fan_pct cannot tell a real restore
-    // apart from a cooler still pinned at MANUAL -- the level itself does
-    // not change just because the policy does -- so this instead reads the
-    // cooler policy back through NVAPI's own GetCoolerSettings and requires
-    // every cooler to be off NVAPI_COOLER_POLICY_MANUAL.
-    bool VerifyFanPct(unsigned gpu, int target_pct);
-
     void* lib_ = nullptr;
     void* query_ = nullptr;
     std::vector<void*> gpus_;
     bool inited_ = false;
-    bool fan_available_ = false;
     std::string error_;
 };
 

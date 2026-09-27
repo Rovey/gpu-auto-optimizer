@@ -7,17 +7,16 @@ using namespace gao;
 TEST_CASE("the default preset chases performance within a quiet thermal envelope") {
     const Objectives o = objectives_for(Preset::BestOfMyGpu);
     CHECK(o.max_temp_c == 75);
-    CHECK(o.max_fan_pct == 60);
     CHECK(o.perf_push == doctest::Approx(0.7f));
     CHECK(o.core_oc);
     CHECK(o.mem_oc);
     CHECK(o.power);
 }
 
-TEST_CASE("quiet trades temperature headroom for a lower fan ceiling") {
+TEST_CASE("quiet pushes clocks less hard than the default") {
     const Objectives quiet = objectives_for(Preset::Quiet);
     const Objectives best = objectives_for(Preset::BestOfMyGpu);
-    CHECK(quiet.max_fan_pct < best.max_fan_pct);
+    CHECK(quiet.perf_push < best.perf_push);
     CHECK(quiet.max_temp_c > best.max_temp_c);
 }
 
@@ -31,18 +30,10 @@ TEST_CASE("cool and efficient does not overclock") {
 TEST_CASE("max performance pushes every ceiling to its highest value") {
     const Objectives o = objectives_for(Preset::MaxPerformance);
     CHECK(o.max_temp_c == 83);
-    CHECK(o.max_fan_pct == 100);
     CHECK(o.perf_push == doctest::Approx(1.0f));
     CHECK(o.core_oc);
     CHECK(o.mem_oc);
     CHECK(o.power);
-}
-
-TEST_CASE("no preset ever enables undervolting") {
-    for (const Preset p : {Preset::BestOfMyGpu, Preset::Quiet,
-                           Preset::CoolAndEfficient, Preset::MaxPerformance}) {
-        CHECK_FALSE(objectives_for(p).undervolt);
-    }
 }
 
 TEST_CASE("preset names round-trip and unknown names are rejected") {

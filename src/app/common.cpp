@@ -136,7 +136,6 @@ OptimizeOutcome run_optimize(Preset preset, const OptimizeHooks& hooks) {
     for (const auto& f : journal.freezes())
         log("warning: a previous run froze the machine at " + f + "; staying below it from now on");
     if (!gpu.set_power_limit) log("power limit: not adjustable on this card, skipped");
-    if (!gpu.set_fan_pct) log("fan: not controllable on this card, skipped");
 
     OptimizeIo io;
     io.probe = [&](double seconds, int max_temp) {
@@ -232,17 +231,10 @@ bool enable_boot(std::string* message) {
     const std::string xml = boot_task_xml(std::string(u8.begin(), u8.end()), "--tray", sid, "PT0S");
     const auto xml_path = app_dir() / L"BootApply.xml";
     if (!write_utf16_file(xml_path, xml)) return say("could not write " + xml_path.string(), false);
-    // The pre-P4b task is a file named \GpuAutoOptimizer in the task root, which
-    // blocks creating the \GpuAutoOptimizer\ folder: it has to go first.
-    const bool had_legacy = boot_task_legacy_exists();
-    if (had_legacy && boot_task_remove_legacy() != 0) return say("could not remove the old logon task \\GpuAutoOptimizer", false);
     const int code = boot_task_create_xml(xml_path);
     std::error_code ec;
     std::filesystem::remove(xml_path, ec);
-    if (code != 0)
-        return say("could not create the task (schtasks exit " + std::to_string(code) + ")" +
-                       (had_legacy ? "; the old logon task was already removed, so nothing applies the tune at logon" : ""),
-                   false);
+    if (code != 0) return say("could not create the task (schtasks exit " + std::to_string(code) + ")", false);
     Config cfg = load_config();
     cfg.boot_strikes = 0;
     if (!save_config(cfg)) return say("task created, but could not reset the strike counter", false);
@@ -256,7 +248,6 @@ bool disable_boot(std::string* message) {
     std::string why;
     if (!prepare_state(&why)) return say(why, false);
     const int code = boot_task_remove();
-    boot_task_remove_legacy();   // the pre-P4b task, if any
     const bool removed_now = uninstall_app();
     return say(std::string("boot-apply off: task ") + (code == 0 ? "removed" : "not removed") + ", installed copy " +
                    (removed_now ? "removed" : "in use by the running tray app; it is removed at the next restart"),
