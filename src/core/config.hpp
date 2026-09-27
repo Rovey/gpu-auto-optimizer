@@ -25,6 +25,8 @@ struct Config {
     int boot_strikes = 0;   // logons that applied the profile and have not yet run 2 minutes
     std::optional<FanCurve> fan_curve;   // the active curve, once edited; otherwise active_fan_curve() picks one
     bool fan_control = false;            // drive the fans with the active curve
+    int fan_min_pct = 0;                 // the lowest speed the fans hold, learned (0: none yet)
+    std::string fan_min_gpu;             // the card it was learned on (NVML UUID)
 };
 
 std::string to_json(const Config& c);
@@ -35,5 +37,8 @@ Config from_json(const std::string& text);
 // The curve the fans follow: the edited one, else the one the tune was tested
 // with, else the profile's default. nullopt without a profile.
 std::optional<FanCurve> active_fan_curve(const Config& c);
+// The minimum manual fan speed for this card: the learned one when it was
+// learned on this card, never below what NVML reports.
+int fan_min_for(const Config& c, const std::string& gpu, int nvml_min);
 
 }

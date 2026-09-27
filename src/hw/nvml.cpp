@@ -1,6 +1,7 @@
 #include "hw/nvml.hpp"
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <algorithm>
 
 namespace gao {
 
@@ -48,6 +49,7 @@ static fn_fan_set     p_fan_set = nullptr;
 static fn_fan_default p_fan_default = nullptr;
 static fn_fan_get     p_fan_target = nullptr;
 static fn_fan_get     p_fan_policy = nullptr;
+static fn_fan_get     p_fan_speed = nullptr;
 constexpr unsigned kFanPolicyAuto = 0;     // NVML_FAN_POLICY_TEMPERATURE_CONTINOUS_SW
 constexpr unsigned kFanPolicyManual = 1;   // NVML_FAN_POLICY_MANUAL
 
@@ -77,6 +79,7 @@ bool Nvml::Init() {
     p_fan_default = (fn_fan_default)GetProcAddress(h, "nvmlDeviceSetDefaultFanSpeed_v2");
     p_fan_target  = (fn_fan_get)GetProcAddress(h, "nvmlDeviceGetTargetFanSpeed");
     p_fan_policy  = (fn_fan_get)GetProcAddress(h, "nvmlDeviceGetFanControlPolicy_v2");
+    p_fan_speed   = (fn_fan_get)GetProcAddress(h, "nvmlDeviceGetFanSpeed_v2");
     if (!p_init || !p_byIndex) { error_ = "required NVML entry points not found"; return false; }
     inited_ = (p_init() == NVML_SUCCESS);
     if (!inited_) error_ = "nvmlInit_v2 failed";
@@ -260,7 +263,15 @@ std::optional<FanReading> Nvml::ReadFan(unsigned index) {
     unsigned policy = 0, target = 0;
     if (!inited_ || !p_fan_policy || !p_fan_target || p_byIndex(index, &dev) != NVML_SUCCESS) return std::nullopt;
     if (p_fan_policy(dev, 0, &policy) != NVML_SUCCESS || p_fan_target(dev, 0, &target) != NVML_SUCCESS) return std::nullopt;
-    return FanReading{policy == kFanPolicyManual, static_cast<int>(target)};
+    // The slowest fan: one stalled fan is enough to call the speed too low.
+    int speed = -1;
+    const int fans = FanCount(index);
+    for (unsigned f = 0; p_fan_speed && f < static_cast<unsigned>(fans); ++f) {
+        unsigned s = 0;
+        if (p_fan_speed(dev, f, &s) != NVML_SUCCESS) { speed = -1; break; }
+        speed = speed < 0 ? static_cast<int>(s) : (std::min)(speed, static_cast<int>(s));
+    }
+    return FanReading{policy == kFanPolicyManual, static_cast<int>(target), speed};
 }
 
 }

@@ -41,6 +41,7 @@ struct AppliedState {
 struct FanReading {
     bool manual = false;   // false: the driver controls the fans
     int target_pct = 0;
+    int speed_pct = -1;    // the lowest measured speed of any fan; -1 when unknown
 };
 
 // The only way core code reaches hardware. hw/ fills these in production,

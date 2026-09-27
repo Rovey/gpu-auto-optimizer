@@ -126,26 +126,31 @@ FanCommand FanController::decide(const int temp_c, const int power_w, const std:
     return FanCommand{false, *last_pct_};
 }
 
-FanDriver::FanDriver(const GpuControl& gpu, FanCurve curve, const int max_temp_c)
-    : gpu_(gpu), curve_(curve), max_temp_c_(max_temp_c), ctrl_(std::move(curve), gpu.fan_min_pct, max_temp_c) {}
+FanDriver::FanDriver(const GpuControl& gpu, FanCurve curve, const int max_temp_c, const int min_pct)
+    : gpu_(gpu), curve_(curve), max_temp_c_(max_temp_c), ctrl_(std::move(curve), std::max(gpu.fan_min_pct, min_pct), max_temp_c),
+      min_pct_(std::max(gpu.fan_min_pct, min_pct)) {
+    state_.min_pct = min_pct_;
+}
 
 void FanDriver::set_curve(FanCurve curve, const int max_temp_c) {
     if (curve == curve_ && max_temp_c == max_temp_c_) return;
     curve_ = curve;
     max_temp_c_ = max_temp_c;
-    ctrl_ = FanController(std::move(curve), gpu_.fan_min_pct, max_temp_c);
+    ctrl_ = FanController(std::move(curve), min_pct_, max_temp_c);
 }
 
 void FanDriver::fail() {
     if (gpu_.set_fan_auto) gpu_.set_fan_auto();   // best effort: the driver is the safe owner
     written_.reset();
-    state_ = {FanMode::Failed, 0};
+    written_at_.reset();
+    state_ = {FanMode::Failed, 0, min_pct_};
 }
 
 void FanDriver::release() {
     if (written_ && gpu_.set_fan_auto) gpu_.set_fan_auto();
     written_.reset();
-    if (state_.mode == FanMode::Curve) state_ = {FanMode::Driver, 0};
+    written_at_.reset();
+    if (state_.mode == FanMode::Curve) state_ = {FanMode::Driver, 0, min_pct_};
 }
 
 FanState FanDriver::tick(const int temp_c, const int power_w, const std::chrono::steady_clock::time_point now) {
@@ -156,27 +161,40 @@ FanState FanDriver::tick(const int temp_c, const int power_w, const std::chrono:
     if (written_) {
         const auto seen = gpu_.read_fan();
         if (!seen) { fail(); return state_; }
-        if (!seen->manual) written_.reset();
-        else if (seen->target_pct != *written_) { written_.reset(); state_ = {FanMode::Foreign, 0}; return state_; }
+        if (!seen->manual) {
+            written_.reset();
+            written_at_.reset();
+        } else if (seen->target_pct != *written_) {
+            written_.reset();
+            state_ = {FanMode::Foreign, 0, min_pct_};
+            return state_;
+        } else if (seen->speed_pct == 0 && written_at_ && now - *written_at_ >= kFanStallGrace) {
+            // Stalled at our own speed: this card's real minimum is higher.
+            min_pct_ = std::max(min_pct_, *written_) + kFanStallStep;
+            if (min_pct_ > kFanStallMax) { fail(); return state_; }
+            ctrl_.set_min_pct(min_pct_);
+        }
     } else if (const auto seen = gpu_.read_fan(); seen && seen->manual) {
         // Manual while we have written nothing (the driver had the fans):
         // another program set them.
-        state_ = {FanMode::Foreign, 0};
+        state_ = {FanMode::Foreign, 0, min_pct_};
         return state_;
     }
     const FanCommand cmd = ctrl_.decide(temp_c, power_w, now);
     if (cmd.driver) {
         if (written_ && !gpu_.set_fan_auto()) { fail(); return state_; }
         written_.reset();
-        state_ = {FanMode::Driver, 0};
+        written_at_.reset();
+        state_ = {FanMode::Driver, 0, min_pct_};
         return state_;
     }
     const bool write = !written_ || std::abs(cmd.pct - *written_) >= 2 || (cmd.pct == 100 && *written_ != 100);
     if (write) {
         if (!gpu_.set_fan_pct(cmd.pct)) { fail(); return state_; }
         written_ = cmd.pct;
+        written_at_ = now;
     }
-    state_ = {FanMode::Curve, *written_};
+    state_ = {FanMode::Curve, *written_, min_pct_};
     return state_;
 }
 

@@ -128,7 +128,7 @@ OptimizeOutcome run_optimize(Preset preset, const OptimizeHooks& hooks, const st
     // The profile's curve drives the fans for the whole run, so the clocks it
     // finds hold at the temperatures that curve produces.
     const FanCurve curve = fan_curve.value_or(default_curve(preset));
-    FanDriver fans(gpu, curve, objectives_for(preset).max_temp_c);
+    FanDriver fans(gpu, curve, objectives_for(preset).max_temp_c, fan_min_for(load_config(), nvml.GpuUuid(kGpu), gpu.fan_min_pct));
     struct FanRelease {
         FanDriver& f;
         ~FanRelease() { f.release(); }   // every exit: done, aborted, failed or thrown
@@ -190,6 +190,10 @@ OptimizeOutcome run_optimize(Preset preset, const OptimizeHooks& hooks, const st
         cfg.profile->fan_curve = curve;   // what the run was tested with
         cfg.fan_curve.reset();                            // a new tune starts from its own curve
         cfg.fan_control = true;
+        if (fans.state().min_pct > fan_min_for(cfg, gpu_id, gpu.fan_min_pct)) {   // learned during the run
+            cfg.fan_min_pct = fans.state().min_pct;
+            cfg.fan_min_gpu = gpu_id;
+        }
     }
     cfg.boot_strikes = 0;   // strikes belong to the profile they were earned by
     out.saved = save_config(cfg);

@@ -34,6 +34,12 @@ inline constexpr auto kFanStopHold = std::chrono::seconds(60);          // for t
 inline constexpr auto kFanStopHoldMax = std::chrono::minutes(15);
 inline constexpr auto kFanPendulum = std::chrono::minutes(5);           // a restart this soon doubles the hold
 inline constexpr auto kFanCalm = std::chrono::minutes(10);              // stopped this long: back to the first hold
+// Fans may not hold the minimum NVML reports: the reference RTX 4070 reports
+// 30 % but stalls and restarts below 50 %. A fan that measures 0 % after this
+// long at a manual speed has stalled, and the minimum goes up a step.
+inline constexpr auto kFanStallGrace = std::chrono::seconds(4);
+inline constexpr int kFanStallStep = 5;
+inline constexpr int kFanStallMax = 70;   // still stalling above this: something else is wrong
 inline constexpr auto kFanSlowDown = std::chrono::seconds(5);   // a lower speed must hold this long
 
 // Fan curves by character, independent of the tuning profile: Best of my GPU
@@ -64,6 +70,7 @@ public:
     FanController(FanCurve curve, int min_pct, int max_temp_c);
     // power_w: -1 when unknown, which counts as load.
     FanCommand decide(int temp_c, int power_w, std::chrono::steady_clock::time_point now);
+    void set_min_pct(int min_pct) { min_pct_ = min_pct; }
 
 private:
     FanCurve curve_;
@@ -86,7 +93,8 @@ enum class FanMode {
 
 struct FanState {
     FanMode mode = FanMode::Driver;
-    int pct = 0;   // the manual speed, when mode is Curve
+    int pct = 0;       // the manual speed, when mode is Curve
+    int min_pct = 0;   // the lowest manual speed in use (NVML's, or higher once learned)
 };
 
 // Writes a FanController's decisions through GpuControl, once a second.
@@ -95,7 +103,8 @@ struct FanState {
 // fans back to the driver on release() or on any failed write.
 class FanDriver {
 public:
-    FanDriver(const GpuControl& gpu, FanCurve curve, int max_temp_c);
+    // min_pct: a minimum learned earlier for this card; never below NVML's own.
+    FanDriver(const GpuControl& gpu, FanCurve curve, int max_temp_c, int min_pct = 0);
     FanState tick(int temp_c, int power_w, std::chrono::steady_clock::time_point now);
     // Keeps what was written, so no false "another program"; an unchanged
     // curve keeps the controller's hysteresis and slow-down state too.
@@ -111,6 +120,8 @@ private:
     FanController ctrl_;
     FanState state_;
     std::optional<int> written_;   // the manual speed we set, while it is ours
+    std::optional<std::chrono::steady_clock::time_point> written_at_;
+    int min_pct_;
 };
 
 }

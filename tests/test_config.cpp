@@ -136,3 +136,16 @@ TEST_CASE("the active fan curve is the edited one, then the tested one, then the
     c.fan_curve = FanCurve{std::nullopt, {{40, 40}, {70, 90}}};
     CHECK(active_fan_curve(c) == c.fan_curve);
 }
+
+TEST_CASE("a learned fan minimum belongs to the card it was learned on") {
+    Config c;
+    c.fan_min_pct = 50;
+    c.fan_min_gpu = "GPU-8a1b";
+    const Config back = from_json(to_json(c));
+    CHECK(back.fan_min_pct == 50);
+    CHECK(back.fan_min_gpu == "GPU-8a1b");
+    CHECK(fan_min_for(back, "GPU-8a1b", 30) == 50);
+    CHECK(fan_min_for(back, "GPU-other", 30) == 30);   // another card: NVML's minimum
+    CHECK(fan_min_for(back, "GPU-8a1b", 55) == 55);    // never below NVML's own
+    CHECK(from_json(R"({"fan_min_pct":500,"fan_min_gpu":"x"})").fan_min_pct == 0);   // out of range: ignored
+}

@@ -48,6 +48,10 @@ std::string to_json(const Config& c) {
     }
     if (c.fan_curve) j["fan_curve"] = curve_json(*c.fan_curve);
     j["fan_control"] = c.fan_control;
+    if (c.fan_min_pct > 0) {
+        j["fan_min_pct"] = c.fan_min_pct;
+        j["fan_min_gpu"] = c.fan_min_gpu;
+    }
     return j.dump(2);
 }
 
@@ -65,6 +69,12 @@ Config from_json(const std::string& text) {
 
     if (const auto it = j.find("fan_curve"); it != j.end()) c.fan_curve = curve_from(*it);
     if (const auto it = j.find("fan_control"); it != j.end() && it->is_boolean()) c.fan_control = it->get<bool>();
+    const auto fmin = j.find("fan_min_pct"), fgpu = j.find("fan_min_gpu");
+    if (fmin != j.end() && fgpu != j.end() && fmin->is_number_integer() && fgpu->is_string() && fmin->get<long long>() > 0 &&
+        fmin->get<long long>() <= 100) {
+        c.fan_min_pct = fmin->get<int>();
+        c.fan_min_gpu = fgpu->get<std::string>();
+    }
 
     const auto pj = j.find("profile");
     if (pj == j.end() || !pj->is_object()) return c;
@@ -93,6 +103,10 @@ std::optional<FanCurve> active_fan_curve(const Config& c) {
     if (c.fan_curve) return c.fan_curve;
     if (c.profile->fan_curve) return c.profile->fan_curve;
     return default_curve(c.profile->preset);
+}
+
+int fan_min_for(const Config& c, const std::string& gpu, const int nvml_min) {
+    return c.fan_min_pct > 0 && !gpu.empty() && c.fan_min_gpu == gpu ? std::max(nvml_min, c.fan_min_pct) : nvml_min;
 }
 
 }

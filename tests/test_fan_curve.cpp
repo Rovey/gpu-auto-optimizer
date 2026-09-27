@@ -180,6 +180,7 @@ struct FakeFans {
     int target = 30;
     int writes = 0;
     bool fail_writes = false;
+    int stall_below = 0;   // a manual target below this measures 0 %, like the reference card below 50 %
     GpuControl gpu() {
         GpuControl g;
         g.fan_min_pct = 30;
@@ -191,7 +192,10 @@ struct FakeFans {
             return true;
         };
         g.set_fan_auto = [this] { manual = false; return true; };
-        g.read_fan = [this] { return std::optional<FanReading>(FanReading{manual, target}); };
+        g.read_fan = [this] {
+            const int speed = manual ? (target < stall_below ? 0 : target) : 0;
+            return std::optional<FanReading>(FanReading{manual, target, speed});
+        };
         return g;
     }
 };
@@ -332,4 +336,49 @@ TEST_CASE("fan preset names round-trip") {
         CHECK(fan_preset_from_name(fan_preset_name(p)) == p);
     CHECK(std::string(fan_preset_name(FanPreset::Silent)) == "silent");
     CHECK_FALSE(fan_preset_from_name("turbo").has_value());
+}
+
+TEST_CASE("a fan that stalls at its manual speed raises the minimum until it runs") {
+    using std::chrono::seconds;
+    FakeFans f;
+    f.stall_below = 50;
+    const GpuControl g = f.gpu();
+    FanDriver d(g, simple(), 90);                   // simple(): 40 % at 35 C
+    auto t = Clock::now();
+    CHECK(d.tick(35, 20, t).pct == 40);
+    for (int i = 1; i <= 3; ++i) CHECK(d.tick(35, 20, t + seconds(i)).pct == 40);   // spin-up grace: no verdict yet
+    t += seconds(4);
+    FanState s = d.tick(35, 20, t);
+    CHECK(s.min_pct == 45);                         // stalled at 40 for 4 s: minimum raised
+    CHECK(f.target == 45);
+    t += seconds(4);
+    s = d.tick(35, 20, t);
+    CHECK(s.min_pct == 50);
+    CHECK(f.target == 50);
+    for (int i = 1; i <= 10; ++i) s = d.tick(35, 20, t + seconds(i));
+    CHECK(s.min_pct == 50);                         // 50 % runs: no more raises
+    CHECK(s.mode == FanMode::Curve);
+}
+
+TEST_CASE("a learned minimum is used from the start") {
+    FakeFans f;
+    const GpuControl g = f.gpu();
+    FanDriver d(g, simple(), 90, 50);
+    CHECK(d.tick(35, 20, Clock::now()).pct == 50);
+    CHECK(d.state().min_pct == 50);
+}
+
+TEST_CASE("fans that stall even at 70 % go back to the driver") {
+    using std::chrono::seconds;
+    FakeFans f;
+    f.stall_below = 101;                            // never runs
+    const GpuControl g = f.gpu();
+    FanDriver d(g, simple(), 90, 65);
+    auto t = Clock::now();
+    d.tick(35, 20, t);
+    t += seconds(4);
+    CHECK(d.tick(35, 20, t).min_pct == 70);
+    t += seconds(4);
+    CHECK(d.tick(35, 20, t).mode == FanMode::Failed);
+    CHECK_FALSE(f.manual);
 }

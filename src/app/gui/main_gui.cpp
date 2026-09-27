@@ -252,7 +252,7 @@ void fan_sync() {
     g.ui.fan_control = cfg.fan_control;
     g.ui.fan_curve = curve;
     g.ui.fan_tested = cfg.profile ? cfg.profile->fan_curve : std::nullopt;
-    g.ui.fan_min_pct = g.gpu.fan_min_pct;
+    g.ui.fan_min_pct = gao::fan_min_for(cfg, g.nvml_ok ? g.nvml->GpuUuid(kGpu) : std::string(), g.gpu.fan_min_pct);
     g.ui.fan_max_temp_c = cfg.profile ? gao::objectives_for(cfg.profile->preset).max_temp_c : 75;
     // A running search drives the fans itself: never take them over mid-run.
     if (g.worker && g.worker->running()) return;
@@ -267,7 +267,7 @@ void fan_sync() {
     // Fans still manual from a killed earlier instance are ours to take back,
     // not another program's: start from driver control.
     if (g.gpu.set_fan_auto) g.gpu.set_fan_auto();
-    g.fan = std::make_unique<gao::FanDriver>(g.gpu, *curve, g.ui.fan_max_temp_c);
+    g.fan = std::make_unique<gao::FanDriver>(g.gpu, *curve, g.ui.fan_max_temp_c, g.ui.fan_min_pct);
 }
 
 void refresh_status(bool with_task) {
@@ -486,6 +486,15 @@ void on_telemetry() {
     if (g.fan && !g.worker->running() && !gao::app::tuning_in_progress()) {
         const gao::FanMode before = g.fan->state().mode;
         g.ui.fan_state = g.fan->tick(g.ui.telemetry.temp_c, g.ui.telemetry.power_w, std::chrono::steady_clock::now());
+        if (g.ui.fan_state.min_pct > g.ui.fan_min_pct && g.ui.fan_state.mode == gao::FanMode::Curve) {
+            // The fans stalled at the old minimum: remember the new one for this card.
+            g.ui.fan_min_pct = g.ui.fan_state.min_pct;
+            gao::Config cfg = gao::app::load_config();
+            cfg.fan_min_pct = g.ui.fan_min_pct;
+            cfg.fan_min_gpu = g.nvml->GpuUuid(kGpu);
+            if (!gao::app::save_config(cfg)) note("Could not save the learned fan minimum.", true);
+            note("The fans stalled below " + std::to_string(g.ui.fan_min_pct) + " %; that is their minimum from now on.");
+        }
         if (g.ui.fan_state.mode != before && g.ui.fan_state.mode == gao::FanMode::Failed)
             notify("A fan speed did not verify, so the NVIDIA driver controls the fans again. Fan control is off until the app restarts.");
         if (g.ui.fan_state.mode != before && g.ui.fan_state.mode == gao::FanMode::Foreign)
