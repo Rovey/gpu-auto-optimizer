@@ -3,6 +3,7 @@
 // the driver that writes through GpuControl. No hardware here; NVML lives in
 // hw/nvml and reaches this code only through GpuControl.
 #include "core/objectives.hpp"
+#include "core/types.hpp"
 #include <chrono>
 #include <optional>
 #include <vector>
@@ -52,6 +53,38 @@ private:
     bool in_stop_ = false;
     std::optional<int> last_pct_;
     std::optional<std::chrono::steady_clock::time_point> lower_since_;
+};
+
+enum class FanMode {
+    Driver,    // the driver controls the fans (fan-stop zone, no reading, or not started)
+    Curve,     // we set a manual speed
+    Foreign,   // another program set a manual speed; we stepped aside
+    Failed,    // a write did not verify; handed back and stopped
+};
+
+struct FanState {
+    FanMode mode = FanMode::Driver;
+    int pct = 0;   // the manual speed, when mode is Curve
+};
+
+// Writes a FanController's decisions through GpuControl, once a second.
+// Writes only on a change of 2 % or more (or to reach 100 %), re-applies after
+// a driver reset, steps aside when another program set the fans, and hands the
+// fans back to the driver on release() or on any failed write.
+class FanDriver {
+public:
+    FanDriver(const GpuControl& gpu, FanCurve curve, int max_temp_c);
+    FanState tick(int temp_c, std::chrono::steady_clock::time_point now);
+    void set_curve(FanCurve curve, int max_temp_c);   // keeps what was written, so no false "another program"
+    void release();
+    FanState state() const { return state_; }
+
+private:
+    void fail();
+    const GpuControl& gpu_;
+    FanController ctrl_;
+    FanState state_;
+    std::optional<int> written_;   // the manual speed we set, while it is ours
 };
 
 }

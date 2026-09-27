@@ -105,3 +105,120 @@ TEST_CASE("the controller raises at once and lowers only after 5 s") {
     CHECK(ctrl.decide(50, t).pct == 60);          // a new drop starts a new wait
     CHECK(ctrl.decide(70, t).pct == 70);          // and a rise cancels it
 }
+
+#include "core/types.hpp"
+
+namespace {
+// A fake card: records writes and reports what a real driver would.
+struct FakeFans {
+    bool manual = false;
+    int target = 30;
+    int writes = 0;
+    bool fail_writes = false;
+    GpuControl gpu() {
+        GpuControl g;
+        g.fan_min_pct = 30;
+        g.set_fan_pct = [this](int pct) {
+            ++writes;
+            if (fail_writes) return false;
+            manual = true;
+            target = pct;
+            return true;
+        };
+        g.set_fan_auto = [this] { manual = false; return true; };
+        g.read_fan = [this] { return std::optional<FanReading>(FanReading{manual, target}); };
+        return g;
+    }
+};
+}
+
+TEST_CASE("the driver writes the curve and hands the fans back on release") {
+    FakeFans f;
+    const GpuControl g = f.gpu();
+    FanDriver d(g, simple(), 90);
+    const auto t = Clock::now();
+    CHECK(d.tick(60, t).mode == FanMode::Curve);
+    CHECK(f.manual);
+    CHECK(f.target == 60);
+    d.release();
+    CHECK_FALSE(f.manual);
+    CHECK(d.state().mode == FanMode::Driver);
+}
+
+TEST_CASE("the driver only writes on a change of 2 % or more") {
+    FakeFans f;
+    const GpuControl g = f.gpu();
+    FanDriver d(g, simple(), 90);
+    const auto t = Clock::now();
+    d.tick(60, t);
+    d.tick(61, t);   // 61 %: 1 % more, no write
+    CHECK(f.writes == 1);
+    d.tick(62, t);   // 62 %: 2 % more, written
+    CHECK(f.writes == 2);
+    CHECK(f.target == 62);
+}
+
+TEST_CASE("a driver reset is re-applied") {
+    FakeFans f;
+    const GpuControl g = f.gpu();
+    FanDriver d(g, simple(), 90);
+    const auto t = Clock::now();
+    d.tick(60, t);
+    f.manual = false;   // TDR: the driver took the fans back
+    CHECK(d.tick(60, t).mode == FanMode::Curve);
+    CHECK(f.manual);
+    CHECK(f.writes == 2);
+}
+
+TEST_CASE("another tool's manual speed makes the driver step aside") {
+    FakeFans f;
+    const GpuControl g = f.gpu();
+    FanDriver d(g, simple(), 90);
+    const auto t = Clock::now();
+    d.tick(60, t);
+    f.target = 45;   // Afterburner set 45 %
+    CHECK(d.tick(70, t).mode == FanMode::Foreign);
+    CHECK(f.target == 45);   // not overwritten
+    CHECK(f.manual);         // and not handed back either: the other tool owns it
+    CHECK(d.tick(80, t).mode == FanMode::Foreign);
+    CHECK(f.writes == 1);
+}
+
+TEST_CASE("a failed write hands the fans back and stops") {
+    FakeFans f;
+    f.fail_writes = true;
+    const GpuControl g = f.gpu();
+    FanDriver d(g, simple(), 90);
+    const auto t = Clock::now();
+    CHECK(d.tick(60, t).mode == FanMode::Failed);
+    CHECK_FALSE(f.manual);
+    CHECK(d.tick(70, t).mode == FanMode::Failed);
+    CHECK(f.writes == 1);
+}
+
+TEST_CASE("no temperature reading hands the fans to the driver") {
+    FakeFans f;
+    const GpuControl g = f.gpu();
+    FanDriver d(g, simple(), 90);
+    const auto t = Clock::now();
+    d.tick(60, t);
+    CHECK(d.tick(-1, t).mode == FanMode::Driver);
+    CHECK_FALSE(f.manual);
+}
+
+TEST_CASE("a new curve applies on the next tick without a false 'another program'") {
+    FakeFans f;
+    const GpuControl g = f.gpu();
+    FanDriver d(g, simple(), 90);
+    const auto t = Clock::now();
+    d.tick(60, t);
+    d.set_curve(FanCurve{std::nullopt, {{40, 70}, {80, 100}}}, 90);
+    CHECK(d.tick(60, t).mode == FanMode::Curve);
+    CHECK(f.target == 85);
+}
+
+TEST_CASE("a card without fan control never gets a write") {
+    GpuControl g;   // every fan callback empty
+    FanDriver d(g, simple(), 90);
+    CHECK(d.tick(60, Clock::now()).mode == FanMode::Driver);
+}

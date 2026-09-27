@@ -1,6 +1,7 @@
 #include "core/fan_curve.hpp"
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 
 namespace gao {
 
@@ -76,6 +77,52 @@ FanCommand FanController::decide(const int temp_c, const std::chrono::steady_clo
         lower_since_.reset();
     }
     return FanCommand{false, *last_pct_};
+}
+
+FanDriver::FanDriver(const GpuControl& gpu, FanCurve curve, const int max_temp_c)
+    : gpu_(gpu), ctrl_(std::move(curve), gpu.fan_min_pct, max_temp_c) {}
+
+void FanDriver::set_curve(FanCurve curve, const int max_temp_c) {
+    ctrl_ = FanController(std::move(curve), gpu_.fan_min_pct, max_temp_c);
+}
+
+void FanDriver::fail() {
+    if (gpu_.set_fan_auto) gpu_.set_fan_auto();   // best effort: the driver is the safe owner
+    written_.reset();
+    state_ = {FanMode::Failed, 0};
+}
+
+void FanDriver::release() {
+    if (written_ && gpu_.set_fan_auto) gpu_.set_fan_auto();
+    written_.reset();
+    if (state_.mode == FanMode::Curve) state_ = {FanMode::Driver, 0};
+}
+
+FanState FanDriver::tick(const int temp_c, const std::chrono::steady_clock::time_point now) {
+    if (state_.mode == FanMode::Failed || state_.mode == FanMode::Foreign) return state_;
+    if (!gpu_.set_fan_pct || !gpu_.set_fan_auto || !gpu_.read_fan) return state_;
+    // What does the driver have? Policy back to automatic without us: a driver
+    // reset, so write again. Manual at a value we did not write: another tool.
+    if (written_) {
+        const auto seen = gpu_.read_fan();
+        if (!seen) { fail(); return state_; }
+        if (!seen->manual) written_.reset();
+        else if (seen->target_pct != *written_) { written_.reset(); state_ = {FanMode::Foreign, 0}; return state_; }
+    }
+    const FanCommand cmd = ctrl_.decide(temp_c, now);
+    if (cmd.driver) {
+        if (written_ && !gpu_.set_fan_auto()) { fail(); return state_; }
+        written_.reset();
+        state_ = {FanMode::Driver, 0};
+        return state_;
+    }
+    const bool write = !written_ || std::abs(cmd.pct - *written_) >= 2 || (cmd.pct == 100 && *written_ != 100);
+    if (write) {
+        if (!gpu_.set_fan_pct(cmd.pct)) { fail(); return state_; }
+        written_ = cmd.pct;
+    }
+    state_ = {FanMode::Curve, *written_};
+    return state_;
 }
 
 }

@@ -37,6 +37,12 @@ struct AppliedState {
     int power_pct = 100;
 };
 
+// What the driver reports for the fans (fan 0 stands for all of them).
+struct FanReading {
+    bool manual = false;   // false: the driver controls the fans
+    int target_pct = 0;
+};
+
 // The only way core code reaches hardware. hw/ fills these in production,
 // tests fill them with lambdas. An empty callback means "not supported here".
 struct GpuControl {
@@ -47,6 +53,10 @@ struct GpuControl {
     std::function<std::pair<int, int>()> power_limit_range_pct;   // {min, max}, percent of default
     std::function<bool()> reset_to_stock;
     std::function<std::optional<AppliedState>()> read_applied;   // nullopt when a read fails
+    std::function<bool(int)> set_fan_pct;                  // every fan to pct, verified by the target read-back
+    std::function<bool()> set_fan_auto;                    // every fan back to the driver, verified by the policy
+    std::function<std::optional<FanReading>()> read_fan;   // nullopt when a read fails
+    int fan_min_pct = 0;                                   // the card's minimum manual speed
 };
 
 }
