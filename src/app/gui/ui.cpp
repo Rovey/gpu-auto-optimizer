@@ -75,10 +75,6 @@ const char* title_of(Preset preset) {
     return preset_name(preset);
 }
 
-std::string field(int v, const char* unit) {
-    if (v < 0) return "n/a";
-    return std::to_string(v) + unit;
-}
 std::string offset(int mhz) { return (mhz >= 0 ? "+" : "") + std::to_string(mhz) + " MHz"; }
 
 // ------------------------------------------------------------------ widgets
@@ -173,15 +169,15 @@ void telemetry_tiles(const UiState& s) {
     const Telemetry& t = s.telemetry;
     const float gap = ImGui::GetStyle().ItemSpacing.x;
     const float w = (ImGui::GetContentRegionAvail().x - gap * 4) / 5, h = em() * 4.2f;
-    tile("core", kIconChip, "Core clock", field(t.core_mhz, " MHz"), w, h);
+    tile("core", kIconChip, "Core clock", reading(t.core_mhz, " MHz"), w, h);
     ImGui::SameLine();
-    tile("mem", kIconMemory, "Memory clock", field(t.mem_mhz, " MHz"), w, h);
+    tile("mem", kIconMemory, "Memory clock", reading(t.mem_mhz, " MHz"), w, h);
     ImGui::SameLine();
-    tile("temp", kIconTemp, "Temperature", field(t.temp_c, " \xC2\xB0""C"), w, h);
+    tile("temp", kIconTemp, "Temperature", reading(t.temp_c, " \xC2\xB0""C"), w, h);
     ImGui::SameLine();
-    tile("power", kIconPower, "Power", field(t.power_w, "") + " / " + field(t.power_limit_w, " W"), w, h);
+    tile("power", kIconPower, "Power", reading(t.power_w, "") + " / " + reading(t.power_limit_w, " W"), w, h);
     ImGui::SameLine();
-    tile("fan", kIconFan, "Fan speed", field(t.fan_pct, " %"), w, h);
+    tile("fan", kIconFan, "Fan speed", reading(t.fan_pct, " %"), w, h);
 }
 
 // The four presets side by side; clicking one selects it.
@@ -438,10 +434,10 @@ void run_screen(UiState& s, const OptimizeWorker::Snapshot& run, const UiActions
     ImGui::Spacing();
     const float w = (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) / 2;
     char overlay[64];
-    std::snprintf(overlay, sizeof(overlay), "temperature %s", field(s.telemetry.temp_c, " C").c_str());
+    std::snprintf(overlay, sizeof(overlay), "temperature %s", reading(s.telemetry.temp_c, " C").c_str());
     plot("##temp", s.temp_history, 30, 90, overlay, w);
     ImGui::SameLine();
-    std::snprintf(overlay, sizeof(overlay), "power %s W", field(s.telemetry.power_w, "").c_str());
+    std::snprintf(overlay, sizeof(overlay), "power %s W", reading(s.telemetry.power_w, "").c_str());
     plot("##power", s.power_history, 0, static_cast<float>(std::max(s.telemetry.power_limit_w, 1)), overlay, w);
     end_card();
 
@@ -500,10 +496,10 @@ void results(UiState& s, const OptimizeWorker::Snapshot& run, const UiActions& a
             std::snprintf(sb, sizeof(sb), "%.0f it/s", r.baseline.score);
             std::snprintf(sa, sizeof(sa), "%.0f it/s (%+.1f %%)", r.soak.score, gain);
             row("Score", sb, sa);
-            row("Core clock", field(r.baseline.avg_core_mhz, " MHz"), field(r.soak.avg_core_mhz, " MHz"));
-            row("Memory clock", field(r.baseline.avg_mem_mhz, " MHz"), field(r.soak.avg_mem_mhz, " MHz"));
-            row("Peak temperature", field(r.baseline.peak_temp_c, " \xC2\xB0""C"), field(r.soak.peak_temp_c, " \xC2\xB0""C"));
-            row("Power", field(r.baseline.avg_power_w, " W"), field(r.soak.avg_power_w, " W"));
+            row("Core clock", reading(r.baseline.avg_core_mhz, " MHz"), reading(r.soak.avg_core_mhz, " MHz"));
+            row("Memory clock", reading(r.baseline.avg_mem_mhz, " MHz"), reading(r.soak.avg_mem_mhz, " MHz"));
+            row("Peak temperature", reading(r.baseline.peak_temp_c, " \xC2\xB0""C"), reading(r.soak.peak_temp_c, " \xC2\xB0""C"));
+            row("Power", reading(r.baseline.avg_power_w, " W"), reading(r.soak.avg_power_w, " W"));
             ImGui::EndTable();
         }
         ImGui::Spacing();

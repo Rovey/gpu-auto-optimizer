@@ -27,6 +27,7 @@ bool ensure_app_dir(std::string* why);
 // read (a journal that silently read as empty would drop its ceilings).
 std::optional<std::vector<std::string>> read_lines(const std::filesystem::path& p);
 std::optional<std::string> read_file(const std::filesystem::path& p);
+std::wstring widen(const std::string& utf8);
 // Appends line + '\n' and forces it to disk before returning, so the line
 // survives a freeze that follows immediately after.
 bool append_line_durable(const std::filesystem::path& p, const std::string& line);

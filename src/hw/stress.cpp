@@ -114,17 +114,26 @@ std::string Hr(const char* what, HRESULT hr) {
 
 }
 
-std::string nvidia_adapter_name() {
+// The first NVIDIA adapter, or null. `name` receives its description.
+ComPtr<IDXGIAdapter1> find_nvidia_adapter(std::string* name) {
     ComPtr<IDXGIFactory1> factory;
-    if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory)))) return {};
+    if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory)))) return nullptr;
     ComPtr<IDXGIAdapter1> adapter;
     for (UINT i = 0; factory->EnumAdapters1(i, &adapter) != DXGI_ERROR_NOT_FOUND; ++i) {
         DXGI_ADAPTER_DESC1 desc{};
         adapter->GetDesc1(&desc);
-        if (desc.VendorId == kNvidiaVendorId) return Narrow(desc.Description);
-        adapter.Reset();
+        if (desc.VendorId == kNvidiaVendorId) {
+            *name = Narrow(desc.Description);
+            return adapter;
+        }
     }
-    return {};
+    return nullptr;
+}
+
+std::string nvidia_adapter_name() {
+    std::string name;
+    find_nvidia_adapter(&name);
+    return name;
 }
 
 struct Stress::Impl {
@@ -169,20 +178,11 @@ bool Stress::CreateDevice() {
         ~ResetOnFailure() { if (!ok) d.device.Reset(); }
     } guard{d};
 
-    ComPtr<IDXGIFactory1> factory;
-    HRESULT hr = CreateDXGIFactory1(IID_PPV_ARGS(&factory));
-    if (FAILED(hr)) { error_ = Hr("CreateDXGIFactory1", hr); return false; }
-    ComPtr<IDXGIAdapter1> adapter;
-    for (UINT i = 0; factory->EnumAdapters1(i, &adapter) != DXGI_ERROR_NOT_FOUND; ++i) {
-        DXGI_ADAPTER_DESC1 desc{};
-        adapter->GetDesc1(&desc);
-        if (desc.VendorId == kNvidiaVendorId) { adapter_name_ = Narrow(desc.Description); break; }
-        adapter.Reset();
-    }
+    const ComPtr<IDXGIAdapter1> adapter = find_nvidia_adapter(&adapter_name_);
     if (!adapter) { error_ = "no NVIDIA adapter found"; return false; }
 
     const D3D_FEATURE_LEVEL level = D3D_FEATURE_LEVEL_11_0;
-    hr = D3D11CreateDevice(adapter.Get(), D3D_DRIVER_TYPE_UNKNOWN, nullptr, 0, &level, 1,
+    HRESULT hr = D3D11CreateDevice(adapter.Get(), D3D_DRIVER_TYPE_UNKNOWN, nullptr, 0, &level, 1,
                            D3D11_SDK_VERSION, &d.device, nullptr, &d.ctx);
     if (FAILED(hr)) { error_ = Hr("D3D11CreateDevice", hr); return false; }
 

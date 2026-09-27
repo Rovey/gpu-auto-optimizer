@@ -13,33 +13,18 @@
 #include <atomic>
 #include <filesystem>
 #include <string>
-#include <cerrno>
-#include <climits>
+#include <charconv>
 #include <cstddef>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 
-// std::atoi silently returns 0 for anything it cannot parse, so a typo like
-// "--set-core +x" would parse to 0 and silently reset the offset -- 0 is in
-// range, so the CLI's own range check cannot catch it. strtol plus this end-pointer
-// check rejects any argument that is not fully numeric, instead of guessing.
+// The whole argument must be an int: std::atoi would read a typo like
+// "--set-core +x" as 0 and silently reset the offset.
 static bool ParseIntArg(const char* text, int* out) {
-    if (!text || *text == '\0') return false;
-    char* end = nullptr;
-    errno = 0;
-    const long value = std::strtol(text, &end, 10);
-    if (end == text || *end != '\0') return false;   // trailing/leading junk, or nothing consumed
-    if (errno == ERANGE || value < INT_MIN || value > INT_MAX) return false;
-    *out = static_cast<int>(value);
-    return true;
-}
-
-// Telemetry fields that use the -1-means-unknown sentinel print as "n/a"
-// instead of a number that would look like a real reading.
-static void FormatField(char* buf, std::size_t size, int value, const char* suffix) {
-    if (value < 0) std::snprintf(buf, size, "n/a");
-    else std::snprintf(buf, size, "%d%s", value, suffix);
+    const char* end = text + std::strlen(text);
+    const auto [p, ec] = std::from_chars(text, end, *out);
+    return ec == std::errc() && p == end && p != text;
 }
 
 static int probe() {
@@ -57,18 +42,10 @@ static int probe() {
     for (int i = 0; i < count; ++i) {
         const gao::Telemetry t = nvml.Read(static_cast<unsigned>(i));
         if (!t.ok) { std::printf("  [%d] read failed\n", i); continue; }
-        // core_mhz/mem_mhz/temp_c/power_w/fan_pct are each -1 when the
-        // driver didn't report that particular value, even though t.ok is
-        // true overall; print "n/a" for those rather than a number that
-        // would look like a real reading.
-        char core[8], mem[8], temp[8], fan[8], power[8];
-        FormatField(core, sizeof(core), t.core_mhz, "");
-        FormatField(mem, sizeof(mem), t.mem_mhz, "");
-        FormatField(temp, sizeof(temp), t.temp_c, "");
-        FormatField(fan, sizeof(fan), t.fan_pct, "%");
-        FormatField(power, sizeof(power), t.power_w, "");
-        std::printf("  [%d] core=%s MHz  mem=%s MHz  temp=%s C  fan=%s  power=%s/%d W\n",
-                    i, core, mem, temp, fan, power, t.power_limit_w);
+        // Each field is -1 when the driver did not report it, even when t.ok.
+        std::printf("  [%d] core=%s MHz  mem=%s MHz  temp=%s C  fan=%s  power=%s/%d W\n", i,
+                    gao::reading(t.core_mhz).c_str(), gao::reading(t.mem_mhz).c_str(), gao::reading(t.temp_c).c_str(),
+                    gao::reading(t.fan_pct, "%").c_str(), gao::reading(t.power_w).c_str(), t.power_limit_w);
     }
     return 0;
 }
@@ -144,13 +121,9 @@ static int stress(int seconds, int max_temp_c, gao::StressSelftest selftest) {
     auto read = [&] {
         const gao::Telemetry tel = nvml.Read(kGpu);
         if (t >= next_print) {
-            char core[8], mem[8], temp[8], power[8];
-            FormatField(core, sizeof(core), tel.core_mhz, "");
-            FormatField(mem, sizeof(mem), tel.mem_mhz, "");
-            FormatField(temp, sizeof(temp), tel.temp_c, "");
-            FormatField(power, sizeof(power), tel.power_w, "");
-            std::printf("  t=%.0fs  score=%.0f it/s  core=%s MHz  mem=%s MHz  temp=%s C  power=%s/%d W\n",
-                        t, window_its / window_s, core, mem, temp, power, tel.power_limit_w);
+            std::printf("  t=%.0fs  score=%.0f it/s  core=%s MHz  mem=%s MHz  temp=%s C  power=%s/%d W\n", t,
+                        window_its / window_s, gao::reading(tel.core_mhz).c_str(), gao::reading(tel.mem_mhz).c_str(),
+                        gao::reading(tel.temp_c).c_str(), gao::reading(tel.power_w).c_str(), tel.power_limit_w);
             window_its = 0;
             window_s = 0;
             next_print = t + 1.0;
@@ -158,13 +131,10 @@ static int stress(int seconds, int max_temp_c, gao::StressSelftest selftest) {
         return tel;
     };
     const gao::StabilityResult r = gao::run_stability(batch, read, seconds, max_temp_c);
-    char peak[8], power[8], core[8], mem[8];
-    FormatField(peak, sizeof(peak), r.peak_temp_c, "");
-    FormatField(power, sizeof(power), r.avg_power_w, "");
-    FormatField(core, sizeof(core), r.avg_core_mhz, "");
-    FormatField(mem, sizeof(mem), r.avg_mem_mhz, "");
     std::printf("VERDICT: %s  score=%.0f it/s  %.1f s  peak=%s C  avg power=%s W  avg core=%s MHz  avg mem=%s MHz\n",
-                gao::verdict_name(r.verdict), r.score, r.seconds, peak, power, core, mem);
+                gao::verdict_name(r.verdict), r.score, r.seconds, gao::reading(r.peak_temp_c).c_str(),
+                gao::reading(r.avg_power_w).c_str(), gao::reading(r.avg_core_mhz).c_str(),
+                gao::reading(r.avg_mem_mhz).c_str());
     switch (r.verdict) {
         case gao::Verdict::Stable: return 0;
         case gao::Verdict::WrongResult:

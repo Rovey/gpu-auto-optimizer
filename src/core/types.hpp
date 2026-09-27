@@ -1,10 +1,17 @@
 #pragma once
 #include <functional>
 #include <optional>
+#include <string>
 #include <utility>
 #include <vector>
 
 namespace gao {
+
+// A reading that uses the -1-means-unknown sentinel, as text: "n/a" rather
+// than a number that would look real.
+inline std::string reading(int value, const char* unit = "") {
+    return value < 0 ? "n/a" : std::to_string(value) + unit;
+}
 
 struct Telemetry {
     int core_mhz = -1;        // -1 when the driver does not report it

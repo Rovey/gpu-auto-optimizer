@@ -119,9 +119,7 @@ std::string current_user_sid() {
 }
 
 bool write_utf16_file(const std::filesystem::path& p, const std::string& utf8) {
-    const int n = MultiByteToWideChar(CP_UTF8, 0, utf8.data(), static_cast<int>(utf8.size()), nullptr, 0);
-    std::wstring w(static_cast<size_t>(n), L'\0');
-    MultiByteToWideChar(CP_UTF8, 0, utf8.data(), static_cast<int>(utf8.size()), w.data(), n);
+    const std::wstring w = widen(utf8);
     std::ofstream out(p, std::ios::binary | std::ios::trunc);
     const unsigned char bom[] = {0xFF, 0xFE};
     out.write(reinterpret_cast<const char*>(bom), 2);

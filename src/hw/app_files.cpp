@@ -139,4 +139,11 @@ bool write_file_atomic(const std::filesystem::path& p, const std::string& text) 
     return false;
 }
 
+std::wstring widen(const std::string& utf8) {
+    const int n = MultiByteToWideChar(CP_UTF8, 0, utf8.data(), static_cast<int>(utf8.size()), nullptr, 0);
+    std::wstring w(static_cast<size_t>(n), L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, utf8.data(), static_cast<int>(utf8.size()), w.data(), n);
+    return w;
+}
+
 }

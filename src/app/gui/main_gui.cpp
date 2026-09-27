@@ -166,13 +166,6 @@ void recover_device() {
 
 // ---------------------------------------------------------------- tray
 
-std::wstring widen(const std::string& s) {
-    const int n = MultiByteToWideChar(CP_UTF8, 0, s.data(), static_cast<int>(s.size()), nullptr, 0);
-    std::wstring w(static_cast<size_t>(n), L'\0');
-    MultiByteToWideChar(CP_UTF8, 0, s.data(), static_cast<int>(s.size()), w.data(), n);
-    return w;
-}
-
 void tray_icon(DWORD message, const wchar_t* tip = nullptr, const wchar_t* balloon = nullptr) {
     NOTIFYICONDATAW nid{};
     nid.cbSize = sizeof(nid);
@@ -211,7 +204,7 @@ void note(const std::string& text, bool warn = false) {
 // which the window's log shows too.
 void notify(const std::string& text, bool log = true) {
     if (log) note(text, true);
-    tray_icon(NIM_MODIFY, nullptr, widen(text).c_str());
+    tray_icon(NIM_MODIFY, nullptr, gao::widen(text).c_str());
 }
 
 void show_window() {
