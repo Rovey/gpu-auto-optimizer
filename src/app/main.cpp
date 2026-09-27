@@ -256,6 +256,7 @@ static int status() {
         for (const gao::FanPoint& p : curve->points) std::printf(", %d C %d %%", p.temp_c, p.pct);
     }
     std::printf("\n");
+    if (cfg.fan_min_pct > 0) std::printf("fan minimum: %d %% (learned: the fans stall below it)\n", cfg.fan_min_pct);
     std::printf("boot-apply: %s\n", gao::boot_task_exists() ? "on (logon task registered)" : "off");
     const auto installed = gao::installed_exe_path();
     wchar_t self[MAX_PATH];
