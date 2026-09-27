@@ -222,3 +222,31 @@ TEST_CASE("a card without fan control never gets a write") {
     FanDriver d(g, simple(), 90);
     CHECK(d.tick(60, Clock::now()).mode == FanMode::Driver);
 }
+
+TEST_CASE("re-setting the same curve keeps the controller's state") {
+    FakeFans f;
+    const GpuControl g = f.gpu();
+    const FanCurve c{50, {{50, 30}, {80, 80}}};
+    FanDriver d(g, c, 90);
+    auto t = Clock::now();
+    CHECK(d.tick(55, t).mode == FanMode::Curve);   // on the curve
+    d.set_curve(c, 90);                            // the tray re-syncs every 30 s
+    CHECK(d.tick(48, t).mode == FanMode::Curve);   // within the 3 C hysteresis: still on the curve
+    CHECK(d.tick(70, t).pct == 63);
+    d.set_curve(c, 90);
+    t += std::chrono::seconds(1);
+    CHECK(d.tick(60, t).pct == 63);                // the slow-down wait survives the re-sync
+}
+
+TEST_CASE("another tool's manual speed is detected while the driver has the fans") {
+    FakeFans f;
+    const GpuControl g = f.gpu();
+    FanDriver d(g, FanCurve{50, {{50, 30}, {80, 80}}}, 90);
+    const auto t = Clock::now();
+    CHECK(d.tick(40, t).mode == FanMode::Driver);   // fan-stop zone
+    f.manual = true;                                // Afterburner sets 45 %
+    f.target = 45;
+    CHECK(d.tick(60, t).mode == FanMode::Foreign);
+    CHECK(f.target == 45);
+    CHECK(f.writes == 0);
+}

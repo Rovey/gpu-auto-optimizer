@@ -75,13 +75,17 @@ class FanDriver {
 public:
     FanDriver(const GpuControl& gpu, FanCurve curve, int max_temp_c);
     FanState tick(int temp_c, std::chrono::steady_clock::time_point now);
-    void set_curve(FanCurve curve, int max_temp_c);   // keeps what was written, so no false "another program"
+    // Keeps what was written, so no false "another program"; an unchanged
+    // curve keeps the controller's hysteresis and slow-down state too.
+    void set_curve(FanCurve curve, int max_temp_c);
     void release();
     FanState state() const { return state_; }
 
 private:
     void fail();
     const GpuControl& gpu_;
+    FanCurve curve_;
+    int max_temp_c_;
     FanController ctrl_;
     FanState state_;
     std::optional<int> written_;   // the manual speed we set, while it is ours

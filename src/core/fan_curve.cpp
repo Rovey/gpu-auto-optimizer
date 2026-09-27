@@ -80,9 +80,12 @@ FanCommand FanController::decide(const int temp_c, const std::chrono::steady_clo
 }
 
 FanDriver::FanDriver(const GpuControl& gpu, FanCurve curve, const int max_temp_c)
-    : gpu_(gpu), ctrl_(std::move(curve), gpu.fan_min_pct, max_temp_c) {}
+    : gpu_(gpu), curve_(curve), max_temp_c_(max_temp_c), ctrl_(std::move(curve), gpu.fan_min_pct, max_temp_c) {}
 
 void FanDriver::set_curve(FanCurve curve, const int max_temp_c) {
+    if (curve == curve_ && max_temp_c == max_temp_c_) return;
+    curve_ = curve;
+    max_temp_c_ = max_temp_c;
     ctrl_ = FanController(std::move(curve), gpu_.fan_min_pct, max_temp_c);
 }
 
@@ -108,6 +111,11 @@ FanState FanDriver::tick(const int temp_c, const std::chrono::steady_clock::time
         if (!seen) { fail(); return state_; }
         if (!seen->manual) written_.reset();
         else if (seen->target_pct != *written_) { written_.reset(); state_ = {FanMode::Foreign, 0}; return state_; }
+    } else if (const auto seen = gpu_.read_fan(); seen && seen->manual) {
+        // Manual while we have written nothing (the driver had the fans):
+        // another program set them.
+        state_ = {FanMode::Foreign, 0};
+        return state_;
     }
     const FanCommand cmd = ctrl_.decide(temp_c, now);
     if (cmd.driver) {

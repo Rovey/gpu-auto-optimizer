@@ -652,10 +652,15 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 clear_strike();
                 fan_release();
                 if (g.worker->running() && g.gpu.reset_to_stock) g.gpu.reset_to_stock();
+                // A run drives the fans itself (g.fan is empty then): hand them back too.
+                if (g.worker->running() && g.gpu.set_fan_auto) g.gpu.set_fan_auto();
             }
             return 0;
         case WM_POWERBROADCAST:
-            if (wp == PBT_APMSUSPEND) fan_release();                 // never sleep with a manual speed
+            if (wp == PBT_APMSUSPEND) {   // never sleep with a manual speed, ours or a run's
+                fan_release();
+                if (g.worker->running() && g.gpu.set_fan_auto) g.gpu.set_fan_auto();
+            }
             else if (wp == PBT_APMRESUMEAUTOMATIC) refresh_status(false);   // take the curve up again
             return TRUE;
         case WM_DESTROY:
