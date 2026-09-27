@@ -81,7 +81,7 @@ target_link_libraries(hw PUBLIC core d3d11 dxgi d3dcompiler shell32 ole32 PRIVAT
 add_library(app STATIC src/app/common.hpp src/app/common.cpp)
 target_link_libraries(app PUBLIC core hw PRIVATE gao_warnings gao_hardening)
 
-add_executable(gao src/app/main.cpp src/app/gao.manifest)
+add_executable(gao src/app/main.cpp src/app/gao.manifest src/app/app.rc)
 target_link_libraries(gao PRIVATE app gao_warnings gao_hardening)
 # d3dcompiler_47.dll, d3d11.dll and dxgi.dll are not KnownDLLs: delay-load
 # them so they resolve after SetDefaultDllDirectories(SYSTEM32) in main(),
@@ -109,6 +109,7 @@ add_executable(GpuAutoOptimizer WIN32
   src/app/gui/ui.hpp src/app/gui/ui.cpp
   src/app/gui/worker.hpp src/app/gui/worker.cpp
   src/app/gao.manifest
+  src/app/app.rc
 )
 target_link_libraries(GpuAutoOptimizer PRIVATE app imgui gao_warnings gao_hardening delayimp)
 target_link_options(GpuAutoOptimizer PRIVATE /DELAYLOAD:d3dcompiler_47.dll /DELAYLOAD:d3d11.dll /DELAYLOAD:dxgi.dll
