@@ -44,6 +44,8 @@ add_library(core STATIC
   src/core/types.hpp
   src/core/objectives.hpp
   src/core/objectives.cpp
+  src/core/fan_curve.hpp
+  src/core/fan_curve.cpp
   src/core/config.hpp
   src/core/config.cpp
   src/core/stress_math.hpp
@@ -129,6 +131,7 @@ add_executable(core_tests
   tests/test_boot.cpp
   tests/test_task_xml.cpp
   tests/test_watchdog.cpp
+  tests/test_fan_curve.cpp
 )
 target_link_libraries(core_tests PRIVATE core doctest gao_warnings)
 add_test(NAME core_tests COMMAND core_tests)
