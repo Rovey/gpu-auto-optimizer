@@ -5,6 +5,32 @@
 
 namespace gao {
 
+namespace {
+nlohmann::json curve_json(const FanCurve& c) {
+    nlohmann::json points = nlohmann::json::array();
+    for (const FanPoint& p : c.points) points.push_back({p.temp_c, p.pct});
+    return {{"stop_below_c", c.stop_below_c ? nlohmann::json(*c.stop_below_c) : nlohmann::json(nullptr)},
+            {"points", points}};
+}
+
+// nullopt for anything that is not a valid curve: a bad curve never reaches the fans.
+std::optional<FanCurve> curve_from(const nlohmann::json& j) {
+    if (!j.is_object()) return std::nullopt;
+    FanCurve c;
+    const auto stop = j.find("stop_below_c");
+    if (stop != j.end() && stop->is_number_integer()) c.stop_below_c = stop->get<int>();
+    else if (stop != j.end() && !stop->is_null()) return std::nullopt;
+    const auto pts = j.find("points");
+    if (pts == j.end() || !pts->is_array()) return std::nullopt;
+    for (const auto& p : *pts) {
+        if (!p.is_array() || p.size() != 2 || !p[0].is_number_integer() || !p[1].is_number_integer()) return std::nullopt;
+        c.points.push_back({p[0].get<int>(), p[1].get<int>()});
+    }
+    if (!valid(c)) return std::nullopt;
+    return c;
+}
+}
+
 std::string to_json(const Config& c) {
     nlohmann::json j = {{"boot_strikes", c.boot_strikes}};
     if (c.profile) {
@@ -18,7 +44,10 @@ std::string to_json(const Config& c) {
             {"gpu", p.gpu},
             {"saved_at", p.saved_at},
         };
+        if (p.fan_curve) j["profile"]["fan_curve"] = curve_json(*p.fan_curve);
     }
+    if (c.fan_curve) j["fan_curve"] = curve_json(*c.fan_curve);
+    j["fan_control"] = c.fan_control;
     return j.dump(2);
 }
 
@@ -33,6 +62,9 @@ Config from_json(const std::string& text) {
                           !(it->is_number_unsigned() && it->get<unsigned long long>() > 1000);
         c.boot_strikes = sane ? static_cast<int>(it->get<long long>()) : kMaxBootStrikes;
     }
+
+    if (const auto it = j.find("fan_curve"); it != j.end()) c.fan_curve = curve_from(*it);
+    if (const auto it = j.find("fan_control"); it != j.end() && it->is_boolean()) c.fan_control = it->get<bool>();
 
     const auto pj = j.find("profile");
     if (pj == j.end() || !pj->is_object()) return c;
@@ -52,7 +84,15 @@ Config from_json(const std::string& text) {
     const auto driver = str("driver"), gpu = str("gpu"), saved_at = str("saved_at");
     if (!preset || !power || !core || !mem || !driver || !gpu || !saved_at) return c;
     c.profile = Profile{*preset, *power, *core, *mem, *driver, *gpu, *saved_at};
+    if (const auto it = pj->find("fan_curve"); it != pj->end()) c.profile->fan_curve = curve_from(*it);
     return c;
+}
+
+std::optional<FanCurve> active_fan_curve(const Config& c) {
+    if (!c.profile) return std::nullopt;
+    if (c.fan_curve) return c.fan_curve;
+    if (c.profile->fan_curve) return c.profile->fan_curve;
+    return default_curve(c.profile->preset);
 }
 
 }

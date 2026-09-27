@@ -87,3 +87,52 @@ TEST_CASE("a strike count that is not a sane integer fails closed") {
     CHECK(from_json(R"({"boot_strikes":2})").boot_strikes == 2);
     CHECK(from_json(R"({})").boot_strikes == 0);
 }
+
+#include "core/fan_curve.hpp"
+
+TEST_CASE("fan settings survive a round-trip") {
+    Config c;
+    c.profile = sample();
+    c.profile->fan_curve = FanCurve{50, {{50, 30}, {80, 100}}};
+    c.fan_curve = FanCurve{std::nullopt, {{40, 40}, {70, 90}}};
+    c.fan_control = true;
+    const Config back = from_json(to_json(c));
+    REQUIRE(back.profile.has_value());
+    CHECK(back.profile->fan_curve == c.profile->fan_curve);
+    CHECK(back.fan_curve == c.fan_curve);
+    CHECK(back.fan_control);
+}
+
+TEST_CASE("a config from before fan control keeps its profile and has fan control off") {
+    const Config back = from_json(R"({"boot_strikes":0,"profile":{"preset":"quiet","power_pct":80,"core_mhz":90,
+        "mem_mhz":600,"driver":"610.74","gpu":"GPU-8a1b","saved_at":"2026-09-26 22:41"}})");
+    REQUIRE(back.profile.has_value());
+    CHECK_FALSE(back.profile->fan_curve.has_value());
+    CHECK_FALSE(back.fan_curve.has_value());
+    CHECK_FALSE(back.fan_control);
+}
+
+TEST_CASE("an invalid fan curve reads as absent without losing the profile") {
+    Config c;
+    c.profile = sample();
+    c.profile->fan_curve = FanCurve{std::nullopt, {{60, 60}, {40, 40}}};   // descending: invalid
+    c.fan_curve = FanCurve{std::nullopt, {{40, 40}}};                       // one point: invalid
+    const Config back = from_json(to_json(c));
+    REQUIRE(back.profile.has_value());
+    CHECK_FALSE(back.profile->fan_curve.has_value());
+    CHECK_FALSE(back.fan_curve.has_value());
+    const Config junk = from_json(R"({"fan_curve":{"points":"x"},"fan_control":"yes"})");
+    CHECK_FALSE(junk.fan_curve.has_value());
+    CHECK_FALSE(junk.fan_control);
+}
+
+TEST_CASE("the active fan curve is the edited one, then the tested one, then the profile default") {
+    Config c;
+    CHECK_FALSE(active_fan_curve(c).has_value());
+    c.profile = sample();   // Quiet, no tested curve
+    CHECK(active_fan_curve(c) == default_curve(Preset::Quiet));
+    c.profile->fan_curve = FanCurve{50, {{50, 40}, {80, 100}}};
+    CHECK(active_fan_curve(c) == c.profile->fan_curve);
+    c.fan_curve = FanCurve{std::nullopt, {{40, 40}, {70, 90}}};
+    CHECK(active_fan_curve(c) == c.fan_curve);
+}

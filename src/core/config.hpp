@@ -1,4 +1,5 @@
 #pragma once
+#include "core/fan_curve.hpp"
 #include "core/objectives.hpp"
 #include <optional>
 #include <string>
@@ -14,6 +15,7 @@ struct Profile {
     std::string driver;     // driver version the profile was tested on
     std::string gpu;        // NVML UUID of the card it was tested on
     std::string saved_at;   // local time, "YYYY-MM-DD HH:MM"
+    std::optional<FanCurve> fan_curve;   // the curve the tune was tested with; nullopt: driver control
 };
 
 // Everything that has to survive a reboot. Freeze ceilings are not here:
@@ -21,11 +23,17 @@ struct Profile {
 struct Config {
     std::optional<Profile> profile;
     int boot_strikes = 0;   // logons that applied the profile and have not yet run 2 minutes
+    std::optional<FanCurve> fan_curve;   // the active curve, once edited; otherwise active_fan_curve() picks one
+    bool fan_control = false;            // drive the fans with the active curve
 };
 
 std::string to_json(const Config& c);
 // Never throws. Bad input yields defaults; a profile with any field missing
 // or mistyped is treated as no profile rather than half a profile.
 Config from_json(const std::string& text);
+
+// The curve the fans follow: the edited one, else the one the tune was tested
+// with, else the profile's default. nullopt without a profile.
+std::optional<FanCurve> active_fan_curve(const Config& c);
 
 }
