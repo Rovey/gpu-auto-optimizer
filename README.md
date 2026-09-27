@@ -19,6 +19,19 @@
 
 ## Quick start
 
+### From a release
+
+Download `GpuAutoOptimizer-<version>-win-x64.zip` from [Releases](https://github.com/Rovey/gpu-auto-optimizer/releases), check it and unzip it anywhere:
+
+```powershell
+(Get-FileHash .\GpuAutoOptimizer-<version>-win-x64.zip -Algorithm SHA256).Hash   # compare with the .sha256 file
+gh attestation verify .\GpuAutoOptimizer-<version>-win-x64.zip --repo Rovey/gpu-auto-optimizer   # optional: proves CI built it from this repo
+```
+
+The executables are not code-signed, so Windows SmartScreen may say it "protected your PC" on the first start: choose **More info**, then **Run anyway**. Turning on apply-at-logon copies both executables to `%ProgramFiles%\GpuAutoOptimizer\`, so the unzipped folder can be deleted afterwards.
+
+### From source
+
 Requires an x64 Windows machine with Visual Studio 2026 (C++ and CMake workload), whose bundled CMake (4.2 or newer) knows the VS 2026 generator. From a Developer PowerShell, in the repo root:
 
 ```powershell
@@ -31,7 +44,7 @@ That builds two programs in `.\build\Release\`: `GpuAutoOptimizer.exe`, the wind
 
 Start `GpuAutoOptimizer.exe`. The window shows the GPU, live telemetry, the saved tune and what is applied right now; pick a preset and press **Optimize** (it offers to restart as administrator first, because tuning writes clocks and power limits). The run screen shows temperature, power and every probe as it happens; **Abort** restores stock. The results screen compares before and after and can turn on **apply at every logon**.
 
-With apply-at-logon on, Windows starts the app in the tray at every logon. It applies the saved tune and then keeps it applied: every 30 seconds it reads back what the driver reports. If the tune was reset (a driver reset or TDR), it applies it again; if that happens four times within an hour it stops and tells you the tune is probably not stable; if another program such as MSI Afterburner changed the settings, it leaves them alone and tells you; after a driver update it does not apply the old tune and tells you to optimize again. Closing the window keeps it in the tray; **Exit** in the tray menu quits.
+With apply-at-logon on, Windows starts the app in the tray at every logon. It applies the saved tune and then keeps it applied: every 30 seconds it reads back what the driver reports. If the tune was reset (a driver reset or TDR), it applies it again; if that happens four times within an hour it stops and tells you the tune is probably not stable; if another program such as MSI Afterburner changed the settings, it leaves them alone and tells you; after a driver update it does not apply the old tune and tells you to optimize again. While it keeps a tune applied (or a run is in progress), closing the window keeps it in the tray and **Exit** in the tray menu quits; otherwise closing the window quits. **Revert to stock** in the tray menu, or `gao --reset` from a shell, puts the card at stock and the watchdog leaves it there until you apply the tune again. Only one optimize runs at a time, from the window or the command line.
 
 ### The command line
 
@@ -48,7 +61,7 @@ With apply-at-logon on, Windows starts the app in the tray at every logon. It ap
 
 `--optimize` runs baseline → power → core → memory → 60 s soak (~10 minutes), leaves the result applied until reboot, and keeps a crash journal so a setting that froze the machine is never tried again. Ctrl+C restores stock. The core and memory edges it finds are each re-checked with a 30 s probe before the safety margin is applied, and the memory search stops at the **bandwidth peak** rather than at the highest offset that does not produce errors: GDDR6X and GDDR6 retry failed transfers, so an excessive memory clock costs speed long before it produces a wrong result. `--bandwidth` prints the current memory bandwidth.
 
-All state (`gao.json`, the crash journal, `boot.log`) lives in `%ProgramData%\GpuAutoOptimizer`, which users can read but only administrators can write. `--boot on` copies `gao.exe` to `%ProgramFiles%\GpuAutoOptimizer\` and registers a logon task (`\GpuAutoOptimizer\BootApply`) that runs that copy and re-applies the saved profile; `--status` says whether the installed copy matches your build; if the machine crashes within 2 minutes of three logons in a row, or the NVIDIA driver version changes, boot-apply stops and `--status` / `boot.log` say why. A profile only applies to the card it was tuned on (NVML UUID).
+All state (`gao.json`, the crash journal, `boot.log`) lives in `%ProgramData%\GpuAutoOptimizer`, which users can read but only administrators can write. `--boot on` copies both executables to `%ProgramFiles%\GpuAutoOptimizer\` and registers a logon task (`\GpuAutoOptimizer\BootApply`) that starts that copy of the app in the tray, which re-applies the saved profile and keeps it applied; `--status` says whether the installed copies match your build; if the machine crashes within 2 minutes of three logons in a row, or the NVIDIA driver version changes, boot-apply stops and `--status` / `boot.log` say why. A profile only applies to the card it was tuned on (NVML UUID).
 
 > [!NOTE]
 > The logon task runs with administrator rights, so everything it touches is admin-only: the exe in Program Files and the state folder in ProgramData (a folder someone else created there first, or a link in its place, is refused). Both locations come from the registry, not from environment variables. The CRT is linked statically and every non-system DLL (`d3d11`, `dxgi`, `d3dcompiler_47`) is delay-loaded from System32, so nothing placed next to the exe is ever loaded. Profile values outside the search range are refused.
@@ -60,7 +73,7 @@ All state (`gao.json`, the crash journal, `boot.log`) lives in `%ProgramData%\Gp
 ### Requirements
 
 - Windows 10/11, 64-bit
-- MSVC (Visual Studio) with the C++ and CMake components, or CMake >= 3.28 with MSVC on `PATH`
+- To build: Visual Studio 2026 with the C++ and CMake components (CMake 4.2 or newer)
 - An NVIDIA GPU with a recent driver, for `--probe` and the write commands (NVML/NVAPI are loaded at runtime; nothing in the build itself needs a GPU, and CI builds the full executable on a GPU-less runner)
 
 ## Project structure
@@ -115,13 +128,13 @@ cmake --build --preset asan
 ctest --preset asan               # needs the MSVC bin\Hostx64\x64 folder on PATH
 ```
 
-Our code builds at `/W4 /permissive-` with warnings as errors; `third_party/` is a system include. All of it is compiled with Control Flow Guard and SDL checks; `gao.exe` is linked CET-compatible and carries an application manifest.
+Our code builds at `/W4 /permissive-` with warnings as errors; `third_party/` is a system include. All of it is compiled with Control Flow Guard and SDL checks; both executables are linked CET-compatible and carry an application manifest.
 
 `core_tests` is the only test binary. It covers `src/core/` -- presets, config round-trip, and the `GpuControl` seam that lets tests drive fake hardware through lambdas -- and needs no GPU, which is why CI runs it on a GitHub-hosted `windows-2025` runner, once normally and once under AddressSanitizer. `src/hw/` (NVML, NVAPI) is verified manually on real hardware instead, through [`docs/hardware-checks.md`](docs/hardware-checks.md); CI still builds the full `gao.exe` so a link error in the hardware layer is caught there rather than on a developer's machine.
 
 ## Status and roadmap
 
-Phases 0-5 of the rewrite are done: repository migration, the CMake/CI skeleton, the hardware layer (NVML telemetry and power limit, NVAPI clock offsets, NVAPI fan control), the DX11 stress load with its stability verdict, the search with its crash-safe journal, persistence with boot-apply, and the window and tray app with its tune watchdog. What remains is phase 6: the release workflow and packaging. See [the design spec](docs/superpowers/specs/2026-09-20-cpp-rewrite-design.md) for the full phase table and the reasoning behind each decision (why NVAPI + NVML directly, why the Afterburner route was abandoned, why undervolting ships opt-in).
+Phases 0-5 of the rewrite are done: repository migration, the CMake/CI skeleton, the hardware layer (NVML telemetry and power limit, NVAPI clock offsets, NVAPI fan control), the DX11 stress load with its stability verdict, the search with its crash-safe journal, persistence with boot-apply, and the window and tray app with its tune watchdog. Phase 6 is under way: the executables carry an icon and version information, and a `v*` tag builds a draft release (zip, SHA-256, build provenance attestation); the first release is still to be tagged. See [the design spec](docs/superpowers/specs/2026-09-20-cpp-rewrite-design.md) for the full phase table and the reasoning behind each decision (why NVAPI + NVML directly, why the Afterburner route was abandoned, why undervolting ships opt-in).
 
 ## License
 
