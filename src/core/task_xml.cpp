@@ -34,6 +34,7 @@ std::string boot_task_xml(const std::string& exe_path_utf8, const std::string& a
            "  </Principals>\n"
            "  <Settings>\n"
            "    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>\n"
+           "    <Priority>5</Priority>\n"   // normal; Task Scheduler's default 7 is background priority
            "    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>\n"
            "    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>\n"
            "    <ExecutionTimeLimit>" + xml_escape(time_limit) + "</ExecutionTimeLimit>\n"

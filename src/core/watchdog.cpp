@@ -23,10 +23,14 @@ WatchAction Watchdog::check(const Profile& p, const std::optional<AppliedState>&
         backed_off_ = false;
         return WatchAction::None;
     }
-    if (same(*seen, 0, 0, 100)) {
-        // Back at stock with the same driver: a TDR or driver reset undid the
-        // tune. Re-apply, unless it keeps happening -- then the tune itself is
-        // the likely cause.
+    // Every field either ours or stock: a TDR or driver reset undid (part of)
+    // the tune -- it may reset the offsets and keep the power limit, or the
+    // reverse. Re-apply, unless it keeps happening -- then the tune itself is
+    // the likely cause.
+    const bool core_ok = seen->core_mhz == p.core_mhz || seen->core_mhz == 0;
+    const bool mem_ok = seen->mem_mhz == p.mem_mhz || seen->mem_mhz == 0;
+    const bool power_ok = std::abs(seen->power_pct - p.power_pct) <= 1 || std::abs(seen->power_pct - 100) <= 1;
+    if (core_ok && mem_ok && power_ok) {
         if (gave_up_) return WatchAction::None;
         while (!reapplies_.empty() && now - reapplies_.front() >= std::chrono::hours(1)) reapplies_.pop_front();
         if (static_cast<int>(reapplies_.size()) >= kMaxReappliesPerHour) {

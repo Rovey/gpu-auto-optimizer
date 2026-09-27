@@ -26,6 +26,29 @@ bool prepare_state(std::string* why);
 std::string profile_text(const Profile& p);
 std::string decision_text(BootDecision d, const Config& c, const std::string& driver);
 
+// Held (process-wide, across gao.exe and the tray app) for the whole of an
+// optimize: the watchdog must not re-apply the saved tune under a running
+// search, and two searches must not run at once.
+class TuningLock {
+public:
+    TuningLock();
+    ~TuningLock();
+    TuningLock(const TuningLock&) = delete;
+    TuningLock& operator=(const TuningLock&) = delete;
+    bool owned() const { return owned_; }
+private:
+    void* handle_ = nullptr;
+    bool owned_ = false;
+};
+// True while another thread or process holds the TuningLock.
+bool tuning_in_progress();
+
+// Tells a running tray app that the card was put back to stock on purpose
+// (gao --reset), so its watchdog must not re-apply the tune.
+void tell_tray_stock_by_choice();
+// The registered window message tell_tray_stock_by_choice() posts.
+unsigned stock_by_choice_message();
+
 struct OptimizeHooks {
     std::function<bool()> aborted;                        // polled between probes
     std::function<void(const std::string&)> log;          // one line per event
@@ -48,6 +71,7 @@ OptimizeOutcome run_optimize(Preset preset, const OptimizeHooks& hooks);
 
 struct BootApplyOutcome {
     bool applied = false;
+    BootDecision decision = BootDecision::NoProfile;
     std::string message;       // what happened, as written to boot.log
     Profile profile;           // the profile that was applied, when applied
 };

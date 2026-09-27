@@ -16,7 +16,9 @@ std::filesystem::path installed_tray_path();  // ...\GpuAutoOptimizer.exe
 // Copies both executables from `from_dir` into installed_dir() (overwriting);
 // a no-op when `from_dir` already is that folder.
 bool install_app(const std::filesystem::path& from_dir, std::string* why);
-void uninstall_app();                          // removes both copies and, if empty, the folder
+// Removes both copies and, if empty, the folder. A copy that is running (the
+// tray app) is scheduled for deletion at the next restart; returns false then.
+bool uninstall_app();
 bool files_equal(const std::filesystem::path& a, const std::filesystem::path& b);
 
 std::string current_user_sid();                // e.g. "S-1-5-21-..."; empty on failure

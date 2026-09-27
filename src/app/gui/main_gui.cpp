@@ -15,7 +15,6 @@
 #include "app/gui/ui.hpp"
 #include "app/gui/worker.hpp"
 #include "core/boot.hpp"
-#include "core/version.hpp"
 #include "core/watchdog.hpp"
 #include "hw/app_files.hpp"
 #include "hw/boot_task.hpp"
@@ -28,9 +27,11 @@
 #include "backends/imgui_impl_dx11.h"
 #include "backends/imgui_impl_win32.h"
 
+#include <algorithm>
 #include <chrono>
-#include <cstdio>
 #include <cwchar>
+#include <filesystem>
+#include <memory>
 #include <string>
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND, UINT, WPARAM, LPARAM);
@@ -38,18 +39,9 @@ extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND, UINT, WPARAM,
 using Microsoft::WRL::ComPtr;
 using gao::app::kGpu;
 
-// Button and menu actions, defined after the window code that calls them.
-void act_optimize(gao::Preset preset);
-void act_abort();
-void act_restart_elevated();
-void act_apply();
-void act_revert();
-void act_boot(bool on);
-extern HANDLE g_instance_mutex;
-
 namespace {
 
-constexpr wchar_t kWindowClass[] = L"GpuAutoOptimizerWindow";
+constexpr wchar_t kWindowClass[] = L"GpuAutoOptimizerWindow";   // also used by gao --reset
 constexpr wchar_t kInstanceMutex[] = L"Local\\GpuAutoOptimizer.Instance";
 constexpr UINT WM_APP_TRAY = WM_APP + 1;   // tray icon callback
 constexpr UINT WM_APP_WAKE = WM_APP + 2;   // the optimize worker has news
@@ -61,7 +53,9 @@ enum MenuId : UINT { kMenuOpen = 1, kMenuReapply, kMenuRevert, kMenuExit };
 
 struct App {
     HWND hwnd = nullptr;
+    HANDLE instance_mutex = nullptr;
     UINT taskbar_created = 0;
+    UINT stock_by_choice = 0;
     bool visible = false;
     bool exit_requested = false;
     int input_frames = 0;   // frames still to draw after input, so hover/click feedback shows
@@ -70,6 +64,7 @@ struct App {
     ComPtr<ID3D11DeviceContext> ctx;
     ComPtr<IDXGISwapChain> swapchain;
     ComPtr<ID3D11RenderTargetView> rtv;
+    bool device_lost = false;   // retried every second until a new device exists
 
     gao::Nvml nvml;
     gao::Nvapi nvapi;
@@ -79,32 +74,47 @@ struct App {
     gao::gui::UiState ui;
     std::unique_ptr<gao::gui::OptimizeWorker> worker;
     gao::Watchdog watchdog;
-    bool watch = false;          // keep the saved tune applied (off after a revert)
+    bool watch = false;   // keep the saved tune applied (off after a revert or a reset by choice)
     bool worker_was_running = false;
+
+    // Crash dumps are written by a thread created up front (a crashing thread
+    // may have no stack or heap left to do it itself).
+    HANDLE dump_request = nullptr, dump_done = nullptr;
+    EXCEPTION_POINTERS* crash_info = nullptr;
+    DWORD crash_thread = 0;
 };
 
 App g;
 
 // ---------------------------------------------------------------- crash dump
 
-// ponytail: the dump is written from the crashing thread; a watcher process
-// (as Microsoft recommends) is more robust if in-process dumps ever fail.
-LONG WINAPI OnCrash(EXCEPTION_POINTERS* ep) {
-    if (g.worker && g.worker->active_gpu() && g.worker->active_gpu()->reset_to_stock)
-        g.worker->active_gpu()->reset_to_stock();   // never leave a candidate applied
-    const auto dir = gao::app_dir();
+DWORD WINAPI dump_thread(void*) {
+    WaitForSingleObject(g.dump_request, INFINITE);
     if (HMODULE dbghelp = LoadLibraryExW(L"dbghelp.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32)) {
         using WriteDump = BOOL(WINAPI*)(HANDLE, DWORD, HANDLE, MINIDUMP_TYPE, PMINIDUMP_EXCEPTION_INFORMATION,
                                         PMINIDUMP_USER_STREAM_INFORMATION, PMINIDUMP_CALLBACK_INFORMATION);
-        auto write = reinterpret_cast<WriteDump>(GetProcAddress(dbghelp, "MiniDumpWriteDump"));
-        const auto path = dir / (L"crash-" + std::to_wstring(GetTickCount64()) + L".dmp");
+        const auto write = reinterpret_cast<WriteDump>(GetProcAddress(dbghelp, "MiniDumpWriteDump"));
+        const auto path = gao::app_dir() / (L"crash-" + std::to_wstring(GetTickCount64()) + L".dmp");
         const HANDLE f = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
         if (write && f != INVALID_HANDLE_VALUE) {
-            MINIDUMP_EXCEPTION_INFORMATION info{GetCurrentThreadId(), ep, FALSE};
+            MINIDUMP_EXCEPTION_INFORMATION info{g.crash_thread, g.crash_info, FALSE};
             write(GetCurrentProcess(), GetCurrentProcessId(), f, MiniDumpNormal, &info, nullptr, nullptr);
         }
         if (f != INVALID_HANDLE_VALUE) CloseHandle(f);
     }
+    SetEvent(g.dump_done);
+    return 0;
+}
+
+LONG WINAPI on_crash(EXCEPTION_POINTERS* ep) {
+    // Dump first: if the crash is inside the driver with a lock held, the reset
+    // below could hang, and the dump is the evidence.
+    g.crash_info = ep;
+    g.crash_thread = GetCurrentThreadId();
+    SetEvent(g.dump_request);
+    WaitForSingleObject(g.dump_done, 15000);
+    if (g.worker && g.worker->active_gpu() && g.worker->active_gpu()->reset_to_stock)
+        g.worker->active_gpu()->reset_to_stock();   // never leave a candidate applied
     return EXCEPTION_EXECUTE_HANDLER;
 }
 
@@ -116,12 +126,12 @@ void create_rtv() {
     g.device->CreateRenderTargetView(back.Get(), nullptr, &g.rtv);
 }
 
-bool create_device(HWND hwnd) {
+bool create_device() {
     DXGI_SWAP_CHAIN_DESC sd{};
     sd.BufferCount = 2;
     sd.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
     sd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
-    sd.OutputWindow = hwnd;
+    sd.OutputWindow = g.hwnd;
     sd.SampleDesc.Count = 1;
     sd.Windowed = TRUE;
     sd.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
@@ -136,33 +146,16 @@ bool create_device(HWND hwnd) {
     return true;
 }
 
-void render() {
-    ImGui_ImplDX11_NewFrame();
-    ImGui_ImplWin32_NewFrame();
-    ImGui::NewFrame();
-    const auto snap = g.worker->snapshot();
-    gao::gui::UiActions act;
-    act.optimize = act_optimize;
-    act.abort = act_abort;
-    act.restart_elevated = act_restart_elevated;
-    act.apply_profile = act_apply;
-    act.revert_to_stock = act_revert;
-    act.set_boot = act_boot;
-    gao::gui::draw_ui(g.ui, snap, act);
-    ImGui::Render();
-    const float clear[4] = {0.08f, 0.08f, 0.10f, 1.0f};
-    g.ctx->OMSetRenderTargets(1, g.rtv.GetAddressOf(), nullptr);
-    g.ctx->ClearRenderTargetView(g.rtv.Get(), clear);
-    ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
-    if (g.swapchain->Present(1, 0) == DXGI_ERROR_DEVICE_REMOVED) {
-        // The display driver was reset (TDR). Rebuild the UI device.
-        ImGui_ImplDX11_Shutdown();
-        g.rtv.Reset();
-        g.ctx.Reset();
-        g.swapchain.Reset();
-        g.device.Reset();
-        if (create_device(g.hwnd)) ImGui_ImplDX11_Init(g.device.Get(), g.ctx.Get());
-    }
+// After a TDR the UI device is gone. Rebuild it; if that fails too (it can,
+// right after a reset), try again on the next telemetry tick.
+void recover_device() {
+    if (g.ctx) ImGui_ImplDX11_Shutdown();
+    g.rtv.Reset();
+    g.ctx.Reset();
+    g.swapchain.Reset();
+    g.device.Reset();
+    g.device_lost = !create_device();
+    if (!g.device_lost) ImGui_ImplDX11_Init(g.device.Get(), g.ctx.Get());
 }
 
 void apply_dpi(float scale) {
@@ -177,6 +170,13 @@ void apply_dpi(float scale) {
 }
 
 // ---------------------------------------------------------------- tray
+
+std::wstring widen(const std::string& s) {
+    const int n = MultiByteToWideChar(CP_UTF8, 0, s.data(), static_cast<int>(s.size()), nullptr, 0);
+    std::wstring w(static_cast<size_t>(n), L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, s.data(), static_cast<int>(s.size()), w.data(), n);
+    return w;
+}
 
 void tray_icon(DWORD message, const wchar_t* tip = nullptr, const wchar_t* balloon = nullptr) {
     NOTIFYICONDATAW nid{};
@@ -194,18 +194,16 @@ void tray_icon(DWORD message, const wchar_t* tip = nullptr, const wchar_t* ballo
         wcsncpy_s(nid.szInfo, balloon, _TRUNCATE);
         nid.dwInfoFlags = NIIF_INFO | NIIF_RESPECT_QUIET_TIME;
     }
-    Shell_NotifyIconW(message, &nid);
+    // At logon the taskbar may not exist yet when the first NIM_ADD runs: a
+    // failed modify means the icon is missing, so add it.
+    if (!Shell_NotifyIconW(message, &nid) && message == NIM_MODIFY) {
+        message = NIM_ADD;
+        Shell_NotifyIconW(NIM_ADD, &nid);
+    }
     if (message == NIM_ADD) {
         nid.uVersion = NOTIFYICON_VERSION_4;
         Shell_NotifyIconW(NIM_SETVERSION, &nid);
     }
-}
-
-std::wstring widen(const std::string& s) {
-    const int n = MultiByteToWideChar(CP_UTF8, 0, s.data(), static_cast<int>(s.size()), nullptr, 0);
-    std::wstring w(static_cast<size_t>(n), L'\0');
-    MultiByteToWideChar(CP_UTF8, 0, s.data(), static_cast<int>(s.size()), w.data(), n);
-    return w;
 }
 
 void notify(const std::string& text) {
@@ -221,19 +219,19 @@ void show_window() {
     g.input_frames = 3;
 }
 
-void tray_menu() {
-    POINT pt;
-    GetCursorPos(&pt);
+void tray_menu(int x, int y) {
+    const bool busy = g.worker->running();
     HMENU menu = CreatePopupMenu();
     AppendMenuW(menu, MF_STRING, kMenuOpen, L"Open");
-    if (gao::app::is_elevated()) {
-        AppendMenuW(menu, MF_STRING | (g.ui.profile ? 0 : MF_GRAYED), kMenuReapply, L"Re-apply saved tune");
-        AppendMenuW(menu, MF_STRING, kMenuRevert, L"Revert to stock");
+    if (g.ui.elevated) {
+        // Writing the GPU under a running search would corrupt its probes.
+        AppendMenuW(menu, MF_STRING | (g.ui.profile && !busy ? 0 : MF_GRAYED), kMenuReapply, L"Re-apply saved tune");
+        AppendMenuW(menu, MF_STRING | (busy ? MF_GRAYED : 0), kMenuRevert, L"Revert to stock");
     }
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(menu, MF_STRING, kMenuExit, L"Exit");
     SetForegroundWindow(g.hwnd);   // or the menu does not close when clicking elsewhere
-    TrackPopupMenu(menu, TPM_RIGHTBUTTON, pt.x, pt.y, 0, g.hwnd, nullptr);
+    TrackPopupMenu(menu, TPM_RIGHTBUTTON, x, y, 0, g.hwnd, nullptr);
     PostMessageW(g.hwnd, WM_NULL, 0, 0);
     DestroyMenu(menu);
 }
@@ -257,7 +255,93 @@ void refresh_status(bool with_task) {
     if (with_task) g.ui.boot_on = gao::boot_task_exists();
 }
 
+// ---------------------------------------------------------------- actions
+
+void act_optimize(gao::Preset preset) {
+    g.ui.message.clear();
+    g.watch = false;   // the search owns the GPU until it is done
+    g.worker->start(preset);
+}
+
+void act_abort() { g.worker->abort(); }
+
+void act_restart_elevated() {
+    wchar_t self[MAX_PATH];
+    const DWORD n = GetModuleFileNameW(nullptr, self, MAX_PATH);
+    if (n == 0 || n >= MAX_PATH) return;
+    SHELLEXECUTEINFOW sei{sizeof(sei)};
+    sei.lpVerb = L"runas";
+    sei.lpFile = self;
+    sei.nShow = SW_SHOWNORMAL;
+    // The elevated copy must not find our single-instance mutex: release it
+    // first, and take it back if elevation is cancelled.
+    CloseHandle(g.instance_mutex);
+    g.instance_mutex = nullptr;
+    if (ShellExecuteExW(&sei)) {
+        g.exit_requested = true;
+    } else {
+        g.instance_mutex = CreateMutexW(nullptr, TRUE, kInstanceMutex);
+        g.ui.message = "Elevation was cancelled.";
+    }
+}
+
+void act_apply() {
+    if (g.worker->running()) return;
+    std::string why;
+    if (!gao::app::prepare_state(&why)) { g.ui.message = why; return; }
+    gao::Config cfg = gao::app::load_config();
+    cfg.boot_strikes = 0;   // strikes only gate the logon apply
+    const std::string driver = g.nvml_ok ? g.nvml.DriverVersion() : std::string();
+    const auto d = gao::decide_boot(cfg, driver, g.nvml_ok ? g.nvml.GpuUuid(kGpu) : std::string());
+    if (d != gao::BootDecision::Apply) { g.ui.message = "Not applied: " + gao::app::decision_text(d, cfg, driver); return; }
+    if (!gao::apply_profile(g.gpu, *cfg.profile, &why)) { g.ui.message = "Not applied: " + why; return; }
+    g.watch = true;
+    g.watchdog = gao::Watchdog();
+    g.ui.message = "Applied " + gao::app::profile_text(*cfg.profile);
+    refresh_status(false);
+}
+
+void act_revert() {
+    if (g.worker->running()) return;
+    const bool ok = g.gpu.reset_to_stock && g.gpu.reset_to_stock();
+    g.watch = false;   // stock by choice: the watchdog must not undo it
+    g.ui.message = ok ? "Back at stock. The saved tune is not re-applied until you apply it again."
+                      : "Reset to stock FAILED; try gao --reset.";
+    refresh_status(false);
+}
+
+void act_boot(bool on) {
+    std::string message;
+    on ? gao::app::enable_boot(&message) : gao::app::disable_boot(&message);
+    g.ui.message = message;
+    refresh_status(true);
+}
+
+void render() {
+    ImGui_ImplDX11_NewFrame();
+    ImGui_ImplWin32_NewFrame();
+    ImGui::NewFrame();
+    gao::gui::UiActions act;
+    act.optimize = act_optimize;
+    act.abort = act_abort;
+    act.restart_elevated = act_restart_elevated;
+    act.apply_profile = act_apply;
+    act.revert_to_stock = act_revert;
+    act.set_boot = act_boot;
+    gao::gui::draw_ui(g.ui, g.worker->snapshot(), act);
+    ImGui::Render();
+    const float clear[4] = {0.08f, 0.08f, 0.10f, 1.0f};
+    g.ctx->OMSetRenderTargets(1, g.rtv.GetAddressOf(), nullptr);
+    g.ctx->ClearRenderTargetView(g.rtv.Get(), clear);
+    ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
+    const HRESULT hr = g.swapchain->Present(1, 0);
+    if (hr == DXGI_ERROR_DEVICE_REMOVED || hr == DXGI_ERROR_DEVICE_RESET) recover_device();
+}
+
+// ---------------------------------------------------------------- timers
+
 void on_telemetry() {
+    if (g.device_lost) recover_device();
     if (g.nvml_ok) {
         g.ui.telemetry = g.nvml.Read(kGpu);
         gao::gui::push_history(g.ui.temp_history, static_cast<float>(std::max(g.ui.telemetry.temp_c, 0)));
@@ -280,7 +364,9 @@ void on_telemetry() {
 }
 
 void on_watchdog() {
-    if (!g.watch || g.worker->running() || !g.ui.elevated || !g.nvml_ok || !g.nvapi_ok) return;
+    // Never under a running search -- ours, or gao --optimize in a shell.
+    if (!g.watch || g.worker->running() || gao::app::tuning_in_progress()) return;
+    if (!g.ui.elevated || !g.nvml_ok || !g.nvapi_ok) return;
     const gao::Config cfg = gao::app::load_config();
     if (!cfg.profile) return;
     const std::string driver = g.nvml.DriverVersion(), gpu_id = g.nvml.GpuUuid(kGpu);
@@ -315,20 +401,31 @@ void on_watchdog() {
     refresh_status(false);
 }
 
+// ---------------------------------------------------------------- window
+
 LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     if (ImGui_ImplWin32_WndProcHandler(hwnd, msg, wp, lp)) return 1;
     if (msg == g.taskbar_created && g.taskbar_created) {   // Explorer restarted: the icon is gone
         tray_icon(NIM_ADD);
         return 0;
     }
+    if (msg == g.stock_by_choice && g.stock_by_choice) {   // gao --reset in a shell
+        g.watch = false;
+        g.ui.watchdog_note = gao::app::now_text() + "  Set to stock from the command line; not re-applied until you apply it again.";
+        refresh_status(false);
+        return 0;
+    }
     switch (msg) {
         case WM_SIZE:
             if (wp == SIZE_MINIMIZED) {
                 g.visible = false;
-            } else if (g.swapchain) {
-                g.rtv.Reset();
-                g.swapchain->ResizeBuffers(0, LOWORD(lp), HIWORD(lp), DXGI_FORMAT_UNKNOWN, 0);
-                create_rtv();
+            } else {
+                g.visible = IsWindowVisible(hwnd) != FALSE;
+                if (g.swapchain) {
+                    g.rtv.Reset();
+                    g.swapchain->ResizeBuffers(0, LOWORD(lp), HIWORD(lp), DXGI_FORMAT_UNKNOWN, 0);
+                    create_rtv();
+                }
                 g.input_frames = 2;
             }
             return 0;
@@ -338,9 +435,15 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             SetWindowPos(hwnd, nullptr, r->left, r->top, r->right - r->left, r->bottom - r->top, SWP_NOZORDER | SWP_NOACTIVATE);
             return 0;
         }
-        case WM_CLOSE:   // the window hides; the tray keeps the tune applied
-            ShowWindow(hwnd, SW_HIDE);
-            g.visible = false;
+        case WM_CLOSE:
+            // With a tune to keep applied, or a run in progress, the window
+            // hides and the tray stays. Otherwise there is nothing to stay for.
+            if (g.watch || g.worker->running()) {
+                ShowWindow(hwnd, SW_HIDE);
+                g.visible = false;
+            } else {
+                g.exit_requested = true;
+            }
             return 0;
         case WM_TIMER:
             if (wp == kTimerTelemetry) on_telemetry();
@@ -355,10 +458,9 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return 0;
         case WM_APP_TRAY:
             switch (LOWORD(lp)) {
-                case WM_CONTEXTMENU: tray_menu(); break;
+                case WM_CONTEXTMENU: tray_menu(static_cast<short>(LOWORD(wp)), static_cast<short>(HIWORD(wp))); break;
                 case NIN_SELECT:
                 case NIN_KEYSELECT:
-                case WM_LBUTTONDBLCLK: show_window(); break;
                 case NIN_BALLOONUSERCLICK: show_window(); break;
             }
             return 0;
@@ -374,10 +476,14 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             }
             return 0;
         case WM_QUERYENDSESSION:
-        case WM_ENDSESSION:
-            // Logoff or shutdown in the middle of a run: stock first.
-            if (const gao::GpuControl* gpu = g.worker->active_gpu(); gpu && gpu->reset_to_stock) gpu->reset_to_stock();
+            // Logoff or shutdown in the middle of a run: stop it (it restores stock).
+            if (g.worker->running()) g.worker->abort();
             return TRUE;
+        case WM_ENDSESSION:
+            if (wp) {   // the session really ends: stock now, the run cannot finish
+                if (const gao::GpuControl* gpu = g.worker->active_gpu(); gpu && gpu->reset_to_stock) gpu->reset_to_stock();
+            }
+            return 0;
         case WM_DESTROY:
             PostQuitMessage(0);
             return 0;
@@ -387,75 +493,33 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     return DefWindowProcW(hwnd, msg, wp, lp);
 }
 
+// One instance only: two watchdogs would fight. A second launch brings the
+// first forward. An elevated first instance owns the mutex with a DACL a
+// normal user cannot open: access denied also means "already running".
+bool claim_single_instance(bool tray_mode) {
+    g.instance_mutex = CreateMutexW(nullptr, TRUE, kInstanceMutex);
+    const DWORD err = GetLastError();
+    if (g.instance_mutex && err != ERROR_ALREADY_EXISTS) return true;
+    if (HWND other = FindWindowW(kWindowClass, nullptr); other && !tray_mode) {
+        DWORD pid = 0;
+        GetWindowThreadProcessId(other, &pid);
+        AllowSetForegroundWindow(pid);   // or its SetForegroundWindow is refused
+        PostMessageW(other, WM_APP_SHOW, 0, 0);
+    }
+    return false;
 }
 
-// ---------------------------------------------------------------- actions
-
-void act_optimize(gao::Preset preset) {
-    g.ui.message.clear();
-    g.watch = false;   // the search owns the GPU until it is done
-    g.worker->start(preset);
 }
-
-void act_abort() { g.worker->abort(); }
-
-void act_restart_elevated() {
-    wchar_t self[MAX_PATH];
-    const DWORD n = GetModuleFileNameW(nullptr, self, MAX_PATH);
-    if (n == 0 || n >= MAX_PATH) return;
-    SHELLEXECUTEINFOW sei{sizeof(sei)};
-    sei.lpVerb = L"runas";
-    sei.lpFile = self;
-    sei.nShow = SW_SHOWNORMAL;
-    // The elevated copy finds our single-instance mutex; release it first.
-    if (g_instance_mutex) { CloseHandle(g_instance_mutex); g_instance_mutex = nullptr; }
-    if (ShellExecuteExW(&sei)) g.exit_requested = true;
-    else g.ui.message = "Elevation was cancelled.";
-}
-
-void act_apply() {
-    std::string why;
-    if (!gao::app::prepare_state(&why)) { g.ui.message = why; return; }
-    gao::Config cfg = gao::app::load_config();
-    cfg.boot_strikes = 0;   // strikes only gate the logon apply
-    const std::string driver = g.nvml_ok ? g.nvml.DriverVersion() : std::string();
-    const auto d = gao::decide_boot(cfg, driver, g.nvml_ok ? g.nvml.GpuUuid(kGpu) : std::string());
-    if (d != gao::BootDecision::Apply) { g.ui.message = "Not applied: " + gao::app::decision_text(d, cfg, driver); return; }
-    if (!gao::apply_profile(g.gpu, *cfg.profile, &why)) { g.ui.message = "Not applied: " + why; return; }
-    g.watch = true;
-    g.watchdog = gao::Watchdog();
-    g.ui.message = "Applied " + gao::app::profile_text(*cfg.profile);
-    refresh_status(false);
-}
-
-void act_revert() {
-    const bool ok = g.gpu.reset_to_stock && g.gpu.reset_to_stock();
-    g.watch = false;   // stock by choice: the watchdog must not undo it
-    g.ui.message = ok ? "Back at stock. The saved tune is not re-applied until you apply it again."
-                      : "Reset to stock FAILED; try gao --reset.";
-    refresh_status(false);
-}
-
-void act_boot(bool on) {
-    std::string message;
-    on ? gao::app::enable_boot(&message) : gao::app::disable_boot(&message);
-    g.ui.message = message;
-    refresh_status(true);
-}
-
-HANDLE g_instance_mutex = nullptr;
 
 int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdline, int) {
     SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32);
     const bool tray_mode = cmdline && std::wcsstr(cmdline, L"--tray");
+    if (!claim_single_instance(tray_mode)) return 0;
 
-    g_instance_mutex = CreateMutexW(nullptr, TRUE, kInstanceMutex);
-    if (GetLastError() == ERROR_ALREADY_EXISTS) {
-        // One instance only: two watchdogs would fight. Bring the first forward.
-        if (HWND other = FindWindowW(kWindowClass, nullptr); other && !tray_mode) PostMessageW(other, WM_APP_SHOW, 0, 0);
-        return 0;
-    }
-    SetUnhandledExceptionFilter(OnCrash);
+    g.dump_request = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+    g.dump_done = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+    CloseHandle(CreateThread(nullptr, 0, dump_thread, nullptr, 0, nullptr));
+    SetUnhandledExceptionFilter(on_crash);
 
     WNDCLASSEXW wc{sizeof(wc)};
     wc.style = CS_CLASSDC;
@@ -465,23 +529,30 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdline, int) {
     wc.hCursor = LoadCursorW(nullptr, MAKEINTRESOURCEW(32512));   // IDC_ARROW
     wc.lpszClassName = kWindowClass;
     RegisterClassExW(&wc);
-    const float scale = ImGui_ImplWin32_GetDpiScaleForMonitor(MonitorFromPoint(POINT{0, 0}, MONITOR_DEFAULTTOPRIMARY));
-    g.hwnd = CreateWindowW(kWindowClass, L"GPU Auto Optimizer", WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT,
-                           static_cast<int>(920 * scale), static_cast<int>(640 * scale), nullptr, nullptr, inst, nullptr);
-    if (!g.hwnd || !create_device(g.hwnd)) return 1;
+    g.hwnd = CreateWindowW(kWindowClass, L"GPU Auto Optimizer", WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, 920, 640,
+                           nullptr, nullptr, inst, nullptr);
+    if (!g.hwnd || !create_device()) return 1;
+    const float scale = GetDpiForWindow(g.hwnd) / 96.0f;   // the monitor the window actually opened on
+    SetWindowPos(g.hwnd, nullptr, 0, 0, static_cast<int>(920 * scale), static_cast<int>(640 * scale),
+                 SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
     const BOOL dark = TRUE;   // a dark title bar to match the dark window
     DwmSetWindowAttribute(g.hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark, sizeof(dark));
 
-    // Explorer runs unelevated; let its tray messages reach an elevated window.
+    // Explorer runs unelevated; let its tray notifications, a relaunch's
+    // "come forward" and gao --reset's notice reach an elevated window.
     g.taskbar_created = RegisterWindowMessageW(L"TaskbarCreated");
-    for (UINT m : {WM_APP_TRAY, g.taskbar_created, WM_APP_SHOW, static_cast<UINT>(WM_COMMAND)})
+    g.stock_by_choice = gao::app::stock_by_choice_message();
+    for (UINT m : {WM_APP_TRAY, g.taskbar_created, WM_APP_SHOW, g.stock_by_choice})
         ChangeWindowMessageFilterEx(g.hwnd, m, MSGFLT_ALLOW, nullptr);
 
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
     io.IniFilename = nullptr;   // nothing to persist; the layout is fixed
-    if (!io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\segoeui.ttf", 17.0f)) io.Fonts->AddFontDefault();
+    wchar_t windows[MAX_PATH];
+    const UINT wn = GetWindowsDirectoryW(windows, MAX_PATH);
+    const std::string font = wn && wn < MAX_PATH ? (std::filesystem::path(windows) / L"Fonts" / L"segoeui.ttf").string() : "";
+    if (font.empty() || !io.Fonts->AddFontFromFileTTF(font.c_str(), 17.0f)) io.Fonts->AddFontDefault();
     apply_dpi(scale);
     ImGui_ImplWin32_Init(g.hwnd);
     ImGui_ImplDX11_Init(g.device.Get(), g.ctx.Get());
@@ -501,7 +572,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdline, int) {
             if (logon.applied) {
                 g.watch = true;
                 SetTimer(g.hwnd, kTimerStrike, 2 * 60 * 1000, nullptr);
-            } else if (logon.message.find("not applied: no saved profile") == std::string::npos) {
+            } else if (logon.decision != gao::BootDecision::NoProfile) {
                 notify(logon.message);
             }
         }
@@ -530,14 +601,14 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdline, int) {
             DestroyWindow(g.hwnd);
             continue;
         }
-        if (!g.visible || IsIconic(g.hwnd)) continue;
+        if (!g.visible || IsIconic(g.hwnd) || g.device_lost) continue;
         render();
         if (g.input_frames > 0) --g.input_frames;
     }
 
     tray_icon(NIM_DELETE);
     g.worker.reset();
-    ImGui_ImplDX11_Shutdown();
+    if (g.ctx) ImGui_ImplDX11_Shutdown();
     ImGui_ImplWin32_Shutdown();
     ImGui::DestroyContext();
     return 0;

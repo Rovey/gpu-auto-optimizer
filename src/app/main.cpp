@@ -113,6 +113,8 @@ static int reset() {
         std::printf("power limit: default %s\n", power_ok ? "restored" : nvml.Error().c_str());
         ok = ok && power_ok;
     }
+    // A stock card by choice: a running tray app must not re-apply the tune.
+    gao::app::tell_tray_stock_by_choice();
     std::printf("%s\n", ok ? "OK" : "MISMATCH");
     return ok ? 0 : 1;
 }
@@ -297,8 +299,11 @@ static int status() {
     wchar_t self[MAX_PATH];
     const DWORD n = GetModuleFileNameW(nullptr, self, MAX_PATH);
     std::error_code ec;
+    const auto build_dir = std::filesystem::path(self).parent_path();
     if (!std::filesystem::exists(installed, ec)) std::printf("boot copy:  not installed\n");
-    else if (n && n < MAX_PATH && gao::files_equal(self, installed)) std::printf("boot copy:  up to date\n");
+    else if (n && n < MAX_PATH && gao::files_equal(self, installed) &&
+             gao::files_equal(build_dir / L"GpuAutoOptimizer.exe", gao::installed_tray_path()))
+        std::printf("boot copy:  up to date\n");
     else std::printf("boot copy:  OUTDATED -- run `gao --boot on` to install this build\n");
     std::printf("strikes:    %d of %d\n", cfg.boot_strikes, gao::kMaxBootStrikes);
     const auto log = gao::read_lines(gao::boot_log_path());

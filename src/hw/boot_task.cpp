@@ -56,12 +56,18 @@ bool install_app(const std::filesystem::path& from_dir, std::string* why) {
     return true;
 }
 
-void uninstall_app() {
+bool uninstall_app() {
     const auto dst = installed_dir();
-    if (dst.empty()) return;
-    std::error_code ec;
-    for (const wchar_t* name : kAppExes) std::filesystem::remove(dst / name, ec);
-    std::filesystem::remove(dst, ec);   // only succeeds when empty
+    if (dst.empty()) return true;
+    bool all = true;
+    for (const wchar_t* name : kAppExes) {
+        const auto p = dst / name;
+        if (DeleteFileW(p.c_str()) || GetLastError() == ERROR_FILE_NOT_FOUND) continue;
+        MoveFileExW(p.c_str(), nullptr, MOVEFILE_DELAY_UNTIL_REBOOT);
+        all = false;
+    }
+    if (all) RemoveDirectoryW(dst.c_str());   // only succeeds when empty
+    return all;
 }
 
 bool files_equal(const std::filesystem::path& a, const std::filesystem::path& b) {

@@ -1,4 +1,5 @@
 #include "app/gui/worker.hpp"
+#include <exception>
 
 namespace gao::gui {
 
@@ -26,7 +27,13 @@ bool OptimizeWorker::start(Preset preset) {
             wake_();
         };
         hooks.active_gpu = [this](const GpuControl* gpu) { active_gpu_ = gpu; };
-        auto outcome = app::run_optimize(preset, hooks);
+        app::OptimizeOutcome outcome;
+        try {
+            outcome = app::run_optimize(preset, hooks);
+        } catch (const std::exception& e) {   // a thrown exception would otherwise end the process
+            outcome.error = std::string("unexpected error: ") + e.what();
+        }
+        active_gpu_ = nullptr;
         {
             std::lock_guard lock(mu_);
             outcome_ = std::move(outcome);

@@ -16,6 +16,41 @@
 
 namespace gao::app {
 
+namespace {
+constexpr wchar_t kTuningMutex[] = L"Local\\GpuAutoOptimizer.Tuning";
+constexpr wchar_t kTrayWindowClass[] = L"GpuAutoOptimizerWindow";
+}
+
+TuningLock::TuningLock() {
+    handle_ = CreateMutexW(nullptr, FALSE, kTuningMutex);
+    if (!handle_) return;
+    const DWORD r = WaitForSingleObject(handle_, 0);
+    owned_ = r == WAIT_OBJECT_0 || r == WAIT_ABANDONED;   // abandoned: the last owner died mid-run
+}
+
+TuningLock::~TuningLock() {
+    if (owned_) ReleaseMutex(handle_);
+    if (handle_) CloseHandle(handle_);
+}
+
+bool tuning_in_progress() {
+    const HANDLE h = OpenMutexW(SYNCHRONIZE, FALSE, kTuningMutex);
+    if (!h) return false;
+    const DWORD r = WaitForSingleObject(h, 0);
+    if (r == WAIT_OBJECT_0 || r == WAIT_ABANDONED) ReleaseMutex(h);
+    CloseHandle(h);
+    return r == WAIT_TIMEOUT;
+}
+
+unsigned stock_by_choice_message() {
+    static const UINT msg = RegisterWindowMessageW(L"GpuAutoOptimizer.StockByChoice");
+    return msg;
+}
+
+void tell_tray_stock_by_choice() {
+    if (const HWND tray = FindWindowW(kTrayWindowClass, nullptr)) PostMessageW(tray, stock_by_choice_message(), 0, 0);
+}
+
 bool is_elevated() {
     HANDLE token = nullptr;
     if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) return false;
@@ -75,6 +110,8 @@ OptimizeOutcome run_optimize(Preset preset, const OptimizeHooks& hooks) {
     auto log = [&](const std::string& m) { if (hooks.log) hooks.log(m); };
     auto fail = [&](const std::string& why) { out.error = why; return out; };
     if (!is_elevated()) return fail("optimizing changes clocks and power limits and needs administrator rights");
+    const TuningLock lock;
+    if (!lock.owned()) return fail("another optimize is already running (in the app or on the command line)");
     std::string why;
     if (!prepare_state(&why)) return fail(why);
     Nvml nvml;
@@ -111,7 +148,13 @@ OptimizeOutcome run_optimize(Preset preset, const OptimizeHooks& hooks) {
         return gbps;
     };
     if (hooks.active_gpu) hooks.active_gpu(&gpu);
-    out.result = optimize(gpu, objectives_for(preset), journal, io);
+    try {
+        out.result = optimize(gpu, objectives_for(preset), journal, io);
+    } catch (...) {   // never leave a candidate applied, whatever went wrong
+        if (hooks.active_gpu) hooks.active_gpu(nullptr);
+        if (gpu.reset_to_stock) gpu.reset_to_stock();
+        throw;
+    }
     if (hooks.active_gpu) hooks.active_gpu(nullptr);
     out.ran = true;
     if (!out.result.ok) return out;
@@ -137,6 +180,7 @@ BootApplyOutcome apply_at_logon() {
     Config cfg = load_config();
     const std::string driver = nvml.DriverVersion();
     const auto d = decide_boot(cfg, driver, nvml.GpuUuid(kGpu));
+    out.decision = d;
     if (d != BootDecision::Apply) return done("not applied: " + decision_text(d, cfg, driver));
     // The strike is on disk before the hardware is touched: a crash from here
     // on counts.
@@ -205,12 +249,10 @@ bool disable_boot(std::string* message) {
     if (!prepare_state(&why)) return say(why, false);
     const int code = boot_task_remove();
     boot_task_remove_legacy();   // the pre-P4b task, if any
-    uninstall_app();
-    std::error_code ec;
-    const bool copy_left = std::filesystem::exists(installed_exe_path(), ec) || std::filesystem::exists(installed_tray_path(), ec);
+    const bool removed_now = uninstall_app();
     return say(std::string("boot-apply off: task ") + (code == 0 ? "removed" : "not removed") + ", installed copy " +
-                   (copy_left ? "still there (is it running? turn boot-apply off from the build folder)" : "removed"),
-               code == 0 && !copy_left);
+                   (removed_now ? "removed" : "in use by the running tray app; it is removed at the next restart"),
+               code == 0);
 }
 
 }

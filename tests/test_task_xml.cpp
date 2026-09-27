@@ -19,6 +19,7 @@ TEST_CASE("the logon task XML carries every required setting") {
     CHECK(has(x, "<DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>"));
     CHECK(has(x, "<StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>"));
     CHECK(has(x, "<MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>"));
+    CHECK(has(x, "<Priority>5</Priority>"));   // normal, not the background default of 7
     CHECK(has(x, R"(<Command>C:\Program Files\GpuAutoOptimizer\GpuAutoOptimizer.exe</Command>)"));
     CHECK(x.rfind("<?xml", 0) == 0);
 }

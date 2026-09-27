@@ -68,3 +68,14 @@ TEST_CASE("a failed read-back does nothing") {
     Watchdog w;
     CHECK(w.check(tuned(), std::nullopt, true, true, t0) == WatchAction::None);
 }
+
+TEST_CASE("a partial reset is still a reset, not another tool") {
+    // A TDR may reset the offsets but leave the power limit (or the reverse):
+    // every field being either ours or stock means our tune was undone.
+    Watchdog w;
+    CHECK(w.check(tuned(), AppliedState{0, 0, 105}, true, true, t0) == WatchAction::Reapply);
+    Watchdog v;
+    CHECK(v.check(tuned(), AppliedState{135, 1050, 100}, true, true, t0) == WatchAction::Reapply);
+    Watchdog u;
+    CHECK(u.check(tuned(), AppliedState{0, 900, 105}, true, true, t0) == WatchAction::BackOffForeign);
+}

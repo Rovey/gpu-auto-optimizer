@@ -1,4 +1,5 @@
 #include "app/gui/ui.hpp"
+#include "core/boot.hpp"
 #include "imgui.h"
 #include <algorithm>
 #include <cstdio>
@@ -74,7 +75,7 @@ void status_block(const UiState& s, const UiActions& act) {
     ImGui::Text("Apply at logon: %s", s.boot_on ? "on" : "off");
     if (s.strikes > 0) {
         ImGui::SameLine();
-        ImGui::TextColored(kWarn, "  %d of 3 crash strikes", s.strikes);
+        ImGui::TextColored(kWarn, "  %d of %d crash strikes", s.strikes, kMaxBootStrikes);
     }
     if (!s.last_boot.empty()) ImGui::TextColored(kDim, "Last logon: %s", s.last_boot.c_str());
     if (!s.watchdog_note.empty()) ImGui::TextColored(kWarn, "%s", s.watchdog_note.c_str());
@@ -82,7 +83,9 @@ void status_block(const UiState& s, const UiActions& act) {
     if (s.elevated) {
         ImGui::BeginDisabled(!s.profile);
         if (ImGui::Button("Apply saved tune")) act.apply_profile();
+        ImGui::EndDisabled();
         ImGui::SameLine();
+        ImGui::BeginDisabled(!s.profile && !s.boot_on);   // turning it off never needs a profile
         if (ImGui::Button(s.boot_on ? "Turn off apply at logon" : "Apply at every logon")) act.set_boot(!s.boot_on);
         ImGui::EndDisabled();
         ImGui::SameLine();
