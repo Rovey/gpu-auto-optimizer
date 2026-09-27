@@ -15,6 +15,7 @@
 #include "app/gui/ui.hpp"
 #include "app/gui/worker.hpp"
 #include "core/boot.hpp"
+#include "core/fan_curve.hpp"
 #include "core/watchdog.hpp"
 #include "hw/app_files.hpp"
 #include "hw/boot_task.hpp"
@@ -80,6 +81,7 @@ struct App {
     bool watch = false;   // keep the saved tune applied (off after a revert or a reset by choice)
     bool worker_was_running = false;
     bool strike_pending = false;   // a logon apply whose 2-minute grace has not passed yet
+    std::unique_ptr<gao::FanDriver> fan;   // while the curve drives the fans
     bool told_about_tray = false;  // the "still running in the tray" balloon, once per session
 
     // Crash dumps are written by a thread created up front (a crashing thread
@@ -121,6 +123,7 @@ LONG WINAPI on_crash(EXCEPTION_POINTERS* ep) {
     // Never leave a candidate applied. Through our own GpuControl, which lives
     // as long as the process; the worker's may be mid-teardown.
     if (g.worker && g.worker->running() && g.gpu.reset_to_stock) g.gpu.reset_to_stock();
+    if (g.gpu.set_fan_auto) g.gpu.set_fan_auto();
     return EXCEPTION_EXECUTE_HANDLER;
 }
 
@@ -234,6 +237,39 @@ void tray_menu(int x, int y) {
 
 // ---------------------------------------------------------------- state
 
+// Fans back to the driver and forget the curve driver. Safe to call anywhere.
+void fan_release() {
+    if (g.fan) g.fan->release();
+    g.fan.reset();
+    g.ui.fan_state = {};
+}
+
+// Starts, updates or stops the curve driver to match gao.json.
+void fan_sync() {
+    const gao::Config cfg = gao::app::load_config();
+    const auto curve = gao::active_fan_curve(cfg);
+    g.ui.fan_available = g.ui.elevated && g.nvml_ok && static_cast<bool>(g.gpu.set_fan_pct);
+    g.ui.fan_control = cfg.fan_control;
+    g.ui.fan_curve = curve;
+    g.ui.fan_tested = cfg.profile ? cfg.profile->fan_curve : std::nullopt;
+    g.ui.fan_min_pct = g.gpu.fan_min_pct;
+    g.ui.fan_max_temp_c = cfg.profile ? gao::objectives_for(cfg.profile->preset).max_temp_c : 75;
+    // A running search drives the fans itself: never take them over mid-run.
+    if (g.worker && g.worker->running()) return;
+    if (!g.ui.fan_available || !cfg.fan_control || !curve || gao::app::tuning_in_progress()) {
+        fan_release();
+        return;
+    }
+    if (g.fan) {
+        g.fan->set_curve(*curve, g.ui.fan_max_temp_c);
+        return;
+    }
+    // Fans still manual from a killed earlier instance are ours to take back,
+    // not another program's: start from driver control.
+    if (g.gpu.set_fan_auto) g.gpu.set_fan_auto();
+    g.fan = std::make_unique<gao::FanDriver>(g.gpu, *curve, g.ui.fan_max_temp_c);
+}
+
 void refresh_status(bool with_task) {
     g.ui.elevated = gao::app::is_elevated();
     const gao::Config cfg = gao::app::load_config();
@@ -250,6 +286,7 @@ void refresh_status(bool with_task) {
     g.ui.boot_log.clear();
     if (log) g.ui.boot_log.assign(log->size() > 200 ? log->end() - 200 : log->begin(), log->end());
     if (with_task) g.ui.boot_on = gao::boot_task_exists();
+    fan_sync();
 }
 
 // ---------------------------------------------------------------- actions
@@ -257,6 +294,7 @@ void refresh_status(bool with_task) {
 void hw_lost();   // below, with the other hardware helpers
 
 void act_optimize(gao::Preset preset) {
+    fan_release();   // the search drives the fans itself
     g.worker->start(preset);   // the watchdog skips while it runs
 }
 
@@ -335,6 +373,26 @@ void render() {
     act.apply_profile = act_apply;
     act.revert_to_stock = act_revert;
     act.set_boot = act_boot;
+    act.set_fan_curve = [](const gao::FanCurve& curve) {
+        if (!gao::valid(curve)) return;
+        gao::Config cfg = gao::app::load_config();
+        cfg.fan_curve = curve;
+        if (!gao::app::save_config(cfg)) note("Could not save the fan curve.", true);
+        refresh_status(false);
+    };
+    act.set_fan_control = [](bool on) {
+        gao::Config cfg = gao::app::load_config();
+        cfg.fan_control = on;
+        if (!gao::app::save_config(cfg)) note("Could not save the fan setting.", true);
+        note(on ? "Fan curve on." : "Fan curve off; the NVIDIA driver controls the fans.");
+        refresh_status(false);
+    };
+    act.reset_fan_curve = [] {
+        gao::Config cfg = gao::app::load_config();
+        cfg.fan_curve.reset();
+        if (!gao::app::save_config(cfg)) note("Could not save the fan curve.", true);
+        refresh_status(false);
+    };
     act.detect_gpu = [] {   // e.g. after a driver update: re-create NVML and NVAPI now
         if (refuse_while_tuning()) return;
         hw_lost();
@@ -384,6 +442,10 @@ template <class F> bool guarded(F f) {
 // Stop using the libraries and re-create them a few seconds from now, when
 // the driver is back. The watchdog then finds the tune gone and re-applies it.
 void hw_lost() {
+    // Never call into a library that may just have faulted; after a reset the
+    // driver owns the fans again anyway.
+    g.fan.reset();
+    g.ui.fan_state = {};
     g.gpu = {};
     g.nvml_ok = g.nvapi_ok = false;
     g.hw_lost = true;
@@ -418,6 +480,15 @@ void on_telemetry() {
         g.ui.telemetry = g.nvml->Read(kGpu);
         gao::gui::push_history(g.ui.temp_history, static_cast<float>(std::max(g.ui.telemetry.temp_c, 0)));
         gao::gui::push_history(g.ui.power_history, static_cast<float>(std::max(g.ui.telemetry.power_w, 0)));
+    }
+    // The curve, while nothing else owns the fans: a search drives them itself.
+    if (g.fan && !g.worker->running() && !gao::app::tuning_in_progress()) {
+        const gao::FanMode before = g.fan->state().mode;
+        g.ui.fan_state = g.fan->tick(g.ui.telemetry.temp_c, std::chrono::steady_clock::now());
+        if (g.ui.fan_state.mode != before && g.ui.fan_state.mode == gao::FanMode::Failed)
+            notify("A fan speed did not verify, so the NVIDIA driver controls the fans again. Fan control is off until the app restarts.");
+        if (g.ui.fan_state.mode != before && g.ui.fan_state.mode == gao::FanMode::Foreign)
+            notify("Another program (Afterburner, NVIDIA App...) set the fan speed. Leaving the fans alone.");
     }
     if (g.gpu.read_applied) g.ui.applied = g.gpu.read_applied();
     wchar_t tip[128];
@@ -579,9 +650,14 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case WM_ENDSESSION:
             if (wp) {   // the session really ends: stock now, the run cannot finish
                 clear_strike();
+                fan_release();
                 if (g.worker->running() && g.gpu.reset_to_stock) g.gpu.reset_to_stock();
             }
             return 0;
+        case WM_POWERBROADCAST:
+            if (wp == PBT_APMSUSPEND) fan_release();                 // never sleep with a manual speed
+            else if (wp == PBT_APMRESUMEAUTOMATIC) refresh_status(false);   // take the curve up again
+            return TRUE;
         case WM_DESTROY:
             PostQuitMessage(0);
             return 0;
@@ -697,6 +773,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdline, int) {
         if (quit) break;
         if (g.exit_requested && !g.worker->running()) {
             clear_strike();
+            fan_release();
             DestroyWindow(g.hwnd);
             continue;
         }

@@ -1,5 +1,6 @@
 #pragma once
 #include "app/gui/worker.hpp"
+#include "core/fan_curve.hpp"
 #include "core/config.hpp"
 #include "core/types.hpp"
 #include <deque>
@@ -42,6 +43,14 @@ struct UiState {
     int strikes = 0;
     std::vector<std::string> boot_log;   // the last lines of boot.log, oldest first
     std::vector<Note> notes;             // this session, oldest first
+
+    bool fan_available = false;           // elevated and the card has fan control
+    bool fan_control = false;
+    std::optional<FanCurve> fan_curve;    // the active curve
+    std::optional<FanCurve> fan_tested;   // what the tune was tested with
+    int fan_min_pct = 0;
+    int fan_max_temp_c = 75;
+    FanState fan_state;
 };
 
 struct UiActions {
@@ -52,6 +61,9 @@ struct UiActions {
     std::function<void()> revert_to_stock;
     std::function<void(bool)> set_boot;
     std::function<void()> detect_gpu;
+    std::function<void(const FanCurve&)> set_fan_curve;   // saves it as the active curve
+    std::function<void(bool)> set_fan_control;
+    std::function<void()> reset_fan_curve;                // back to the tested/default curve
 };
 
 // Fonts (Segoe UI with Segoe Fluent Icons merged in) and the colour scheme.
