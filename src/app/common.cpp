@@ -152,7 +152,7 @@ OptimizeOutcome run_optimize(Preset preset, const OptimizeHooks& hooks) {
         auto read = [&] {
             const Telemetry t = gpu.read();
             const FanMode before = fans.state().mode;
-            const FanState now = fans.tick(t.temp_c, std::chrono::steady_clock::now());
+            const FanState now = fans.tick(t.temp_c, t.power_w, std::chrono::steady_clock::now());
             if (now.mode != before && now.mode == FanMode::Failed) log("fans: a write did not verify; the driver has them again");
             if (now.mode != before && now.mode == FanMode::Foreign) log("fans: another program set them; leaving them alone");
             return t;

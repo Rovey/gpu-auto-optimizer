@@ -484,7 +484,7 @@ void on_telemetry() {
     // The curve, while nothing else owns the fans: a search drives them itself.
     if (g.fan && !g.worker->running() && !gao::app::tuning_in_progress()) {
         const gao::FanMode before = g.fan->state().mode;
-        g.ui.fan_state = g.fan->tick(g.ui.telemetry.temp_c, std::chrono::steady_clock::now());
+        g.ui.fan_state = g.fan->tick(g.ui.telemetry.temp_c, g.ui.telemetry.power_w, std::chrono::steady_clock::now());
         if (g.ui.fan_state.mode != before && g.ui.fan_state.mode == gao::FanMode::Failed)
             notify("A fan speed did not verify, so the NVIDIA driver controls the fans again. Fan control is off until the app restarts.");
         if (g.ui.fan_state.mode != before && g.ui.fan_state.mode == gao::FanMode::Foreign)

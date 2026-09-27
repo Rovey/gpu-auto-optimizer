@@ -22,7 +22,17 @@ struct FanCurve {
     bool operator==(const FanCurve&) const = default;
 };
 
-inline constexpr int kFanHysteresisC = 3;                       // leave the curve 3 C below the stop threshold
+// Leaving the curve for the fan-stop zone. A card under light load cools a
+// few degrees with the fans on and warms past the threshold with them off, so
+// a temperature gap alone makes the fans cycle every few seconds. They stop
+// only when the card is well below the threshold AND idle for a hold time, and
+// the hold doubles each time the fans had to restart soon after stopping.
+inline constexpr int kFanStopGapC = 8;                                  // stop only 8 C below the threshold
+inline constexpr int kFanIdlePowerW = 30;                               // and below this power draw
+inline constexpr auto kFanStopHold = std::chrono::seconds(60);          // for this long, at first
+inline constexpr auto kFanStopHoldMax = std::chrono::minutes(15);
+inline constexpr auto kFanPendulum = std::chrono::minutes(5);           // a restart this soon doubles the hold
+inline constexpr auto kFanCalm = std::chrono::minutes(10);              // stopped this long: back to the first hold
 inline constexpr auto kFanSlowDown = std::chrono::seconds(5);   // a lower speed must hold this long
 
 FanCurve default_curve(Preset preset);
@@ -44,7 +54,8 @@ struct FanCommand {
 class FanController {
 public:
     FanController(FanCurve curve, int min_pct, int max_temp_c);
-    FanCommand decide(int temp_c, std::chrono::steady_clock::time_point now);
+    // power_w: -1 when unknown, which counts as load.
+    FanCommand decide(int temp_c, int power_w, std::chrono::steady_clock::time_point now);
 
 private:
     FanCurve curve_;
@@ -53,6 +64,9 @@ private:
     bool in_stop_ = false;
     std::optional<int> last_pct_;
     std::optional<std::chrono::steady_clock::time_point> lower_since_;
+    std::optional<std::chrono::steady_clock::time_point> calm_since_;   // cool and idle since
+    std::optional<std::chrono::steady_clock::time_point> stopped_at_;   // when we last let the fans stop
+    std::chrono::steady_clock::duration hold_ = kFanStopHold;
 };
 
 enum class FanMode {
@@ -74,7 +88,7 @@ struct FanState {
 class FanDriver {
 public:
     FanDriver(const GpuControl& gpu, FanCurve curve, int max_temp_c);
-    FanState tick(int temp_c, std::chrono::steady_clock::time_point now);
+    FanState tick(int temp_c, int power_w, std::chrono::steady_clock::time_point now);
     // Keeps what was written, so no false "another program"; an unchanged
     // curve keeps the controller's hysteresis and slow-down state too.
     void set_curve(FanCurve curve, int max_temp_c);

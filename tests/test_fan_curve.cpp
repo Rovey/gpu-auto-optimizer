@@ -40,7 +40,7 @@ TEST_CASE("every default curve is valid and reaches 100 % at the profile's limit
         CHECK(valid(c));
         const int limit = objectives_for(p).max_temp_c;
         FanController ctrl(c, 30, limit);
-        const FanCommand at_limit = ctrl.decide(limit, Clock::now());
+        const FanCommand at_limit = ctrl.decide(limit, 20, Clock::now());
         CHECK_FALSE(at_limit.driver);
         CHECK(at_limit.pct == 100);
     }
@@ -60,50 +60,114 @@ TEST_CASE("quieter_than compares every temperature from 30 C to the limit") {
 TEST_CASE("the controller follows the curve and never goes below the card's minimum") {
     FanController ctrl(FanCurve{std::nullopt, {{40, 10}, {80, 80}}}, 30, 90);
     const auto t = Clock::now();
-    CHECK(ctrl.decide(40, t).pct == 30);   // 10 % raised to the minimum
-    CHECK_FALSE(ctrl.decide(40, t).driver);
-    CHECK(ctrl.decide(80, t).pct == 80);
+    CHECK(ctrl.decide(40, 20, t).pct == 30);   // 10 % raised to the minimum
+    CHECK_FALSE(ctrl.decide(40, 20, t).driver);
+    CHECK(ctrl.decide(80, 20, t).pct == 80);
 }
 
 TEST_CASE("the controller hands the fans to the driver without a temperature reading") {
     FanController ctrl(simple(), 30, 90);
     const auto t = Clock::now();
-    CHECK_FALSE(ctrl.decide(60, t).driver);
-    CHECK(ctrl.decide(-1, t).driver);
+    CHECK_FALSE(ctrl.decide(60, 20, t).driver);
+    CHECK(ctrl.decide(-1, 20, t).driver);
 }
 
 TEST_CASE("at or above the profile's limit the controller demands 100 %") {
     FanController ctrl(FanCurve{50, {{50, 30}, {65, 40}}}, 30, 70);
     const auto t = Clock::now();
-    CHECK(ctrl.decide(70, t).pct == 100);
-    CHECK(ctrl.decide(85, t).pct == 100);
+    CHECK(ctrl.decide(70, 20, t).pct == 100);
+    CHECK(ctrl.decide(85, 20, t).pct == 100);
 }
 
-TEST_CASE("the fan-stop zone has 3 C of hysteresis") {
+TEST_CASE("the fans start at the threshold and stop only well below it, idle, after a hold") {
     FanController ctrl(FanCurve{50, {{50, 30}, {80, 80}}}, 30, 90);
     auto t = Clock::now();
-    CHECK(ctrl.decide(40, t).driver);   // well below: driver
-    CHECK(ctrl.decide(49, t).driver);   // still below the threshold: driver
-    CHECK_FALSE(ctrl.decide(50, t).driver);   // at the threshold: the curve takes over
+    CHECK(ctrl.decide(40, 20, t).driver);          // first reading below: the driver keeps them
+    CHECK(ctrl.decide(49, 20, t).driver);
+    CHECK_FALSE(ctrl.decide(50, 20, t).driver);    // at the threshold: the curve takes over
     t += std::chrono::seconds(10);
-    CHECK_FALSE(ctrl.decide(48, t).driver);   // within 3 C below: stays on the curve
-    CHECK(ctrl.decide(47, t).driver);          // 3 C below: back to the driver
+    CHECK_FALSE(ctrl.decide(45, 20, t).driver);    // 5 C below: still on the curve (gap is 8 C)
+    CHECK_FALSE(ctrl.decide(42, 20, t).driver);    // 8 C below starts the hold, no stop yet
+    t += std::chrono::seconds(59);
+    CHECK_FALSE(ctrl.decide(42, 20, t).driver);
+    t += std::chrono::seconds(1);
+    CHECK(ctrl.decide(42, 20, t).driver);          // 60 s below and idle: stop
+}
+
+TEST_CASE("under load the fans never stop, however cool the card is") {
+    FanController ctrl(FanCurve{50, {{50, 30}, {80, 80}}}, 30, 90);
+    auto t = Clock::now();
+    ctrl.decide(55, 90, t);
+    for (int i = 0; i < 30; ++i) {
+        t += std::chrono::seconds(10);
+        CHECK_FALSE(ctrl.decide(40, 90, t).driver);   // 90 W: not idle
+    }
+    t += std::chrono::seconds(10);
+    CHECK_FALSE(ctrl.decide(40, -1, t).driver);       // unknown power counts as load
+}
+
+TEST_CASE("the hold resets when the card warms up or draws power again") {
+    FanController ctrl(FanCurve{50, {{50, 30}, {80, 80}}}, 30, 90);
+    auto t = Clock::now();
+    ctrl.decide(55, 20, t);
+    ctrl.decide(42, 20, t);
+    t += std::chrono::seconds(50);
+    ctrl.decide(44, 20, t);                        // above the stop temperature: hold resets
+    t += std::chrono::seconds(1);
+    ctrl.decide(42, 20, t);
+    t += std::chrono::seconds(59);
+    CHECK_FALSE(ctrl.decide(42, 20, t).driver);    // only 59 s since the reset
+    t += std::chrono::seconds(1);
+    CHECK(ctrl.decide(42, 20, t).driver);
+}
+
+namespace {
+// Runs the fans, lets them stop after `hold`, returns the time of the stop.
+Clock::time_point cycle_to_stop(FanController& ctrl, Clock::time_point t, std::chrono::seconds hold) {
+    ctrl.decide(55, 20, t);
+    ctrl.decide(42, 20, t);
+    t += hold - std::chrono::seconds(1);
+    REQUIRE_FALSE(ctrl.decide(42, 20, t).driver);
+    t += std::chrono::seconds(1);
+    REQUIRE(ctrl.decide(42, 20, t).driver);
+    return t;
+}
+}
+
+TEST_CASE("fans that restart soon after stopping wait twice as long next time, up to 15 minutes") {
+    using std::chrono::seconds;
+    FanController ctrl(FanCurve{50, {{50, 30}, {80, 80}}}, 30, 90);
+    auto t = Clock::now();
+    ctrl.decide(55, 20, t);
+    t = cycle_to_stop(ctrl, t, seconds(60));
+    t += seconds(30);                                // restart 30 s later: pendulum
+    t = cycle_to_stop(ctrl, t, seconds(120));
+    t += seconds(30);
+    t = cycle_to_stop(ctrl, t, seconds(240));
+    t += seconds(30);
+    t = cycle_to_stop(ctrl, t, seconds(480));
+    t += seconds(30);
+    t = cycle_to_stop(ctrl, t, seconds(900));        // 960 capped at 15 minutes
+    t += seconds(30);
+    t = cycle_to_stop(ctrl, t, seconds(900));
+    t += seconds(600);                               // stopped 10 minutes: the pendulum is over
+    cycle_to_stop(ctrl, t, seconds(60));
 }
 
 TEST_CASE("the controller raises at once and lowers only after 5 s") {
     FanController ctrl(simple(), 30, 90);
     auto t = Clock::now();
-    CHECK(ctrl.decide(70, t).pct == 70);
-    CHECK(ctrl.decide(75, t).pct == 75);          // up: immediate
+    CHECK(ctrl.decide(70, 20, t).pct == 70);
+    CHECK(ctrl.decide(75, 20, t).pct == 75);          // up: immediate
     t += std::chrono::seconds(1);
-    CHECK(ctrl.decide(60, t).pct == 75);          // down: held
+    CHECK(ctrl.decide(60, 20, t).pct == 75);          // down: held
     t += std::chrono::seconds(4);
-    CHECK(ctrl.decide(60, t).pct == 75);          // 4 s: still held
+    CHECK(ctrl.decide(60, 20, t).pct == 75);          // 4 s: still held
     t += std::chrono::seconds(1);
-    CHECK(ctrl.decide(60, t).pct == 60);          // 5 s lower: follows
+    CHECK(ctrl.decide(60, 20, t).pct == 60);          // 5 s lower: follows
     t += std::chrono::seconds(1);
-    CHECK(ctrl.decide(50, t).pct == 60);          // a new drop starts a new wait
-    CHECK(ctrl.decide(70, t).pct == 70);          // and a rise cancels it
+    CHECK(ctrl.decide(50, 20, t).pct == 60);          // a new drop starts a new wait
+    CHECK(ctrl.decide(70, 20, t).pct == 70);          // and a rise cancels it
 }
 
 #include "core/types.hpp"
@@ -137,7 +201,7 @@ TEST_CASE("the driver writes the curve and hands the fans back on release") {
     const GpuControl g = f.gpu();
     FanDriver d(g, simple(), 90);
     const auto t = Clock::now();
-    CHECK(d.tick(60, t).mode == FanMode::Curve);
+    CHECK(d.tick(60, 20, t).mode == FanMode::Curve);
     CHECK(f.manual);
     CHECK(f.target == 60);
     d.release();
@@ -150,10 +214,10 @@ TEST_CASE("the driver only writes on a change of 2 % or more") {
     const GpuControl g = f.gpu();
     FanDriver d(g, simple(), 90);
     const auto t = Clock::now();
-    d.tick(60, t);
-    d.tick(61, t);   // 61 %: 1 % more, no write
+    d.tick(60, 20, t);
+    d.tick(61, 20, t);   // 61 %: 1 % more, no write
     CHECK(f.writes == 1);
-    d.tick(62, t);   // 62 %: 2 % more, written
+    d.tick(62, 20, t);   // 62 %: 2 % more, written
     CHECK(f.writes == 2);
     CHECK(f.target == 62);
 }
@@ -163,9 +227,9 @@ TEST_CASE("a driver reset is re-applied") {
     const GpuControl g = f.gpu();
     FanDriver d(g, simple(), 90);
     const auto t = Clock::now();
-    d.tick(60, t);
+    d.tick(60, 20, t);
     f.manual = false;   // TDR: the driver took the fans back
-    CHECK(d.tick(60, t).mode == FanMode::Curve);
+    CHECK(d.tick(60, 20, t).mode == FanMode::Curve);
     CHECK(f.manual);
     CHECK(f.writes == 2);
 }
@@ -175,12 +239,12 @@ TEST_CASE("another tool's manual speed makes the driver step aside") {
     const GpuControl g = f.gpu();
     FanDriver d(g, simple(), 90);
     const auto t = Clock::now();
-    d.tick(60, t);
+    d.tick(60, 20, t);
     f.target = 45;   // Afterburner set 45 %
-    CHECK(d.tick(70, t).mode == FanMode::Foreign);
+    CHECK(d.tick(70, 20, t).mode == FanMode::Foreign);
     CHECK(f.target == 45);   // not overwritten
     CHECK(f.manual);         // and not handed back either: the other tool owns it
-    CHECK(d.tick(80, t).mode == FanMode::Foreign);
+    CHECK(d.tick(80, 20, t).mode == FanMode::Foreign);
     CHECK(f.writes == 1);
 }
 
@@ -190,9 +254,9 @@ TEST_CASE("a failed write hands the fans back and stops") {
     const GpuControl g = f.gpu();
     FanDriver d(g, simple(), 90);
     const auto t = Clock::now();
-    CHECK(d.tick(60, t).mode == FanMode::Failed);
+    CHECK(d.tick(60, 20, t).mode == FanMode::Failed);
     CHECK_FALSE(f.manual);
-    CHECK(d.tick(70, t).mode == FanMode::Failed);
+    CHECK(d.tick(70, 20, t).mode == FanMode::Failed);
     CHECK(f.writes == 1);
 }
 
@@ -201,8 +265,8 @@ TEST_CASE("no temperature reading hands the fans to the driver") {
     const GpuControl g = f.gpu();
     FanDriver d(g, simple(), 90);
     const auto t = Clock::now();
-    d.tick(60, t);
-    CHECK(d.tick(-1, t).mode == FanMode::Driver);
+    d.tick(60, 20, t);
+    CHECK(d.tick(-1, 20, t).mode == FanMode::Driver);
     CHECK_FALSE(f.manual);
 }
 
@@ -211,16 +275,16 @@ TEST_CASE("a new curve applies on the next tick without a false 'another program
     const GpuControl g = f.gpu();
     FanDriver d(g, simple(), 90);
     const auto t = Clock::now();
-    d.tick(60, t);
+    d.tick(60, 20, t);
     d.set_curve(FanCurve{std::nullopt, {{40, 70}, {80, 100}}}, 90);
-    CHECK(d.tick(60, t).mode == FanMode::Curve);
+    CHECK(d.tick(60, 20, t).mode == FanMode::Curve);
     CHECK(f.target == 85);
 }
 
 TEST_CASE("a card without fan control never gets a write") {
     GpuControl g;   // every fan callback empty
     FanDriver d(g, simple(), 90);
-    CHECK(d.tick(60, Clock::now()).mode == FanMode::Driver);
+    CHECK(d.tick(60, 20, Clock::now()).mode == FanMode::Driver);
 }
 
 TEST_CASE("re-setting the same curve keeps the controller's state") {
@@ -229,13 +293,13 @@ TEST_CASE("re-setting the same curve keeps the controller's state") {
     const FanCurve c{50, {{50, 30}, {80, 80}}};
     FanDriver d(g, c, 90);
     auto t = Clock::now();
-    CHECK(d.tick(55, t).mode == FanMode::Curve);   // on the curve
+    CHECK(d.tick(55, 20, t).mode == FanMode::Curve);   // on the curve
     d.set_curve(c, 90);                            // the tray re-syncs every 30 s
-    CHECK(d.tick(48, t).mode == FanMode::Curve);   // within the 3 C hysteresis: still on the curve
-    CHECK(d.tick(70, t).pct == 63);
+    CHECK(d.tick(48, 20, t).mode == FanMode::Curve);   // within the 3 C hysteresis: still on the curve
+    CHECK(d.tick(70, 20, t).pct == 63);
     d.set_curve(c, 90);
     t += std::chrono::seconds(1);
-    CHECK(d.tick(60, t).pct == 63);                // the slow-down wait survives the re-sync
+    CHECK(d.tick(60, 20, t).pct == 63);                // the slow-down wait survives the re-sync
 }
 
 TEST_CASE("another tool's manual speed is detected while the driver has the fans") {
@@ -243,10 +307,10 @@ TEST_CASE("another tool's manual speed is detected while the driver has the fans
     const GpuControl g = f.gpu();
     FanDriver d(g, FanCurve{50, {{50, 30}, {80, 80}}}, 90);
     const auto t = Clock::now();
-    CHECK(d.tick(40, t).mode == FanMode::Driver);   // fan-stop zone
+    CHECK(d.tick(40, 20, t).mode == FanMode::Driver);   // fan-stop zone
     f.manual = true;                                // Afterburner sets 45 %
     f.target = 45;
-    CHECK(d.tick(60, t).mode == FanMode::Foreign);
+    CHECK(d.tick(60, 20, t).mode == FanMode::Foreign);
     CHECK(f.target == 45);
     CHECK(f.writes == 0);
 }
