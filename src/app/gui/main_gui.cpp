@@ -163,17 +163,6 @@ void recover_device() {
     if (!g.device_lost) ImGui_ImplDX11_Init(g.device.Get(), g.ctx.Get());
 }
 
-void apply_dpi(float scale) {
-    ImGuiStyle& style = ImGui::GetStyle();
-    style = ImGuiStyle();
-    ImGui::StyleColorsDark();
-    style.WindowRounding = 0;
-    style.FrameRounding = 4;
-    style.ChildRounding = 6;
-    style.ScaleAllSizes(scale);
-    style.FontScaleDpi = scale;
-}
-
 // ---------------------------------------------------------------- tray
 
 std::wstring widen(const std::string& s) {
@@ -211,8 +200,16 @@ void tray_icon(DWORD message, const wchar_t* tip = nullptr, const wchar_t* ballo
     }
 }
 
-void notify(const std::string& text) {
-    g.ui.watchdog_note = gao::app::now_text() + "  " + text;
+// A line in the window's log for this session.
+void note(const std::string& text, bool warn = false) {
+    g.ui.notes.push_back({gao::app::now_text(), text, warn});
+    if (g.ui.notes.size() > 100) g.ui.notes.erase(g.ui.notes.begin());
+}
+
+// A tray balloon. Pass log=false when the event is already in boot.log,
+// which the window's log shows too.
+void notify(const std::string& text, bool log = true) {
+    if (log) note(text, true);
     tray_icon(NIM_MODIFY, nullptr, widen(text).c_str());
 }
 
@@ -256,14 +253,16 @@ void refresh_status(bool with_task) {
     }
     if (g.gpu.read_applied) g.ui.applied = g.gpu.read_applied();
     const auto log = gao::read_lines(gao::boot_log_path());
-    g.ui.last_boot = log && !log->empty() ? log->back() : std::string();
+    g.ui.boot_log.clear();
+    if (log) g.ui.boot_log.assign(log->size() > 200 ? log->end() - 200 : log->begin(), log->end());
     if (with_task) g.ui.boot_on = gao::boot_task_exists();
 }
 
 // ---------------------------------------------------------------- actions
 
+void hw_lost();   // below, with the other hardware helpers
+
 void act_optimize(gao::Preset preset) {
-    g.ui.message.clear();
     g.worker->start(preset);   // the watchdog skips while it runs
 }
 
@@ -285,48 +284,49 @@ void act_restart_elevated() {
         g.exit_requested = true;
     } else {
         g.instance_mutex = CreateMutexW(nullptr, TRUE, kInstanceMutex);
-        g.ui.message = "Elevation was cancelled.";
+        note("Elevation was cancelled.");
     }
 }
 
 bool refuse_while_tuning() {
     if (g.worker->running()) return true;
     if (!gao::app::tuning_in_progress()) return false;
-    g.ui.message = "An optimize is running on the command line; wait for it to finish.";
+    note("An optimize is running on the command line; wait for it to finish.", true);
     return true;
 }
 
 void act_apply() {
     if (refuse_while_tuning()) return;
-    if (!g.nvml_ok || !g.nvapi_ok) { g.ui.message = "The NVIDIA driver is not available right now."; return; }
+    if (!g.nvml_ok || !g.nvapi_ok) { note("The NVIDIA driver is not available right now.", true); return; }
     std::string why;
-    if (!gao::app::prepare_state(&why)) { g.ui.message = why; return; }
+    if (!gao::app::prepare_state(&why)) { note(why, true); return; }
     gao::Config cfg = gao::app::load_config();
     cfg.boot_strikes = 0;   // strikes only gate the logon apply
     const std::string driver = g.nvml_ok ? g.nvml->DriverVersion() : std::string();
     const auto d = gao::decide_boot(cfg, driver, g.nvml_ok ? g.nvml->GpuUuid(kGpu) : std::string());
-    if (d != gao::BootDecision::Apply) { g.ui.message = "Not applied: " + gao::app::decision_text(d, cfg, driver); return; }
-    if (!gao::apply_profile(g.gpu, *cfg.profile, &why)) { g.ui.message = "Not applied: " + why; return; }
+    if (d != gao::BootDecision::Apply) { note("Not applied: " + gao::app::decision_text(d, cfg, driver), true); return; }
+    if (!gao::apply_profile(g.gpu, *cfg.profile, &why)) { note("Not applied: " + why, true); return; }
     g.watch = true;
     g.watchdog = gao::Watchdog();
-    g.ui.message = "Applied " + gao::app::profile_text(*cfg.profile);
+    note("Applied " + gao::app::profile_text(*cfg.profile));
     refresh_status(false);
 }
 
 void act_revert() {
     if (refuse_while_tuning()) return;
-    if (!g.nvml_ok || !g.nvapi_ok) { g.ui.message = "The NVIDIA driver is not available right now."; return; }
+    if (!g.nvml_ok || !g.nvapi_ok) { note("The NVIDIA driver is not available right now.", true); return; }
     const bool ok = g.gpu.reset_to_stock && g.gpu.reset_to_stock();
     g.watch = false;   // stock by choice: the watchdog must not undo it
-    g.ui.message = ok ? "Back at stock. The saved tune is not re-applied until you apply it again."
-                      : "Reset to stock FAILED; try gao --reset.";
+    note(ok ? "Back at stock. The saved tune is not re-applied until you apply it again."
+            : "Reset to stock FAILED; try gao --reset.",
+         !ok);
     refresh_status(false);
 }
 
 void act_boot(bool on) {
     std::string message;
-    on ? gao::app::enable_boot(&message) : gao::app::disable_boot(&message);
-    g.ui.message = message;
+    const bool ok = on ? gao::app::enable_boot(&message) : gao::app::disable_boot(&message);
+    note(message, !ok);
     refresh_status(true);
 }
 
@@ -341,6 +341,11 @@ void render() {
     act.apply_profile = act_apply;
     act.revert_to_stock = act_revert;
     act.set_boot = act_boot;
+    act.detect_gpu = [] {   // e.g. after a driver update: re-create NVML and NVAPI now
+        if (refuse_while_tuning()) return;
+        hw_lost();
+        g.hw_retry_at = 0;
+    };
     gao::gui::draw_ui(g.ui, g.worker->snapshot(), act);
     ImGui::Render();
     const float clear[4] = {0.08f, 0.08f, 0.10f, 1.0f};
@@ -460,21 +465,22 @@ void on_watchdog() {
             std::string why;
             if (gao::apply_profile(g.gpu, *cfg.profile, &why)) {
                 gao::app::boot_log("watchdog: the tune had been reset (driver reset or TDR); re-applied");
-                notify("The tune had been reset (driver reset or TDR) and was re-applied.");
+                notify("The tune had been reset (driver reset or TDR) and was re-applied.", false);
             } else {
                 gao::app::boot_log("watchdog: re-apply failed: " + why);
-                notify("The tune had been reset and could not be re-applied: " + why);
+                notify("The tune had been reset and could not be re-applied: " + why, false);
             }
             break;
         }
         case gao::WatchAction::GiveUpUnstable:
             gao::app::boot_log("watchdog: reset 4 times within an hour; stopped re-applying");
             notify("The tune keeps getting reset (4 times within an hour), which usually means it is not stable. "
-                   "Stopped re-applying it; optimize again.");
+                   "Stopped re-applying it; optimize again.",
+                   false);
             break;
         case gao::WatchAction::BackOffForeign:
             gao::app::boot_log("watchdog: another program changed the GPU settings; leaving them alone");
-            notify("Another program (Afterburner, NVIDIA App...) changed the GPU settings. Leaving them alone.");
+            notify("Another program (Afterburner, NVIDIA App...) changed the GPU settings. Leaving them alone.", false);
             break;
         case gao::WatchAction::NotifyDriverChanged:
             notify("The NVIDIA driver or the card changed since the tune was made. Optimize again to tune for it.");
@@ -504,10 +510,10 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         if (wp == static_cast<WPARAM>(gao::app::TrayNotice::TuneApplied)) {
             g.watch = true;
             g.watchdog = gao::Watchdog();
-            g.ui.watchdog_note = gao::app::now_text() + "  Applied from the command line; kept applied from now on.";
+            note("Applied from the command line; kept applied from now on.");
         } else {
             g.watch = false;
-            g.ui.watchdog_note = gao::app::now_text() + "  Set to stock from the command line; not re-applied until you apply it again.";
+            note("Set to stock from the command line; not re-applied until you apply it again.", true);
         }
         refresh_status(false);
         return 0;
@@ -527,7 +533,7 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             }
             return 0;
         case WM_DPICHANGED: {
-            apply_dpi(HIWORD(wp) / 96.0f);
+            gao::gui::apply_style(HIWORD(wp) / 96.0f);
             const RECT* r = reinterpret_cast<const RECT*>(lp);
             SetWindowPos(hwnd, nullptr, r->left, r->top, r->right - r->left, r->bottom - r->top, SWP_NOZORDER | SWP_NOACTIVATE);
             return 0;
@@ -627,11 +633,11 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdline, int) {
     wc.hCursor = LoadCursorW(nullptr, MAKEINTRESOURCEW(32512));   // IDC_ARROW
     wc.lpszClassName = kWindowClass;
     RegisterClassExW(&wc);
-    g.hwnd = CreateWindowW(kWindowClass, L"GPU Auto Optimizer", WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, 920, 640,
+    g.hwnd = CreateWindowW(kWindowClass, L"GPU Auto Optimizer", WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, 1180, 860,
                            nullptr, nullptr, inst, nullptr);
     if (!g.hwnd || !create_device()) return 1;
     const float scale = GetDpiForWindow(g.hwnd) / 96.0f;   // the monitor the window actually opened on
-    SetWindowPos(g.hwnd, nullptr, 0, 0, static_cast<int>(920 * scale), static_cast<int>(640 * scale),
+    SetWindowPos(g.hwnd, nullptr, 0, 0, static_cast<int>(1180 * scale), static_cast<int>(860 * scale),
                  SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
     const BOOL dark = TRUE;   // a dark title bar to match the dark window
     DwmSetWindowAttribute(g.hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark, sizeof(dark));
@@ -651,9 +657,8 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdline, int) {
     io.IniFilename = nullptr;   // nothing to persist; the layout is fixed
     wchar_t windows[MAX_PATH];
     const UINT wn = GetWindowsDirectoryW(windows, MAX_PATH);
-    const std::string font = wn && wn < MAX_PATH ? (std::filesystem::path(windows) / L"Fonts" / L"segoeui.ttf").string() : "";
-    if (font.empty() || !io.Fonts->AddFontFromFileTTF(font.c_str(), 17.0f)) io.Fonts->AddFontDefault();
-    apply_dpi(scale);
+    gao::gui::load_fonts(wn && wn < MAX_PATH ? (std::filesystem::path(windows) / L"Fonts").string() : std::string());
+    gao::gui::apply_style(scale);
     ImGui_ImplWin32_Init(g.hwnd);
     ImGui_ImplDX11_Init(g.device.Get(), g.ctx.Get());
 
@@ -672,7 +677,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdline, int) {
                 g.strike_pending = true;
                 SetTimer(g.hwnd, kTimerStrike, 2 * 60 * 1000, nullptr);
             } else if (logon.decision != gao::BootDecision::NoProfile) {
-                notify(logon.message);
+                notify(logon.message, false);   // apply_at_logon wrote boot.log
             }
         }
         refresh_status(false);
