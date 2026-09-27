@@ -114,7 +114,7 @@ static int reset() {
         ok = ok && power_ok;
     }
     // A stock card by choice: a running tray app must not re-apply the tune.
-    gao::app::tell_tray_stock_by_choice();
+    if (ok) gao::app::tell_tray_stock_by_choice();
     std::printf("%s\n", ok ? "OK" : "MISMATCH");
     return ok ? 0 : 1;
 }

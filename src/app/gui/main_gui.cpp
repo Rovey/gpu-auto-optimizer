@@ -538,11 +538,13 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdline, int) {
     const BOOL dark = TRUE;   // a dark title bar to match the dark window
     DwmSetWindowAttribute(g.hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark, sizeof(dark));
 
-    // Explorer runs unelevated; let its tray notifications, a relaunch's
-    // "come forward" and gao --reset's notice reach an elevated window.
+    // Explorer runs unelevated; let its tray notifications and a relaunch's
+    // "come forward" reach an elevated window. Not the stock-by-choice notice:
+    // gao --reset is always elevated, and an unelevated process must not be
+    // able to switch the watchdog off.
     g.taskbar_created = RegisterWindowMessageW(L"TaskbarCreated");
     g.stock_by_choice = gao::app::stock_by_choice_message();
-    for (UINT m : {WM_APP_TRAY, g.taskbar_created, WM_APP_SHOW, g.stock_by_choice})
+    for (UINT m : {WM_APP_TRAY, g.taskbar_created, WM_APP_SHOW})
         ChangeWindowMessageFilterEx(g.hwnd, m, MSGFLT_ALLOW, nullptr);
 
     IMGUI_CHECKVERSION();

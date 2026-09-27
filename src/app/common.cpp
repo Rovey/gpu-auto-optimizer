@@ -24,7 +24,8 @@ constexpr wchar_t kTrayWindowClass[] = L"GpuAutoOptimizerWindow";
 TuningLock::TuningLock() {
     handle_ = CreateMutexW(nullptr, FALSE, kTuningMutex);
     if (!handle_) return;
-    const DWORD r = WaitForSingleObject(handle_, 0);
+    // Not 0: tuning_in_progress() holds the mutex for an instant while it looks.
+    const DWORD r = WaitForSingleObject(handle_, 100);
     owned_ = r == WAIT_OBJECT_0 || r == WAIT_ABANDONED;   // abandoned: the last owner died mid-run
 }
 

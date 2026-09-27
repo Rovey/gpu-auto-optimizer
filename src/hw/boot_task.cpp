@@ -40,6 +40,19 @@ std::filesystem::path installed_dir() {
 std::filesystem::path installed_exe_path() { return installed_dir() / L"gao.exe"; }
 std::filesystem::path installed_tray_path() { return installed_dir() / L"GpuAutoOptimizer.exe"; }
 
+namespace {
+// A running exe cannot be deleted or overwritten, but it can be renamed.
+// Moving it aside frees its name at once; the renamed file goes at the next
+// restart. (Deleting it under its own name at restart would also delete a
+// copy installed there in the meantime.)
+bool move_aside(const std::filesystem::path& p) {
+    const auto aside = std::filesystem::path(p).concat(L".old-" + std::to_wstring(GetTickCount64()));
+    if (!MoveFileExW(p.c_str(), aside.c_str(), 0)) return false;
+    MoveFileExW(aside.c_str(), nullptr, MOVEFILE_DELAY_UNTIL_REBOOT);
+    return true;
+}
+}
+
 bool install_app(const std::filesystem::path& from_dir, std::string* why) {
     const auto dst = installed_dir();
     if (dst.empty()) { if (why) *why = "the Program Files folder could not be resolved"; return false; }
@@ -48,7 +61,8 @@ bool install_app(const std::filesystem::path& from_dir, std::string* why) {
     std::filesystem::create_directories(dst, ec);
     for (const wchar_t* name : kAppExes) {
         const auto src = from_dir / name;
-        if (!CopyFileW(src.c_str(), (dst / name).c_str(), FALSE)) {
+        const auto to = dst / name;
+        if (!CopyFileW(src.c_str(), to.c_str(), FALSE) && !(move_aside(to) && CopyFileW(src.c_str(), to.c_str(), FALSE))) {
             if (why) *why = "could not copy " + src.string() + " to " + dst.string() + " (error " + std::to_string(GetLastError()) + ")";
             return false;
         }
@@ -63,7 +77,7 @@ bool uninstall_app() {
     for (const wchar_t* name : kAppExes) {
         const auto p = dst / name;
         if (DeleteFileW(p.c_str()) || GetLastError() == ERROR_FILE_NOT_FOUND) continue;
-        MoveFileExW(p.c_str(), nullptr, MOVEFILE_DELAY_UNTIL_REBOOT);
+        move_aside(p);
         all = false;
     }
     if (all) RemoveDirectoryW(dst.c_str());   // only succeeds when empty

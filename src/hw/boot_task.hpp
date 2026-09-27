@@ -13,11 +13,12 @@ inline constexpr const wchar_t* kAppExes[] = {L"gao.exe", L"GpuAutoOptimizer.exe
 std::filesystem::path installed_dir();        // %ProgramFiles%\GpuAutoOptimizer
 std::filesystem::path installed_exe_path();   // ...\gao.exe
 std::filesystem::path installed_tray_path();  // ...\GpuAutoOptimizer.exe
-// Copies both executables from `from_dir` into installed_dir() (overwriting);
+// Copies both executables from `from_dir` into installed_dir() (overwriting; a
+// running copy is renamed aside first);
 // a no-op when `from_dir` already is that folder.
 bool install_app(const std::filesystem::path& from_dir, std::string* why);
 // Removes both copies and, if empty, the folder. A copy that is running (the
-// tray app) is scheduled for deletion at the next restart; returns false then.
+// tray app) is renamed aside and deleted at the next restart; returns false then.
 bool uninstall_app();
 bool files_equal(const std::filesystem::path& a, const std::filesystem::path& b);
 
