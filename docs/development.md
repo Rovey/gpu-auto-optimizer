@@ -34,6 +34,7 @@ src/core/     pure logic: no windows.h, no driver calls, no D3D. Unit-tested in 
   boot.*          when a logon apply may run (strikes, driver, card) and the verified apply
   watchdog.*      the tray app's decisions: re-apply, give up, back off, driver changed
   task_xml.*      the logon task definition
+  fan_curve.*     fan curves, the per-second controller and the FanDriver
 src/hw/       the only code that touches hardware or the OS state folders.
   nvml.*          telemetry and power limit via NVML
   nvapi.*         clock offsets via NVAPI, verified by read-back
@@ -71,7 +72,7 @@ The applied offset is always at least one step below the confirmed edge. Profile
 | Memory stops at the bandwidth peak | GDDR6/GDDR6X retry failed transfers, so memory overclocks lose bandwidth long before they return wrong results. |
 | Edges are confirmed, then backed off | A 3 s probe can pass by luck; the edges get 30 s probes before the safety margin is applied, and the result must pass a 60 s soak. |
 | No undervolting | Locking a voltage point hard-froze the reference RTX 4070, and reshaping the curve gave no measurable gain on a power-limited card. |
-| No fan control | NVIDIA's public fan API is gone on RTX 20-series and newer, and a fan setting that cannot be verified is not made. |
+| Fans through NVML, stop zone via the driver | NVIDIA's legacy NVAPI fan API is gone on RTX 20-series and newer; NVML's `nvmlDeviceSetFanSpeed_v2` is public and verified by reading the target back. Below the stop threshold the driver owns the fans, so no failure of this app can leave them stopped. |
 | Tray app plus logon task | Driver settings are volatile: a reboot or driver reset clears them. The logon task starts the tray app, whose watchdog keeps the tune applied; three crashing logons in a row switch it off. |
 | Dear ImGui on DX11 | One small binary with no runtime, and the D3D11 device is in the process anyway for the stress load. |
 

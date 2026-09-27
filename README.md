@@ -26,6 +26,7 @@ GPU Auto Optimizer tunes the **power limit** and the **core and memory clock off
 - **Verified, not trusted:** every value written to the driver is read back and checked, and a failed apply ends at stock.
 - **Crash-proof search:** a journal on disk records each candidate before it is tried, so a setting that froze the machine is never tried again.
 - **Stays applied:** the tray app re-applies the tune at every logon, and within about half a minute after a driver reset (TDR).
+- **Fan curves:** a curve per profile, editable, with fan stop at idle; the fans go back to the driver on exit, sleep, logoff and crashes.
 - **Plays fair:** if MSI Afterburner or another tool changes the settings, it steps aside instead of fighting over them.
 - **Native and small:** two C++ programs, under 2 MB together, with no installer, no runtime and no driver or service.
 
@@ -93,6 +94,7 @@ flowchart LR
 | `gao --apply` | Re-applies the saved profile |
 | `gao --reset` | Returns to stock clocks and the default power limit |
 | `gao --boot on\|off` | Turns apply-at-logon on or off |
+| `gao --fan auto` | Hands every fan back to the NVIDIA driver, whatever set it |
 | `gao --status` | Saved profile, what is applied now, apply-at-logon state |
 | `gao --probe` | Live telemetry: clocks, temperature, fan, power |
 | `gao --stress <seconds>` | Runs the stress test alone and prints its verdict; changes nothing |
@@ -121,9 +123,9 @@ During a search, the crash journal makes sure that setting is never tried again,
 </details>
 
 <details>
-<summary><b>Does it change my fan curve?</b></summary>
+<summary><b>Can it control the fans?</b></summary>
 
-No. The fan stays under the driver's control; the app only shows its speed. NVIDIA's public fan API was dropped on RTX 20-series and newer cards, and a tuner that cannot verify a fan setting does not make one.
+Yes. Each profile comes with a fan curve, and the Fan page lets you edit it: drag the points, and choose a temperature below which the fans stop (the NVIDIA driver controls them there, so a crash or a killed app can never leave them stopped). The optimize run uses the profile's curve, so the tune is tested at the temperatures that curve produces; a quieter curve afterwards shows a warning. The curve runs while the tray app runs with administrator rights; otherwise the driver controls the fans.
 </details>
 
 <details>

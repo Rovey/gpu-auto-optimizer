@@ -61,6 +61,13 @@ root; adjust the path for a Debug build.
 | 35 | One instance | start the app twice | no | the second start brings the first window forward and exits | Pass (2026-09-27, after the P5 fix pass): the second start exits with code 0, the first keeps running. |
 | 36 | CLI and tray side by side | tray running with the tune kept applied; `gao --reset`, wait 45 s, `gao --status`; then `gao --optimize` from a shell while the window runs an optimize | yes | after `--reset` the card stays at stock (the tray notes it and does not re-apply); after `gao --apply` the tray keeps the tune applied again; the second optimize refuses with `another optimize is already running` | Pass for reset and apply (2026-09-27): after `gao --reset` the card stayed at stock for 45 s with the tray running (no watchdog line); `gao --apply` applied the tune again. Two optimizes at once not yet tried. |
 | 37 | Closing the window | close the window, then choose Exit in the tray menu | no | closing hides the window to the tray (a balloon says so the first time); Exit quits | |
+| 38 | Fan curve follows the temperature | Fan page: fan control on; `gao --stress 120` in a shell | yes (tray) | the fan tile shows `(curve)` above the stop threshold and the speed rises with the temperature; `gao --status` shows `fans: manual N %` | |
+| 39 | Fan-stop zone | idle below the stop threshold | yes (tray) | `gao --status` shows `fans: driver control`; the fans stand still | |
+| 40 | Fans back on exit | Exit in the tray menu while the curve runs | yes (tray) | `gao --status` shows `fans: driver control` | |
+| 41 | Fans back on sleep and after a TDR | sleep and wake; then `dxcap -forcetdr` | yes (tray) | on sleep: driver control; after wake and after the TDR the curve takes over again within a few seconds | |
+| 42 | Another tool's fan speed | curve running, set a fixed fan speed in MSI Afterburner and Apply | yes (tray) | a balloon says another program set the fans; the app does not overwrite them | |
+| 43 | `gao --fan auto` | curve running, `gao --fan auto` in an elevated shell | yes | `fans: driver control -- OK`; then the tray re-applies the curve on its next tick | |
+| 44 | Fans during an optimize run | `gao --optimize best`, Ctrl+C during the core search | yes | during the run the fans follow the Best curve; after Ctrl+C `gao --status` shows `fans: driver control` | |
 
 ## Notes
 
