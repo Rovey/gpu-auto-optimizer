@@ -66,9 +66,12 @@ struct App {
     ComPtr<ID3D11RenderTargetView> rtv;
     bool device_lost = false;   // retried every second until a new device exists
 
-    gao::Nvml nvml;
-    gao::Nvapi nvapi;
+    // Pointers: re-created after a driver reset (see hw_lost()).
+    std::unique_ptr<gao::Nvml> nvml;
+    std::unique_ptr<gao::Nvapi> nvapi;
     bool nvml_ok = false, nvapi_ok = false;
+    bool hw_lost = false;            // re-create them at hw_retry_at
+    ULONGLONG hw_retry_at = 0;
     gao::GpuControl gpu;
 
     gao::gui::UiState ui;
@@ -246,8 +249,8 @@ void refresh_status(bool with_task) {
     g.ui.profile = cfg.profile;
     g.ui.strikes = cfg.boot_strikes;
     if (g.nvml_ok) {
-        g.ui.driver = g.nvml.DriverVersion();
-        const std::string gpu_id = g.nvml.GpuUuid(kGpu);
+        g.ui.driver = g.nvml->DriverVersion();
+        const std::string gpu_id = g.nvml->GpuUuid(kGpu);
         g.ui.profile_driver_ok = cfg.profile && !g.ui.driver.empty() && g.ui.driver == cfg.profile->driver;
         g.ui.profile_gpu_ok = cfg.profile && !gpu_id.empty() && gpu_id == cfg.profile->gpu;
     }
@@ -295,12 +298,13 @@ bool refuse_while_tuning() {
 
 void act_apply() {
     if (refuse_while_tuning()) return;
+    if (!g.nvml_ok || !g.nvapi_ok) { g.ui.message = "The NVIDIA driver is not available right now."; return; }
     std::string why;
     if (!gao::app::prepare_state(&why)) { g.ui.message = why; return; }
     gao::Config cfg = gao::app::load_config();
     cfg.boot_strikes = 0;   // strikes only gate the logon apply
-    const std::string driver = g.nvml_ok ? g.nvml.DriverVersion() : std::string();
-    const auto d = gao::decide_boot(cfg, driver, g.nvml_ok ? g.nvml.GpuUuid(kGpu) : std::string());
+    const std::string driver = g.nvml_ok ? g.nvml->DriverVersion() : std::string();
+    const auto d = gao::decide_boot(cfg, driver, g.nvml_ok ? g.nvml->GpuUuid(kGpu) : std::string());
     if (d != gao::BootDecision::Apply) { g.ui.message = "Not applied: " + gao::app::decision_text(d, cfg, driver); return; }
     if (!gao::apply_profile(g.gpu, *cfg.profile, &why)) { g.ui.message = "Not applied: " + why; return; }
     g.watch = true;
@@ -311,6 +315,7 @@ void act_apply() {
 
 void act_revert() {
     if (refuse_while_tuning()) return;
+    if (!g.nvml_ok || !g.nvapi_ok) { g.ui.message = "The NVIDIA driver is not available right now."; return; }
     const bool ok = g.gpu.reset_to_stock && g.gpu.reset_to_stock();
     g.watch = false;   // stock by choice: the watchdog must not undo it
     g.ui.message = ok ? "Back at stock. The saved tune is not re-applied until you apply it again."
@@ -346,12 +351,72 @@ void render() {
     if (hr == DXGI_ERROR_DEVICE_REMOVED || hr == DXGI_ERROR_DEVICE_RESET) recover_device();
 }
 
+// ---------------------------------------------------------------- hardware
+
+// A driver reset (TDR) can leave NVML and NVAPI state in this long-running
+// process stale, and a call during the reset has faulted inside nvml.dll
+// (hardware check 33). The tray exists to survive exactly that: its periodic
+// hardware work runs guarded, and after a reset the libraries are re-created.
+
+void init_hw() {
+    g.nvml = std::make_unique<gao::Nvml>();
+    g.nvapi = std::make_unique<gao::Nvapi>();
+    g.nvml_ok = g.nvml->Init();
+    g.nvapi_ok = g.nvapi->Init();
+    g.gpu = g.nvml_ok && g.nvapi_ok ? gao::make_gpu_control(*g.nvml, *g.nvapi, kGpu) : gao::GpuControl{};
+}
+
+// Structured exceptions, not C++ ones: an access violation inside a driver DLL.
+// A function with __try may not hold destructible objects, hence the function
+// pointer. Objects in the frames it skips are not destroyed (/EHsc); that leak
+// is the price of keeping the watchdog alive.
+bool guarded(void (*fn)(void*), void* ctx) {
+    __try {
+        fn(ctx);
+        return true;
+    } __except (GetExceptionCode() == EXCEPTION_ACCESS_VIOLATION ? EXCEPTION_EXECUTE_HANDLER : EXCEPTION_CONTINUE_SEARCH) {
+        return false;
+    }
+}
+template <class F> bool guarded(F f) {
+    return guarded([](void* p) { (*static_cast<F*>(p))(); }, &f);
+}
+
+// Stop using the libraries and re-create them a few seconds from now, when
+// the driver is back. The watchdog then finds the tune gone and re-applies it.
+void hw_lost() {
+    g.gpu = {};
+    g.nvml_ok = g.nvapi_ok = false;
+    g.hw_lost = true;
+    g.hw_retry_at = GetTickCount64() + 5000;
+    // Shutting down a library that just faulted may fault again; then leave it.
+    gao::Nvml* nvml = g.nvml.release();
+    gao::Nvapi* nvapi = g.nvapi.release();
+    guarded([nvml] { delete nvml; });
+    guarded([nvapi] { delete nvapi; });
+}
+
+void retry_hw() {
+    if (!g.hw_lost || GetTickCount64() < g.hw_retry_at) return;
+    if (!guarded([] { init_hw(); }) || !g.nvml_ok || !g.nvapi_ok) {
+        hw_lost();   // not back yet
+        return;
+    }
+    g.hw_lost = false;
+    refresh_status(false);
+}
+
 // ---------------------------------------------------------------- timers
 
 void on_telemetry() {
-    if (g.device_lost) recover_device();
+    // A removed UI device is the first sign of a driver reset; the window is
+    // often hidden, so no Present() would report it.
+    const bool reset = g.device && g.device->GetDeviceRemovedReason() != S_OK;
+    if (g.device_lost || reset) recover_device();
+    if (reset && !g.hw_lost) hw_lost();
+    retry_hw();
     if (g.nvml_ok) {
-        g.ui.telemetry = g.nvml.Read(kGpu);
+        g.ui.telemetry = g.nvml->Read(kGpu);
         gao::gui::push_history(g.ui.temp_history, static_cast<float>(std::max(g.ui.telemetry.temp_c, 0)));
         gao::gui::push_history(g.ui.power_history, static_cast<float>(std::max(g.ui.telemetry.power_w, 0)));
     }
@@ -381,8 +446,13 @@ void on_watchdog() {
     if (!g.ui.elevated || !g.nvml_ok || !g.nvapi_ok) return;
     const gao::Config cfg = gao::app::load_config();
     if (!cfg.profile) return;
-    const std::string driver = g.nvml.DriverVersion(), gpu_id = g.nvml.GpuUuid(kGpu);
-    const auto action = g.watchdog.check(*cfg.profile, g.gpu.read_applied(), !driver.empty() && driver == cfg.profile->driver,
+    const auto applied = g.gpu.read_applied();
+    if (!applied) {   // NVAPI handles go stale after a driver reset: re-create
+        hw_lost();
+        return;
+    }
+    const std::string driver = g.nvml->DriverVersion(), gpu_id = g.nvml->GpuUuid(kGpu);
+    const auto action = g.watchdog.check(*cfg.profile, applied, !driver.empty() && driver == cfg.profile->driver,
                                          !gpu_id.empty() && gpu_id == cfg.profile->gpu, std::chrono::steady_clock::now());
     switch (action) {
         case gao::WatchAction::None: return;
@@ -473,8 +543,8 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             }
             return 0;
         case WM_TIMER:
-            if (wp == kTimerTelemetry) on_telemetry();
-            else if (wp == kTimerWatchdog) on_watchdog();
+            if (wp == kTimerTelemetry) { if (!guarded([] { on_telemetry(); })) hw_lost(); }
+            else if (wp == kTimerWatchdog) { if (!guarded([] { on_watchdog(); })) hw_lost(); }
             else if (wp == kTimerStrike) { clear_strike(); refresh_status(false); }
             return 0;
         case WM_APP_WAKE:
@@ -588,9 +658,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdline, int) {
     ImGui_ImplDX11_Init(g.device.Get(), g.ctx.Get());
 
     g.worker = std::make_unique<gao::gui::OptimizeWorker>([] { PostMessageW(g.hwnd, WM_APP_WAKE, 0, 0); });
-    g.nvml_ok = g.nvml.Init();
-    g.nvapi_ok = g.nvapi.Init();
-    if (g.nvml_ok && g.nvapi_ok) g.gpu = gao::make_gpu_control(g.nvml, g.nvapi, kGpu);
+    init_hw();
     g.ui.gpu_name = gao::nvidia_adapter_name();
 
     tray_icon(NIM_ADD);

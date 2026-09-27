@@ -232,11 +232,17 @@ bool enable_boot(std::string* message) {
     const std::string xml = boot_task_xml(std::string(u8.begin(), u8.end()), "--tray", sid, "PT0S");
     const auto xml_path = app_dir() / L"BootApply.xml";
     if (!write_utf16_file(xml_path, xml)) return say("could not write " + xml_path.string(), false);
+    // The pre-P4b task is a file named \GpuAutoOptimizer in the task root, which
+    // blocks creating the \GpuAutoOptimizer\ folder: it has to go first.
+    const bool had_legacy = boot_task_legacy_exists();
+    if (had_legacy && boot_task_remove_legacy() != 0) return say("could not remove the old logon task \\GpuAutoOptimizer", false);
     const int code = boot_task_create_xml(xml_path);
     std::error_code ec;
     std::filesystem::remove(xml_path, ec);
-    if (code != 0) return say("could not create the task (schtasks exit " + std::to_string(code) + ")", false);
-    boot_task_remove_legacy();   // only once the new task exists
+    if (code != 0)
+        return say("could not create the task (schtasks exit " + std::to_string(code) + ")" +
+                       (had_legacy ? "; the old logon task was already removed, so nothing applies the tune at logon" : ""),
+                   false);
     Config cfg = load_config();
     cfg.boot_strikes = 0;
     if (!save_config(cfg)) return say("task created, but could not reset the strike counter", false);
