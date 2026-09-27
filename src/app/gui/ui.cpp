@@ -451,16 +451,32 @@ bool curve_editor(FanCurve& c, int min_pct, int max_temp_c, int now_temp_c, int*
         const ImVec2 n = to_screen(static_cast<float>(std::min(now_temp_c, 100)), 0);
         dl->AddLine(ImVec2(n.x, a.y), ImVec2(n.x, b.y), ImGui::GetColorU32(kText), 1.0f);
     }
-    // The curve, drawn at 1 C resolution with the guard rails applied.
-    ImVec2 prev;
-    for (int t = 20; t <= 100; ++t) {
-        int pct = std::max(min_pct, curve_pct(c, t));
-        if (t >= max_temp_c) pct = 100;
-        const bool stop = c.stop_below_c && t < *c.stop_below_c;
-        const ImVec2 p = to_screen(static_cast<float>(t), static_cast<float>(stop ? 0 : pct));
-        if (t > 20) dl->AddLine(prev, p, ImGui::GetColorU32(kAccentBright), 2.5f);
-        prev = p;
+    // What the fans actually do, guard rails included: exact, not rounded to
+    // whole percents, so straight segments stay straight and the jumps at the
+    // stop threshold and the limit are vertical.
+    auto effective = [&](float t) {
+        if (t >= static_cast<float>(max_temp_c)) return 100.0f;
+        if (c.stop_below_c && t < static_cast<float>(*c.stop_below_c)) return 0.0f;
+        const auto& pts = c.points;
+        float v = static_cast<float>(pts.back().pct);
+        if (t <= static_cast<float>(pts.front().temp_c)) {
+            v = static_cast<float>(pts.front().pct);
+        } else {
+            for (size_t k = 1; k < pts.size(); ++k) {
+                if (t > static_cast<float>(pts[k].temp_c)) continue;
+                const float f = (t - static_cast<float>(pts[k - 1].temp_c)) / static_cast<float>(pts[k].temp_c - pts[k - 1].temp_c);
+                v = static_cast<float>(pts[k - 1].pct) + f * static_cast<float>(pts[k].pct - pts[k - 1].pct);
+                break;
+            }
+        }
+        return std::max(v, static_cast<float>(min_pct));
+    };
+    std::vector<ImVec2> line;
+    for (int i = 0; i <= 80 * 8; ++i) {
+        const float t = 20 + static_cast<float>(i) / 8;
+        line.push_back(to_screen(t, effective(t)));
     }
+    dl->AddPolyline(line.data(), static_cast<int>(line.size()), ImGui::GetColorU32(kAccentBright), ImDrawFlags_None, 2.5f);
     bool released = false;
     for (int i = 0; i < static_cast<int>(c.points.size()); ++i) {
         FanPoint& pt = c.points[static_cast<size_t>(i)];
@@ -481,9 +497,22 @@ bool curve_editor(FanCurve& c, int min_pct, int max_temp_c, int now_temp_c, int*
         }
         if (ImGui::IsItemDeactivated()) released = true;
         const bool hot = ImGui::IsItemHovered() || ImGui::IsItemActive() || *selected == i;
-        dl->AddCircleFilled(p, r, ImGui::GetColorU32(hot ? kText : kAccentBright));
-        if (ImGui::IsItemHovered() || ImGui::IsItemActive())
-            ImGui::SetTooltip("%d \xC2\xB0""C  %d %%", pt.temp_c, pt.pct);
+        // A point a guard rail overrides is drawn hollow, off the line, with the reason.
+        const char* why = pt.temp_c >= max_temp_c ? "the profile's limit: the fans run at 100 % here"
+                          : c.stop_below_c && pt.temp_c < *c.stop_below_c ? "the fan-stop zone: the driver has the fans here"
+                          : pt.pct < min_pct ? "raised to the card's minimum"
+                                             : nullptr;
+        const ImU32 col = ImGui::GetColorU32(hot ? kText : kAccentBright);
+        if (why) {
+            dl->AddCircleFilled(p, r, ImGui::GetColorU32(kInner));
+            dl->AddCircle(p, r, col, 0, 2.0f);
+        } else {
+            dl->AddCircleFilled(p, r, col);
+        }
+        if (ImGui::IsItemHovered() || ImGui::IsItemActive()) {
+            if (why) ImGui::SetTooltip("%d \xC2\xB0""C  %d %%\nOverridden by %s", pt.temp_c, pt.pct, why);
+            else ImGui::SetTooltip("%d \xC2\xB0""C  %d %%", pt.temp_c, pt.pct);
+        }
         ImGui::PopID();
     }
     ImGui::SetCursorScreenPos(ImVec2(o.x, o.y + h));
