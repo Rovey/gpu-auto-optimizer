@@ -4,6 +4,7 @@
 #include "core/version.hpp"
 #include "imgui.h"
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <vector>
 
@@ -177,7 +178,8 @@ void telemetry_tiles(const UiState& s) {
     ImGui::SameLine();
     tile("power", kIconPower, "Power", reading(t.power_w, "") + " / " + reading(t.power_limit_w, " W"), w, h);
     ImGui::SameLine();
-    tile("fan", kIconFan, "Fan speed", reading(t.fan_pct, " %"), w, h);
+    const char* mode = s.fan_state.mode == FanMode::Curve ? " (curve)" : s.fan_control && s.fan_available ? " (driver)" : "";
+    tile("fan", kIconFan, "Fan speed", reading(t.fan_pct, " %") + mode, w, h);
 }
 
 // The four presets side by side; clicking one selects it.
@@ -384,6 +386,168 @@ void log_card(const UiState& s) {
     end_card();
 }
 
+// Temperature 20-100 C on x, fan 0-100 % on y. Points drag with the mouse and
+// stay ordered: a point cannot pass its neighbours in temperature, and fan %
+// never goes down from one point to the next. Returns true when a drag ended,
+// so the caller saves once per edit rather than every frame.
+bool curve_editor(FanCurve& c, int min_pct, int max_temp_c, int now_temp_c, int* selected) {
+    const float w = ImGui::GetContentRegionAvail().x, h = em() * 16;
+    const ImVec2 o = ImGui::GetCursorScreenPos();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const float pad = em() * 2.2f;
+    const ImVec2 a(o.x + pad, o.y + em() * 0.5f), b(o.x + w - em() * 0.5f, o.y + h - pad);
+    auto to_screen = [&](float t, float p) {
+        return ImVec2(a.x + (t - 20) / 80 * (b.x - a.x), b.y - p / 100 * (b.y - a.y));
+    };
+    dl->AddRectFilled(a, b, ImGui::GetColorU32(kInner), em() * 0.3f);
+    for (int t = 20; t <= 100; t += 10) {
+        const ImVec2 p = to_screen(static_cast<float>(t), 0);
+        dl->AddLine(ImVec2(p.x, a.y), ImVec2(p.x, b.y), ImGui::GetColorU32(kBorder));
+        dl->AddText(ImVec2(p.x - em() * 0.6f, b.y + em() * 0.3f), ImGui::GetColorU32(kDim), (std::to_string(t) + "\xC2\xB0").c_str());
+    }
+    for (int p = 0; p <= 100; p += 25) {
+        const ImVec2 q = to_screen(20, static_cast<float>(p));
+        dl->AddLine(ImVec2(a.x, q.y), ImVec2(b.x, q.y), ImGui::GetColorU32(kBorder));
+        dl->AddText(ImVec2(o.x, q.y - em() * 0.5f), ImGui::GetColorU32(kDim), (std::to_string(p) + "%").c_str());
+    }
+    // Fan-stop zone, the card's minimum, the profile's limit and the current temperature.
+    if (c.stop_below_c) {
+        const ImVec2 z = to_screen(static_cast<float>(*c.stop_below_c), 0);
+        dl->AddRectFilled(a, ImVec2(z.x, b.y), ImGui::GetColorU32(ImVec4(kGood.x, kGood.y, kGood.z, 0.10f)));
+    }
+    const ImVec2 m = to_screen(20, static_cast<float>(min_pct));
+    dl->AddLine(ImVec2(a.x, m.y), ImVec2(b.x, m.y), ImGui::GetColorU32(kWarn), 1.0f);
+    const ImVec2 lim = to_screen(static_cast<float>(max_temp_c), 100);
+    dl->AddLine(ImVec2(lim.x, a.y), ImVec2(lim.x, b.y), ImGui::GetColorU32(kBad), 1.5f);
+    if (now_temp_c >= 20) {
+        const ImVec2 n = to_screen(static_cast<float>(std::min(now_temp_c, 100)), 0);
+        dl->AddLine(ImVec2(n.x, a.y), ImVec2(n.x, b.y), ImGui::GetColorU32(kText), 1.0f);
+    }
+    // The curve, drawn at 1 C resolution with the guard rails applied.
+    ImVec2 prev;
+    for (int t = 20; t <= 100; ++t) {
+        int pct = std::max(min_pct, curve_pct(c, t));
+        if (t >= max_temp_c) pct = 100;
+        const bool stop = c.stop_below_c && t < *c.stop_below_c;
+        const ImVec2 p = to_screen(static_cast<float>(t), static_cast<float>(stop ? 0 : pct));
+        if (t > 20) dl->AddLine(prev, p, ImGui::GetColorU32(kAccentBright), 2.5f);
+        prev = p;
+    }
+    bool released = false;
+    for (int i = 0; i < static_cast<int>(c.points.size()); ++i) {
+        FanPoint& pt = c.points[static_cast<size_t>(i)];
+        const ImVec2 p = to_screen(static_cast<float>(pt.temp_c), static_cast<float>(pt.pct));
+        const float r = em() * 0.45f;
+        ImGui::SetCursorScreenPos(ImVec2(p.x - r * 1.5f, p.y - r * 1.5f));
+        ImGui::PushID(i);
+        ImGui::InvisibleButton("pt", ImVec2(r * 3, r * 3));
+        if (ImGui::IsItemActivated()) *selected = i;
+        if (ImGui::IsItemActive()) {
+            const ImVec2 mouse = ImGui::GetIO().MousePos;
+            const int lo_t = i > 0 ? c.points[static_cast<size_t>(i) - 1].temp_c + 1 : 20;
+            const int hi_t = i + 1 < static_cast<int>(c.points.size()) ? c.points[static_cast<size_t>(i) + 1].temp_c - 1 : 100;
+            const int lo_p = i > 0 ? c.points[static_cast<size_t>(i) - 1].pct : 0;
+            const int hi_p = i + 1 < static_cast<int>(c.points.size()) ? c.points[static_cast<size_t>(i) + 1].pct : 100;
+            pt.temp_c = std::clamp(static_cast<int>(std::lround(20 + (mouse.x - a.x) / (b.x - a.x) * 80)), lo_t, hi_t);
+            pt.pct = std::clamp(static_cast<int>(std::lround((b.y - mouse.y) / (b.y - a.y) * 100)), lo_p, hi_p);
+        }
+        if (ImGui::IsItemDeactivated()) released = true;
+        const bool hot = ImGui::IsItemHovered() || ImGui::IsItemActive() || *selected == i;
+        dl->AddCircleFilled(p, r, ImGui::GetColorU32(hot ? kText : kAccentBright));
+        if (ImGui::IsItemHovered() || ImGui::IsItemActive())
+            ImGui::SetTooltip("%d \xC2\xB0""C  %d %%", pt.temp_c, pt.pct);
+        ImGui::PopID();
+    }
+    ImGui::SetCursorScreenPos(ImVec2(o.x, o.y + h));
+    ImGui::Dummy(ImVec2(w, 0));
+    return released;
+}
+
+void fan_page(UiState& s, const UiActions& act) {
+    static FanCurve edit;          // the curve being edited; saved when a drag ends
+    static bool editing = false;
+    static int selected = -1;
+    begin_card("fan");
+    heading("Fan curve");
+    if (!s.fan_available) {
+        wrapped(kDim, s.elevated ? "This card's fans cannot be controlled through the NVIDIA driver."
+                                 : "Fan control needs administrator rights. Restart as administrator from the dashboard.");
+        end_card();
+        return;
+    }
+    if (!s.fan_curve) {
+        wrapped(kDim, "Optimize first: the fan curve belongs to a saved tune.");
+        end_card();
+        return;
+    }
+    if (!editing) edit = *s.fan_curve;
+
+    const std::string label = "Fan control";
+    ImGui::TextUnformatted(label.c_str());
+    ImGui::SameLine();
+    if (toggle("##fanon", s.fan_control)) act.set_fan_control(!s.fan_control);
+    ImGui::SameLine(0, em() * 2);
+    switch (s.fan_state.mode) {
+        case FanMode::Curve: dim(("Curve: " + std::to_string(s.fan_state.pct) + " %").c_str()); break;
+        case FanMode::Foreign: ImGui::TextColored(kWarn, "Another program controls the fans."); break;
+        case FanMode::Failed: ImGui::TextColored(kBad, "A fan speed did not verify; the driver controls the fans."); break;
+        case FanMode::Driver: dim(s.fan_control ? "The NVIDIA driver controls the fans right now." : "Off: the NVIDIA driver controls the fans."); break;
+    }
+    ImGui::Spacing();
+
+    const bool released = curve_editor(edit, s.fan_min_pct, s.fan_max_temp_c, s.telemetry.temp_c, &selected);
+    editing = ImGui::IsAnyItemActive();
+    if (released && valid(edit)) act.set_fan_curve(edit);
+
+    bool stop = edit.stop_below_c.has_value();
+    if (ImGui::Checkbox("Stop the fans below", &stop)) {
+        edit.stop_below_c = stop ? std::optional<int>(50) : std::nullopt;
+        act.set_fan_curve(edit);
+    }
+    if (stop) {
+        ImGui::SameLine();
+        int v = *edit.stop_below_c;
+        ImGui::SetNextItemWidth(em() * 12);
+        ImGui::SliderInt("##stop", &v, 30, 70, "%d \xC2\xB0""C");
+        edit.stop_below_c = v;
+        if (ImGui::IsItemDeactivatedAfterEdit()) act.set_fan_curve(edit);
+    }
+    ImGui::SameLine(0, em() * 2);
+    ImGui::BeginDisabled(edit.points.size() >= 6);
+    if (ImGui::Button("Add point")) {
+        // Halfway along the widest temperature gap.
+        size_t at = 1;
+        for (size_t i = 1; i < edit.points.size(); ++i)
+            if (edit.points[i].temp_c - edit.points[i - 1].temp_c > edit.points[at].temp_c - edit.points[at - 1].temp_c) at = i;
+        const FanPoint& l = edit.points[at - 1];
+        const FanPoint& r = edit.points[at];
+        edit.points.insert(edit.points.begin() + static_cast<std::ptrdiff_t>(at), FanPoint{(l.temp_c + r.temp_c) / 2, (l.pct + r.pct) / 2});
+        if (valid(edit)) act.set_fan_curve(edit);
+    }
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    ImGui::BeginDisabled(edit.points.size() <= 2 || selected < 0 || selected >= static_cast<int>(edit.points.size()));
+    if (ImGui::Button("Remove point")) {
+        edit.points.erase(edit.points.begin() + selected);
+        selected = -1;
+        act.set_fan_curve(edit);
+    }
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    if (ImGui::Button("Profile default")) {
+        selected = -1;
+        act.reset_fan_curve();
+    }
+
+    ImGui::Spacing();
+    if (s.fan_tested && quieter_than(edit, *s.fan_tested, s.fan_max_temp_c))
+        wrapped(kWarn, "This curve is quieter than the one the tune was tested with, so the card runs warmer than during the "
+                       "test. Optimize again to be sure the tune holds.");
+    wrapped(kDim, "Below the card's minimum (yellow line) a fan cannot run slower; in the green zone the NVIDIA driver controls "
+                  "the fans and stops them at idle. From the red line (the profile's temperature limit) the fans always run at 100 %.");
+    end_card();
+}
+
 void dashboard(UiState& s, const UiActions& act) {
     gpu_card(s, act);
     tuning_card(s, act);
@@ -564,6 +728,7 @@ void sidebar(UiState& s) {
     ImGui::PopStyleColor();
     nav_item(s, Page::Dashboard, kIconHome, "Dashboard");
     nav_item(s, Page::Optimize, kIconPulse, "Optimize");
+    nav_item(s, Page::Fan, kIconFan, "Fan");
     nav_item(s, Page::About, kIconInfo, "About");
     ImGui::SetCursorPosY(ImGui::GetWindowHeight() - em() * 2.2f);
     ImGui::PushStyleColor(ImGuiCol_Text, s.elevated ? kGood : kDim);
@@ -657,6 +822,7 @@ void draw_ui(UiState& s, const OptimizeWorker::Snapshot& run, const UiActions& a
     switch (s.page) {
         case Page::Dashboard: dashboard(s, act); break;
         case Page::Optimize: optimize_page(s, run, act); break;
+        case Page::Fan: fan_page(s, act); break;
         case Page::About: about(); break;
     }
     ImGui::EndChild();

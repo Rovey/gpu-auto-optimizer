@@ -11,7 +11,7 @@
 
 namespace gao::gui {
 
-enum class Page { Dashboard, Optimize, About };
+enum class Page { Dashboard, Optimize, Fan, About };
 enum class Screen { Choose, Run, Results };   // the Optimize page's state
 
 // Something the app did or was told this session, shown in the log with the
