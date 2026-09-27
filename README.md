@@ -26,7 +26,7 @@ GPU Auto Optimizer tunes the **power limit** and the **core and memory clock off
 - **Verified, not trusted:** every value written to the driver is read back and checked, and a failed apply ends at stock.
 - **Crash-proof search:** a journal on disk records each candidate before it is tried, so a setting that froze the machine is never tried again.
 - **Stays applied:** the tray app re-applies the tune at every logon, and within about half a minute after a driver reset (TDR).
-- **Fan curves:** a curve per profile, editable, with fan stop at idle; the fans go back to the driver on exit, sleep, logoff and crashes.
+- **Fan curves:** Silent, Normal, Cool or Aggressive with any profile, or your own; fans stop at idle without cycling on and off, the app learns the lowest speed your fans can actually hold, and the fans go back to the driver on exit, sleep, logoff and crashes.
 - **Plays fair:** if MSI Afterburner or another tool changes the settings, it steps aside instead of fighting over them.
 - **Native and small:** two C++ programs, under 2 MB together, with no installer, no runtime and no driver or service.
 
