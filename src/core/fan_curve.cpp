@@ -46,7 +46,7 @@ bool valid(const FanCurve& c) {
     if (c.stop_below_c && (*c.stop_below_c < 20 || *c.stop_below_c > 90)) return false;
     for (size_t i = 0; i < c.points.size(); ++i) {
         const FanPoint& p = c.points[i];
-        if (p.temp_c < 0 || p.temp_c > 110 || p.pct < 0 || p.pct > 100) return false;
+        if (p.temp_c < 20 || p.temp_c > 100 || p.pct < 0 || p.pct > 100) return false;   // the editor's range
         if (i > 0 && (p.temp_c <= c.points[i - 1].temp_c || p.pct < c.points[i - 1].pct)) return false;
     }
     return true;

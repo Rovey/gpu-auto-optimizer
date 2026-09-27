@@ -94,7 +94,7 @@ flowchart LR
 | `gao --apply` | Re-applies the saved profile |
 | `gao --reset` | Returns to stock clocks and the default power limit |
 | `gao --boot on\|off` | Turns apply-at-logon on or off |
-| `gao --fan auto` | Hands every fan back to the NVIDIA driver, whatever set it |
+| `gao --fan auto` | Hands every fan back to the NVIDIA driver, whatever set it (a running tray app takes them again on its next tick; switch Fan control off to keep the driver in charge) |
 | `gao --status` | Saved profile, what is applied now, apply-at-logon state |
 | `gao --probe` | Live telemetry: clocks, temperature, fan, power |
 | `gao --stress <seconds>` | Runs the stress test alone and prints its verdict; changes nothing |

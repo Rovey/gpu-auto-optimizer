@@ -186,9 +186,10 @@ OptimizeOutcome run_optimize(Preset preset, const OptimizeHooks& hooks, const st
     }
     Config cfg = load_config();
     cfg.profile = Profile{preset, out.result.power_pct, out.result.core_mhz, out.result.mem_mhz, driver, gpu_id, now_text()};
-    if (gpu.set_fan_pct) {
+    cfg.fan_curve.reset();   // a new tune starts from its own curve
+    // Only a curve that actually drove the fans counts as tested.
+    if (gpu.set_fan_pct && fans.state().mode != FanMode::Failed && fans.state().mode != FanMode::Foreign) {
         cfg.profile->fan_curve = curve;   // what the run was tested with
-        cfg.fan_curve.reset();                            // a new tune starts from its own curve
         cfg.fan_control = true;
         if (fans.state().min_pct > fan_min_for(cfg, gpu_id, gpu.fan_min_pct)) {   // learned during the run
             cfg.fan_min_pct = fans.state().min_pct;

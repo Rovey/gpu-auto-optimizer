@@ -122,8 +122,8 @@ LONG WINAPI on_crash(EXCEPTION_POINTERS* ep) {
     WaitForSingleObject(g.dump_done, 15000);
     // Never leave a candidate applied. Through our own GpuControl, which lives
     // as long as the process; the worker's may be mid-teardown.
-    if (g.worker && g.worker->running() && g.gpu.reset_to_stock) g.gpu.reset_to_stock();
     if (g.gpu.set_fan_auto) g.gpu.set_fan_auto();
+    if (g.worker && g.worker->running() && g.gpu.reset_to_stock) g.gpu.reset_to_stock();
     return EXCEPTION_EXECUTE_HANDLER;
 }
 
@@ -384,8 +384,8 @@ void render() {
     act.set_fan_control = [](bool on) {
         gao::Config cfg = gao::app::load_config();
         cfg.fan_control = on;
-        if (!gao::app::save_config(cfg)) note("Could not save the fan setting.", true);
-        note(on ? "Fan curve on." : "Fan curve off; the NVIDIA driver controls the fans.");
+        if (!gao::app::save_config(cfg)) note("Could not save the fan setting; nothing changed.", true);
+        else note(on ? "Fan curve on." : "Fan curve off; the NVIDIA driver controls the fans.");
         refresh_status(false);
     };
     act.reset_fan_curve = [] {

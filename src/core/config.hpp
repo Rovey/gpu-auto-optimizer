@@ -15,7 +15,7 @@ struct Profile {
     std::string driver;     // driver version the profile was tested on
     std::string gpu;        // NVML UUID of the card it was tested on
     std::string saved_at;   // local time, "YYYY-MM-DD HH:MM"
-    std::optional<FanCurve> fan_curve;   // the curve the tune was tested with; nullopt: driver control
+    std::optional<FanCurve> fan_curve;   // the curve the tune was tested with; nullopt: tuned before fan control
 };
 
 // Everything that has to survive a reboot. Freeze ceilings are not here:

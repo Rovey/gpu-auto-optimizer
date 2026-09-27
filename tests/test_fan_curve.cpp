@@ -31,6 +31,11 @@ TEST_CASE("valid rejects curves the controller cannot follow") {
     CHECK_FALSE(valid(FanCurve{std::nullopt, {{40, 60}, {50, 50}}}));                                // fan % goes down
     CHECK_FALSE(valid(FanCurve{std::nullopt, {{40, 40}, {50, 101}}}));                               // above 100 %
     CHECK_FALSE(valid(FanCurve{std::nullopt, {{-5, 40}, {50, 50}}}));                                // below 0 C
+    // The editor works on 20-100 C: a point outside it (a hand-edited gao.json)
+    // would give its drag clamp a lower bound above the upper one.
+    CHECK_FALSE(valid(FanCurve{std::nullopt, {{10, 40}, {50, 50}}}));
+    CHECK_FALSE(valid(FanCurve{std::nullopt, {{40, 40}, {105, 100}}}));
+    CHECK(valid(FanCurve{std::nullopt, {{20, 40}, {100, 100}}}));
     CHECK_FALSE(valid(FanCurve{15, {{40, 40}, {50, 50}}}));                                          // stop threshold out of 20-90
     CHECK(valid(FanCurve{50, {{50, 30}, {80, 100}}}));
 }

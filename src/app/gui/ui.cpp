@@ -178,7 +178,10 @@ void telemetry_tiles(const UiState& s) {
     ImGui::SameLine();
     tile("power", kIconPower, "Power", reading(t.power_w, "") + " / " + reading(t.power_limit_w, " W"), w, h);
     ImGui::SameLine();
-    const char* mode = s.fan_state.mode == FanMode::Curve ? " (curve)" : s.fan_control && s.fan_available ? " (driver)" : "";
+    const char* mode = s.fan_state.mode == FanMode::Curve     ? " (curve)"
+                       : s.fan_state.mode == FanMode::Foreign ? " (other program)"
+                       : s.fan_control && s.fan_available     ? " (driver)"
+                                                              : "";
     tile("fan", kIconFan, "Fan speed", reading(t.fan_pct, " %") + mode, w, h);
 }
 
