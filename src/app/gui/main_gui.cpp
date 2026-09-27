@@ -295,7 +295,8 @@ void hw_lost();   // below, with the other hardware helpers
 
 void act_optimize(gao::Preset preset) {
     fan_release();   // the search drives the fans itself
-    g.worker->start(preset);   // the watchdog skips while it runs
+    const auto fan = g.ui.optimize_fan ? std::optional<gao::FanCurve>(gao::fan_preset_curve(*g.ui.optimize_fan)) : std::nullopt;
+    g.worker->start(preset, fan);   // the watchdog skips while it runs
 }
 
 void act_abort() { g.worker->abort(); }

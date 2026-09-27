@@ -5,13 +5,39 @@
 
 namespace gao {
 
+FanCurve fan_preset_curve(const FanPreset preset) {
+    switch (preset) {
+        case FanPreset::Silent:     return {50, {{50, 30}, {65, 40}, {75, 55}, {80, 75}}};
+        case FanPreset::Cool:       return {45, {{45, 40}, {55, 55}, {65, 80}}};
+        case FanPreset::Aggressive: return {std::nullopt, {{40, 40}, {60, 60}, {75, 85}, {83, 100}}};
+        case FanPreset::Normal:
+        default:                    return {50, {{50, 35}, {60, 45}, {70, 65}, {75, 100}}};
+    }
+}
+
+const char* fan_preset_name(const FanPreset preset) {
+    switch (preset) {
+        case FanPreset::Silent:     return "silent";
+        case FanPreset::Cool:       return "cool";
+        case FanPreset::Aggressive: return "aggressive";
+        case FanPreset::Normal:
+        default:                    return "normal";
+    }
+}
+
+std::optional<FanPreset> fan_preset_from_name(const std::string& name) {
+    for (FanPreset p : {FanPreset::Silent, FanPreset::Normal, FanPreset::Cool, FanPreset::Aggressive})
+        if (name == fan_preset_name(p)) return p;
+    return std::nullopt;
+}
+
 FanCurve default_curve(const Preset preset) {
     switch (preset) {
-        case Preset::Quiet:            return {50, {{50, 30}, {65, 40}, {75, 55}, {80, 75}}};
-        case Preset::CoolAndEfficient: return {45, {{45, 40}, {55, 55}, {65, 80}}};
-        case Preset::MaxPerformance:   return {std::nullopt, {{40, 40}, {60, 60}, {75, 85}, {83, 100}}};
+        case Preset::Quiet:            return fan_preset_curve(FanPreset::Silent);
+        case Preset::CoolAndEfficient: return fan_preset_curve(FanPreset::Cool);
+        case Preset::MaxPerformance:   return fan_preset_curve(FanPreset::Aggressive);
         case Preset::BestOfMyGpu:
-        default:                       return {50, {{50, 35}, {60, 45}, {70, 65}, {75, 100}}};
+        default:                       return fan_preset_curve(FanPreset::Normal);
     }
 }
 

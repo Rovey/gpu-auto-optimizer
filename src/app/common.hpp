@@ -4,6 +4,7 @@
 // Nothing here prints; callers decide how to show messages.
 #include "core/boot.hpp"
 #include "core/config.hpp"
+#include "core/fan_curve.hpp"
 #include "core/objectives.hpp"
 #include "core/search.hpp"
 #include "core/types.hpp"
@@ -69,7 +70,9 @@ struct OptimizeOutcome {
 
 // --optimize from start to end: state folder, drivers, journal checks, the
 // search, and saving the profile. Needs elevation.
-OptimizeOutcome run_optimize(Preset preset, const OptimizeHooks& hooks);
+// fan_curve: the curve to drive the fans with during the run and to save
+// as the tested curve; empty means the profile's own (default_curve).
+OptimizeOutcome run_optimize(Preset preset, const OptimizeHooks& hooks, const std::optional<FanCurve>& fan_curve = {});
 
 struct BootApplyOutcome {
     bool applied = false;

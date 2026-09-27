@@ -6,6 +6,7 @@
 #include "core/types.hpp"
 #include <chrono>
 #include <optional>
+#include <string>
 #include <vector>
 
 namespace gao {
@@ -35,6 +36,13 @@ inline constexpr auto kFanPendulum = std::chrono::minutes(5);           // a res
 inline constexpr auto kFanCalm = std::chrono::minutes(10);              // stopped this long: back to the first hold
 inline constexpr auto kFanSlowDown = std::chrono::seconds(5);   // a lower speed must hold this long
 
+// Fan curves by character, independent of the tuning profile: Best of my GPU
+// can run with Silent, Cool & efficient with Normal.
+enum class FanPreset { Silent, Normal, Cool, Aggressive };
+FanCurve fan_preset_curve(FanPreset preset);
+const char* fan_preset_name(FanPreset preset);   // "silent", "normal", "cool", "aggressive"
+std::optional<FanPreset> fan_preset_from_name(const std::string& name);
+// The profile's own fan preset: Quiet -> Silent, Best -> Normal, Cool -> Cool, Max -> Aggressive.
 FanCurve default_curve(Preset preset);
 bool valid(const FanCurve& c);
 // The curve's own value at temp_c: linear between points, rounded to the

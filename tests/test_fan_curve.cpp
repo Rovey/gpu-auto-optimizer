@@ -1,6 +1,7 @@
 #include "doctest/doctest.h"
 #include "core/fan_curve.hpp"
 #include "core/objectives.hpp"
+#include <string>
 
 using namespace gao;
 using Clock = std::chrono::steady_clock;
@@ -313,4 +314,22 @@ TEST_CASE("another tool's manual speed is detected while the driver has the fans
     CHECK(d.tick(60, 20, t).mode == FanMode::Foreign);
     CHECK(f.target == 45);
     CHECK(f.writes == 0);
+}
+
+TEST_CASE("fan presets are valid, ordered from quiet to loud, and back each profile's default") {
+    const FanPreset all[] = {FanPreset::Silent, FanPreset::Normal, FanPreset::Cool, FanPreset::Aggressive};
+    for (const FanPreset p : all) CHECK(valid(fan_preset_curve(p)));
+    for (size_t i = 1; i < std::size(all); ++i)   // each one louder than the one before at some temperature
+        CHECK(quieter_than(fan_preset_curve(all[i - 1]), fan_preset_curve(all[i]), 83));
+    CHECK(default_curve(Preset::Quiet) == fan_preset_curve(FanPreset::Silent));
+    CHECK(default_curve(Preset::BestOfMyGpu) == fan_preset_curve(FanPreset::Normal));
+    CHECK(default_curve(Preset::CoolAndEfficient) == fan_preset_curve(FanPreset::Cool));
+    CHECK(default_curve(Preset::MaxPerformance) == fan_preset_curve(FanPreset::Aggressive));
+}
+
+TEST_CASE("fan preset names round-trip") {
+    for (const FanPreset p : {FanPreset::Silent, FanPreset::Normal, FanPreset::Cool, FanPreset::Aggressive})
+        CHECK(fan_preset_from_name(fan_preset_name(p)) == p);
+    CHECK(std::string(fan_preset_name(FanPreset::Silent)) == "silent");
+    CHECK_FALSE(fan_preset_from_name("turbo").has_value());
 }

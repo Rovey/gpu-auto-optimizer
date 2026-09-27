@@ -167,7 +167,7 @@ static BOOL WINAPI OnConsoleCtrl(DWORD type) {
     return FALSE;
 }
 
-static int optimize(gao::Preset preset) {
+static int optimize(gao::Preset preset, const std::optional<gao::FanCurve>& fan_curve) {
     gao::app::OptimizeHooks hooks;
     hooks.aborted = [] { return g_abort.load(); };
     hooks.log = [](const std::string& msg) { std::printf("  %s\n", msg.c_str()); };
@@ -175,7 +175,7 @@ static int optimize(gao::Preset preset) {
         g_gpu = gpu;
         SetConsoleCtrlHandler(OnConsoleCtrl, gpu ? TRUE : FALSE);
     };
-    const auto out = gao::app::run_optimize(preset, hooks);
+    const auto out = gao::app::run_optimize(preset, hooks, fan_curve);
     if (!out.ran) { std::printf("%s\n", out.error.c_str()); return 1; }
     const gao::OptimizeResult& r = out.result;
     if (!r.ok) {
@@ -364,10 +364,17 @@ int main(int argc, char** argv) {
             else if (p == "max") preset = gao::Preset::MaxPerformance;
             else { std::printf("--optimize expects best, quiet, cool or max, got '%s'\n", argv[2]); return 1; }
         }
-        return optimize(preset);
+        std::optional<gao::FanCurve> fan_curve;
+        if (argc > 3) {
+            const auto fp = argc > 4 && std::strcmp(argv[3], "--fan-curve") == 0 ? gao::fan_preset_from_name(argv[4]) : std::nullopt;
+            if (!fp) { std::printf("--optimize <profile> accepts --fan-curve silent|normal|cool|aggressive\n"); return 1; }
+            fan_curve = gao::fan_preset_curve(*fp);
+        }
+        return optimize(preset, fan_curve);
     }
     std::printf("usage: gao [--version | --probe | --set-core <mhz> | --set-mem <mhz> | --reset\n"
-                "            | --stress <sec> [--max-temp <c>] | --bandwidth | --optimize [best|quiet|cool|max]\n"
+                "            | --stress <sec> [--max-temp <c>] | --bandwidth\n"
+                "            | --optimize [best|quiet|cool|max [--fan-curve silent|normal|cool|aggressive]]\n"
                 "            | --apply | --boot on|off | --fan auto | --status]\n");
     return argc > 1 ? 1 : 0;
 }

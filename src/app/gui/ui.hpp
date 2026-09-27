@@ -51,6 +51,7 @@ struct UiState {
     int fan_min_pct = 0;
     int fan_max_temp_c = 75;
     FanState fan_state;
+    std::optional<FanPreset> optimize_fan;   // fan curve for the next run; empty: the profile's own
 };
 
 struct UiActions {

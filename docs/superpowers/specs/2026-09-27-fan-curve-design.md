@@ -24,7 +24,7 @@ This is the public NVML API, documented for Maxwell and newer. The removed NVAPI
 
 - 2-6 points of (temperature °C, fan %), strictly ascending in temperature, non-decreasing in fan %. Between points the fan follows linearly; below the first point it holds the first point's value, above the last it holds the last.
 - An optional **fan-stop threshold**. Below it the fans are handed to the driver (`SetDefaultFanSpeed`), which stops them at idle on cards that support it. The app never sets 0 % itself: if it is killed, the driver still controls the fans.
-- **Hysteresis:** once in the fan-stop zone, the curve takes over again at the threshold; it goes back to the driver only when the temperature falls 3 °C below the threshold.
+- **Stopping without cycling:** the curve takes over at the threshold. The fans go back to the driver only when the card is 8 °C below the threshold and draws under 30 W for a hold time: 60 s, doubled (up to 15 min) whenever the fans had to restart within 5 min of stopping, and back to 60 s after 10 min stopped. (Revised after hardware check 38: a 3 °C gap made the fans cycle every few seconds under light load.)
 - **Fast up, slow down:** a higher target is applied at once; a lower target only after the temperature has stayed lower for 5 seconds.
 - A new manual value is written only when it differs from the current one by 2 % or more, or when it is 100 %.
 
@@ -50,6 +50,10 @@ Points below the card's minimum are raised to it by the guard rail, not rejected
 - `--optimize` and the window's Optimize run with the profile's default curve active. The saved profile records that curve as the **tested curve**.
 - The **active curve** starts as the tested curve and can be edited. If it is quieter than the tested curve at any temperature (a lower fan % at some temperature from 30 °C up to the profile's limit, or a fan-stop threshold higher than the tested one), the app warns that the tune was tested with a different curve and suggests optimizing again. It does not block the edit.
 - Fan control runs while the tray app runs elevated, which is what apply-at-logon starts. Otherwise the driver controls the fans.
+
+## Fan presets
+
+Four curves independent of the tuning profile: Silent, Normal, Cool and Aggressive (the Quiet, Best, Cool & efficient and Max performance defaults). The Optimize page and `gao --optimize <profile> --fan-curve <preset>` choose the curve a run uses (default: the profile's own); the Fan page applies a preset as the active curve. The profile's temperature limit still forces 100 %.
 
 ## Components
 
@@ -134,7 +138,7 @@ A `FanDriver` that owns a `FanController`, calls `GpuControl` only when the comm
 - **Unit tests** (`tests/test_fan_curve.cpp`, CI):
   - interpolation and clamping;
   - `valid()`;
-  - fan-stop zone and 3 °C hysteresis;
+  - fan-stop zone: 8 °C gap, idle power, growing hold;
   - fast up, slow down with an injected clock;
   - guard rails (minimum, 100 % at the limit, missing reading);
   - `quieter_than`;

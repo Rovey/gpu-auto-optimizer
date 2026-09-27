@@ -90,7 +90,7 @@ flowchart LR
 
 | Command | What it does |
 |---|---|
-| `gao --optimize best\|quiet\|cool\|max` | Runs the search; exit code 0 when saved, 2 when applied but not saved |
+| `gao --optimize best\|quiet\|cool\|max [--fan-curve silent\|normal\|cool\|aggressive]` | Runs the search; exit code 0 when saved, 2 when applied but not saved |
 | `gao --apply` | Re-applies the saved profile |
 | `gao --reset` | Returns to stock clocks and the default power limit |
 | `gao --boot on\|off` | Turns apply-at-logon on or off |
@@ -125,7 +125,7 @@ During a search, the crash journal makes sure that setting is never tried again,
 <details>
 <summary><b>Can it control the fans?</b></summary>
 
-Yes. Each profile comes with a fan curve, and the Fan page lets you edit it: drag the points, and choose a temperature below which the fans stop (the NVIDIA driver controls them there, so a crash or a killed app can never leave them stopped). The optimize run uses the profile's curve, so the tune is tested at the temperatures that curve produces; a quieter curve afterwards shows a warning. The curve runs while the tray app runs with administrator rights; otherwise the driver controls the fans.
+Yes. Each profile comes with a fan curve, and you can pick another (Silent, Normal, Cool, Aggressive) for a run or afterwards. The Fan page lets you edit it: drag the points, and choose a temperature below which the fans stop once the card is cool and idle (the NVIDIA driver controls them there, so a crash or a killed app can never leave them stopped). The optimize run uses the profile's curve, so the tune is tested at the temperatures that curve produces; a quieter curve afterwards shows a warning. The curve runs while the tray app runs with administrator rights; otherwise the driver controls the fans.
 </details>
 
 <details>

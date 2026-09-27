@@ -109,7 +109,7 @@ std::string decision_text(BootDecision d, const Config& c, const std::string& dr
     return "unknown";
 }
 
-OptimizeOutcome run_optimize(Preset preset, const OptimizeHooks& hooks) {
+OptimizeOutcome run_optimize(Preset preset, const OptimizeHooks& hooks, const std::optional<FanCurve>& fan_curve) {
     OptimizeOutcome out;
     auto log = [&](const std::string& m) { if (hooks.log) hooks.log(m); };
     auto fail = [&](const std::string& why) { out.error = why; return out; };
@@ -127,7 +127,8 @@ OptimizeOutcome run_optimize(Preset preset, const OptimizeHooks& hooks) {
     const GpuControl gpu = make_gpu_control(nvml, nvapi, kGpu);
     // The profile's curve drives the fans for the whole run, so the clocks it
     // finds hold at the temperatures that curve produces.
-    FanDriver fans(gpu, default_curve(preset), objectives_for(preset).max_temp_c);
+    const FanCurve curve = fan_curve.value_or(default_curve(preset));
+    FanDriver fans(gpu, curve, objectives_for(preset).max_temp_c);
     struct FanRelease {
         FanDriver& f;
         ~FanRelease() { f.release(); }   // every exit: done, aborted, failed or thrown
@@ -186,7 +187,7 @@ OptimizeOutcome run_optimize(Preset preset, const OptimizeHooks& hooks) {
     Config cfg = load_config();
     cfg.profile = Profile{preset, out.result.power_pct, out.result.core_mhz, out.result.mem_mhz, driver, gpu_id, now_text()};
     if (gpu.set_fan_pct) {
-        cfg.profile->fan_curve = default_curve(preset);   // what the run was tested with
+        cfg.profile->fan_curve = curve;   // what the run was tested with
         cfg.fan_curve.reset();                            // a new tune starts from its own curve
         cfg.fan_control = true;
     }

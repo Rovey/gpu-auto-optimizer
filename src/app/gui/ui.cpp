@@ -386,6 +386,34 @@ void log_card(const UiState& s) {
     end_card();
 }
 
+constexpr FanPreset kFanPresets[] = {FanPreset::Silent, FanPreset::Normal, FanPreset::Cool, FanPreset::Aggressive};
+constexpr const char* kFanPresetTitles[] = {"Silent", "Normal", "Cool", "Aggressive"};
+
+// One button per fan preset; `current` is highlighted. Returns the clicked one.
+std::optional<FanPreset> fan_preset_buttons(const char* id, const std::optional<FanPreset>& current) {
+    std::optional<FanPreset> clicked;
+    ImGui::PushID(id);
+    for (size_t i = 0; i < std::size(kFanPresets); ++i) {
+        if (i > 0) ImGui::SameLine();
+        const bool on = current == kFanPresets[i];
+        if (on) {
+            ImGui::PushStyleColor(ImGuiCol_Button, kSelectedBg);
+            ImGui::PushStyleColor(ImGuiCol_Border, kAccentBright);
+        }
+        if (ImGui::Button(kFanPresetTitles[i])) clicked = kFanPresets[i];
+        if (on) ImGui::PopStyleColor(2);
+    }
+    ImGui::PopID();
+    return clicked;
+}
+
+// The preset whose curve equals c, if any.
+std::optional<FanPreset> preset_of(const FanCurve& c) {
+    for (const FanPreset p : kFanPresets)
+        if (fan_preset_curve(p) == c) return p;
+    return std::nullopt;
+}
+
 // Temperature 20-100 C on x, fan 0-100 % on y. Points drag with the mouse and
 // stay ordered: a point cannot pass its neighbours in temperature, and fan %
 // never goes down from one point to the next. Returns true when a drag ended,
@@ -538,13 +566,23 @@ void fan_page(UiState& s, const UiActions& act) {
         selected = -1;
         act.reset_fan_curve();
     }
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted("Presets");
+    ImGui::SameLine(0, em());
+    if (const auto p = fan_preset_buttons("fan", preset_of(edit))) {
+        selected = -1;
+        edit = fan_preset_curve(*p);
+        act.set_fan_curve(edit);
+    }
 
     ImGui::Spacing();
     if (s.fan_tested && quieter_than(edit, *s.fan_tested, s.fan_max_temp_c))
         wrapped(kWarn, "This curve is quieter than the one the tune was tested with, so the card runs warmer than during the "
                        "test. Optimize again to be sure the tune holds.");
-    wrapped(kDim, "Below the card's minimum (yellow line) a fan cannot run slower; in the green zone the NVIDIA driver controls "
-                  "the fans and stops them at idle. From the red line (the profile's temperature limit) the fans always run at 100 %.");
+    wrapped(kDim, "Below the card's minimum (yellow line) a fan cannot run slower. The fans start at the stop threshold and stop "
+                  "again only once the card is 8 \xC2\xB0""C cooler and idle for a minute (longer if they had to restart soon "
+                  "after stopping); then the NVIDIA driver has them. From the red line (the profile's temperature limit) the fans "
+                  "always run at 100 %.");
     end_card();
 }
 
@@ -569,6 +607,13 @@ void choose(UiState& s, const UiActions& act) {
     dim("Each profile searches for the highest stable settings and applies a safety margin.");
     ImGui::Spacing();
     preset_cards(s);
+    ImGui::Spacing();
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted("Fan curve during the run");
+    ImGui::SameLine(0, em());
+    if (ImGui::RadioButton("Profile's own", !s.optimize_fan)) s.optimize_fan.reset();
+    ImGui::SameLine(0, em());
+    if (const auto p = fan_preset_buttons("run", s.optimize_fan)) s.optimize_fan = p;
     ImGui::Spacing();
     const ImVec2 big(em() * 13, em() * 2.6f);
     ImGui::PushFont(g_bold, base() * 1.15f);
