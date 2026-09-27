@@ -161,6 +161,7 @@ static BOOL WINAPI OnConsoleCtrl(DWORD type) {
     if (type == CTRL_CLOSE_EVENT || type == CTRL_LOGOFF_EVENT || type == CTRL_SHUTDOWN_EVENT) {
         g_abort = true;
         if (g_gpu && g_gpu->reset_to_stock) g_gpu->reset_to_stock();
+        if (g_gpu && g_gpu->set_fan_auto) g_gpu->set_fan_auto();
         return TRUE;
     }
     return FALSE;

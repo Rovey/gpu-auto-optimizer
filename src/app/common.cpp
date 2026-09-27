@@ -3,6 +3,7 @@
 #define NOMINMAX
 #include <windows.h>
 #include "core/journal.hpp"
+#include "core/fan_curve.hpp"
 #include "core/stability.hpp"
 #include "core/task_xml.hpp"
 #include "hw/app_files.hpp"
@@ -12,6 +13,7 @@
 #include "hw/nvml.hpp"
 #include "hw/stress.hpp"
 #include <ctime>
+#include <chrono>
 #include <filesystem>
 
 namespace gao::app {
@@ -123,6 +125,14 @@ OptimizeOutcome run_optimize(Preset preset, const OptimizeHooks& hooks) {
     Stress load;
     if (!load.Init()) return fail("stress init failed: " + load.Error());
     const GpuControl gpu = make_gpu_control(nvml, nvapi, kGpu);
+    // The profile's curve drives the fans for the whole run, so the clocks it
+    // finds hold at the temperatures that curve produces.
+    FanDriver fans(gpu, default_curve(preset), objectives_for(preset).max_temp_c);
+    struct FanRelease {
+        FanDriver& f;
+        ~FanRelease() { f.release(); }   // every exit: done, aborted, failed or thrown
+    } fan_release{fans};
+    if (!gpu.set_fan_pct) log("fans: not controllable on this card; the driver keeps them");
 
     const auto path = journal_path();
     if (path.empty()) return fail("the ProgramData folder could not be resolved; cannot keep the crash journal");
@@ -139,7 +149,15 @@ OptimizeOutcome run_optimize(Preset preset, const OptimizeHooks& hooks) {
 
     OptimizeIo io;
     io.probe = [&](double seconds, int max_temp) {
-        return run_stability([&] { return load.Batch(); }, gpu.read, seconds, max_temp);
+        auto read = [&] {
+            const Telemetry t = gpu.read();
+            const FanMode before = fans.state().mode;
+            const FanState now = fans.tick(t.temp_c, std::chrono::steady_clock::now());
+            if (now.mode != before && now.mode == FanMode::Failed) log("fans: a write did not verify; the driver has them again");
+            if (now.mode != before && now.mode == FanMode::Foreign) log("fans: another program set them; leaving them alone");
+            return t;
+        };
+        return run_stability([&] { return load.Batch(); }, read, seconds, max_temp);
     };
     io.aborted = hooks.aborted;
     io.log = hooks.log;
@@ -167,6 +185,11 @@ OptimizeOutcome run_optimize(Preset preset, const OptimizeHooks& hooks) {
     }
     Config cfg = load_config();
     cfg.profile = Profile{preset, out.result.power_pct, out.result.core_mhz, out.result.mem_mhz, driver, gpu_id, now_text()};
+    if (gpu.set_fan_pct) {
+        cfg.profile->fan_curve = default_curve(preset);   // what the run was tested with
+        cfg.fan_curve.reset();                            // a new tune starts from its own curve
+        cfg.fan_control = true;
+    }
     cfg.boot_strikes = 0;   // strikes belong to the profile they were earned by
     out.saved = save_config(cfg);
     if (!out.saved) out.save_note = "could not write " + config_path().string();
