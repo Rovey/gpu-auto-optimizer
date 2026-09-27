@@ -4,7 +4,7 @@ CI builds this project but has no GPU. These checks are the evidence that the
 hardware layer works. Run them on the real machine, record the date and
 driver version below, and fill in the Result column for each row.
 
-Checks 3-8 write to the GPU (clock offsets, fan levels) through NVAPI, which
+Checks 3-6 write to the GPU (clock offsets) through NVAPI, which
 refuses those calls without administrator rights. Run `gao.exe` from an
 **elevated** PowerShell or Command Prompt (Start menu -> right-click
 PowerShell/Terminal -> "Run as administrator") for any command marked
@@ -30,9 +30,9 @@ root; adjust the path for a Debug build.
 | 4 | Core offset reverts | `.\build\Release\gao.exe --reset` | yes | Read-back core 0, mem 0, `OK` || Pass. Read-back core 0, mem 0, `OK`. |
 | 5 | Memory offset applies | In a second window run `.\build\Release\gao.exe --stress 120` first; then `.\build\Release\gao.exe --set-mem 100` and compare the `mem=` of its lines before and after | yes | Read-back 100, `OK`; a follow-up `--probe` under the same load shows a memory clock roughly 100 MHz above its figure from before the offset was applied -- the same independent cross-check as check 3, for `kOffMemDelta`. | | Pass (2026-09-26). Read-back 100, `OK`. Cross-check under `--stress`: mem 10501 -> 10601 MHz, exactly +100. |
 | 6 | A refused write is reported | `.\build\Release\gao.exe --set-core 5000` | yes | `MISMATCH`, not `OK` || Pass. Driver rejected the call itself (`NvAPI_GPU_SetPstates20 failed`), read-back 0, `MISMATCH`, exit 1. `--reset` afterwards: `OK`. |
-| 7 | Fan control applies | `.\build\Release\gao.exe --set-fan 70` | yes | **On a GPU/driver that supports the legacy `NvAPI_GPU_SetCoolerLevels` API:** fan audibly rises within a few seconds, `OK`; a follow-up `--probe` shows `fan=` near 70%. **On this project's own reference RTX 4070, verified during implementation:** the legacy API answers `NVAPI_NOT_SUPPORTED`, so `gao` instead prints `fan control unavailable: NvAPI_GPU_GetCoolerSettings failed (status -104)` and exits 1 -- the fan does not move. That is the correct, honest result for *this* card (see check 9), not a failure of this check or of `gao`. || Pass (unsupported case): `fan control unavailable: NvAPI_GPU_GetCoolerSettings failed (status -104)`, exit 1. |
-| 8 | Fan returns to automatic | `.\build\Release\gao.exe --set-fan -1` | yes | **On supported hardware:** fan drops back under driver control, `OK`. **On this reference RTX 4070:** the same `fan control unavailable: NvAPI_GPU_GetCoolerSettings failed (status -104)` message and exit 1 as check 7 -- there is no automatic control to hand back, because manual control was never available to begin with. A different message here than check 7 would indicate a real bug; the same message on both is the expected, consistent result. || Pass (unsupported case): same message as check 7, exit 1. |
-| 9 | Unsupported fan API is reported | `.\build\Release\gao.exe --set-fan 70` (same command as check 7) | yes | Prints `fan control unavailable: ` followed by the name of the failing call, not silence and not a crash, and exits 1. | **This project's reference RTX 4070 *is* the unsupported case** -- its driver answers `NVAPI_NOT_SUPPORTED` (status -104) to the legacy cooler API (see the block comment in `src/hw/nvapi.cpp`), so checks 7 and 8 above already exercise this exact check on this exact hardware; it is not a separate scenario needing different hardware. If this project ever runs on a card that *does* support the legacy API, checks 7/8 will show real fan movement there, and this row would then need genuinely unsupported hardware (or a blocked/older driver) to exercise instead. |
+| 7 | Fan control applies | - | - | - | Retired: fan control was removed (the search never used it; NVIDIA's legacy fan API does not exist on RTX 20-series and newer). |
+| 8 | Fan returns to automatic | - | - | - | Retired: fan control was removed (the search never used it; NVIDIA's legacy fan API does not exist on RTX 20-series and newer). |
+| 9 | Unsupported fan API is reported | - | - | - | Retired: fan control was removed (the search never used it; NVIDIA's legacy fan API does not exist on RTX 20-series and newer). |
 | 10 | Stress load is stable on stock and loads the card | `.\build\Release\gao.exe --stress 60` (after `--reset`) | no | `VERDICT: STABLE`, exit 0, steady-state power (the per-second lines after warm-up) ≥ 95 % of the power limit | Pass (2026-09-26). `STABLE`, exit 0, 0 errors, peak 65 C, score ~5560 it/s. Steady power 184-195 W (avg 193 W = 96.5 % of 200 W); the whole-run average is 189 W (94.5 %) because the ramp-up at start is included. |
 | 11 | A wrong result is detected | `.\build\Release\gao.exe --stress 10 --stress-selftest wrong` | no | `VERDICT: WRONG RESULT`, exit 2, within the first second | Pass (2026-09-26). `WRONG RESULT` on the first batch, exit 2. |
 | 12 | A TDR is detected and survived | Start `.\build\Release\gao.exe --stress 30`; after ~5 s run `dxcap -forcetdr` in an elevated shell (`DXCap.exe` ships with Windows' Graphics Tools feature); then `.\build\Release\gao.exe --stress 5` | dxcap only | Screen goes black for 1-2 s while Windows resets the driver; the stress run prints `VERDICT: DEVICE LOST` (exit 2); the second prints `VERDICT: STABLE`. A long dispatch does not work as a trigger: the GPU preempts compute work instead of hanging, so no TDR fires (tried: a ~6 s dispatch completed as STABLE). | Pass (2026-09-26). `DEVICE LOST` a moment after `dxcap -forcetdr`; the next `--stress 5` printed `STABLE`. (The exit code was not captured in this run: `Start-Process` swallowed it; the verdict line comes from the same code path that returns 2.) Superseded note (2026-09-27): the exit code for DEVICE LOST is 2 by construction (`stress()` maps WrongResult and DeviceLost to 2); re-run with `echo $LASTEXITCODE` to record it. |
@@ -65,30 +65,10 @@ root; adjust the path for a Debug build.
 ## Notes
 
 - **Check 6 is the one that matters.** If a write NVAPI accepts cannot be
-  distinguished from one it applies, the fan-curve search planned for a
-  later phase cannot be trusted, and the approach needs rethinking before
+  distinguished from one it applies, the search cannot be trusted, and the approach needs rethinking before
   more is built on it. `--set-core 5000` (5 GHz above stock) is expected to
   be silently ignored by the driver; `gao` must print `MISMATCH`, never `OK`,
   for that request.
 - Run check 4 (`--reset`) again after check 6 to leave the card in a known
   state, since a refused write can leave the read-back at whatever the
   driver's own limit clamped it to rather than exactly the requested value.
-- Fan control here always goes through the older, fully-specified
-  `NvAPI_GPU_SetCoolerLevels` / `NvAPI_GPU_GetCoolerSettings` /
-  `NvAPI_GPU_RestoreCoolerSettings` API. The newer "client fan cooler" API
-  (`NvAPI_GPU_ClientFanCoolersGetStatus`/`GetControl`/`SetControl`) is not
-  called by this build: its interface ids are known (sourced from
-  `arcnmx/nvapi-rs`), but no parameter struct for them exists in that crate
-  or anywhere else this project could reach, and guessing one would be
-  calling a real function pointer with an invented buffer -- unlike a wrong
-  interface id, that is not a safe failure mode. See the block comment at
-  the top of `src/hw/nvapi.cpp` for the full account.
-- **On this project's own reference RTX 4070, fan control does not
-  currently work at all** -- not a driver quirk to troubleshoot, not a bug
-  to file. NVIDIA dropped the legacy per-cooler API this build calls on
-  Turing-and-later GPUs, and this card confirms that (`NVAPI_NOT_SUPPORTED`,
-  status -104, from `NvAPI_GPU_GetCoolerSettings` itself). Checks 7, 8 and 9
-  above all describe this same, single, expected outcome on this hardware.
-  Fan control only starts working again once the newer API above is
-  implemented, which needs its struct layout from somewhere this project
-  could not reach at implementation time.

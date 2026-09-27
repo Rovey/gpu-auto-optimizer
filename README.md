@@ -121,9 +121,9 @@ During a search, the crash journal makes sure that setting is never tried again,
 </details>
 
 <details>
-<summary><b>Why is the fan not tuned on my card?</b></summary>
+<summary><b>Does it change my fan curve?</b></summary>
 
-NVIDIA's legacy fan API that the app uses is not supported on RTX 40-series cards. The app detects this and skips fan tuning instead of pretending it worked.
+No. The fan stays under the driver's control; the app only shows its speed. NVIDIA's public fan API was dropped on RTX 20-series and newer cards, and a tuner that cannot verify a fan setting does not make one.
 </details>
 
 <details>

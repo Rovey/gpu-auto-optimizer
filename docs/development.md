@@ -36,7 +36,7 @@ src/core/     pure logic: no windows.h, no driver calls, no D3D. Unit-tested in 
   task_xml.*      the logon task definition
 src/hw/       the only code that touches hardware or the OS state folders.
   nvml.*          telemetry and power limit via NVML
-  nvapi.*         clock offsets and fan control via NVAPI, verified by read-back
+  nvapi.*         clock offsets via NVAPI, verified by read-back
   gpu_control.*   wires NVML and NVAPI into GpuControl
   stress.*        the DX11 compute load; the GPU checks every value it computes
   app_files.*     gao.json (atomic writes), the crash journal and boot.log, flushed to disk
@@ -51,16 +51,29 @@ third_party/  doctest, nlohmann/json, Dear ImGui: vendored as source, no package
 
 ## Profiles as data
 
-`src/core/objectives.cpp` defines each profile as a thermal ceiling, a fan ceiling, a perf push (the fraction of the highest stable offset that is applied) and which of core, memory and power tuning it enables:
+`src/core/objectives.cpp` defines each profile as a thermal ceiling, a perf push (the fraction of the highest stable offset that is applied) and which of core, memory and power tuning it enables:
 
-| Profile | `--optimize` | Max temp | Max fan | Perf push | Core | Memory | Power |
-|---|---|---|---|---|---|---|---|
-| BestOfMyGpu (default) | `best` | 75 °C | 60 % | 0.7 | on | on | on |
-| Quiet | `quiet` | 80 °C | 40 % | 0.4 | on | on | on |
-| CoolAndEfficient | `cool` | 65 °C | 70 % | 0.3 | off | off | on |
-| MaxPerformance | `max` | 83 °C | 100 % | 1.0 | on | on | on |
+| Profile | `--optimize` | Max temp | Perf push | Core | Memory | Power |
+|---|---|---|---|---|---|---|
+| BestOfMyGpu (default) | `best` | 75 °C | 0.7 | on | on | on |
+| Quiet | `quiet` | 80 °C | 0.4 | on | on | on |
+| CoolAndEfficient | `cool` | 65 °C | 0.3 | off | off | on |
+| MaxPerformance | `max` | 83 °C | 1.0 | on | on | on |
 
-The applied offset is always at least one step below the confirmed edge. Profiles with a perf push below 0.5 also look for the lowest power limit that costs less than 2 % score. Fan tuning is skipped on cards without fan control.
+The applied offset is always at least one step below the confirmed edge. Profiles with a perf push below 0.5 also look for the lowest power limit that costs less than 2 % score.
+
+## Design decisions
+
+| Decision | Why |
+|---|---|
+| NVAPI and NVML directly, not MSI Afterburner | An earlier version drove Afterburner by editing its profile files; the edits never reached the hardware, and Afterburner offers no per-step read-back, which the whole search depends on. |
+| Instability = a wrong result or a lost device | A GPU computes wrong before it crashes, so a self-checking compute load catches instability earliest and cheapest. A TDR (`DXGI_ERROR_DEVICE_REMOVED`) is recoverable, unlike a freeze. The load's iterations per second double as the score. |
+| Memory stops at the bandwidth peak | GDDR6/GDDR6X retry failed transfers, so memory overclocks lose bandwidth long before they return wrong results. |
+| Edges are confirmed, then backed off | A 3 s probe can pass by luck; the edges get 30 s probes before the safety margin is applied, and the result must pass a 60 s soak. |
+| No undervolting | Locking a voltage point hard-froze the reference RTX 4070, and reshaping the curve gave no measurable gain on a power-limited card. |
+| No fan control | NVIDIA's public fan API is gone on RTX 20-series and newer, and a fan setting that cannot be verified is not made. |
+| Tray app plus logon task | Driver settings are volatile: a reboot or driver reset clears them. The logon task starts the tray app, whose watchdog keeps the tune applied; three crashing logons in a row switch it off. |
+| Dear ImGui on DX11 | One small binary with no runtime, and the D3D11 device is in the process anyway for the stress load. |
 
 ## Rules the design depends on
 
