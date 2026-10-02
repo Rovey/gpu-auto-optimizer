@@ -80,6 +80,17 @@ inline constexpr double kBandwidthTie = 0.01;
 // 4070 at a lowered power limit).
 inline constexpr double kStalledScore = 0.25;
 
+// After a driver reset the card is left alone, at stock, before it is loaded
+// again, and must then prove it is back: a short probe at stock that is STABLE
+// and scores at least kHealthyScore of the baseline. A card that computes but
+// is not back gets another rest and another probe, kHealthTries probes in all.
+// First choices, not measured: on an RTX 5070 a probe two seconds after a
+// reset ran at 6 % of the baseline score.
+inline constexpr double kRestAfterResetS = 20;
+inline constexpr double kHealthProbeS = 5;
+inline constexpr double kHealthyScore = 0.9;
+inline constexpr int kHealthTries = 3;
+
 struct MemSample {
     bool stable = false;
     double gbps = 0;
@@ -107,6 +118,9 @@ struct OptimizeIo {
     // GB/s at the currently applied settings; nullopt when the measurement
     // failed. Empty: the memory search falls back to stability only.
     std::function<std::optional<double>()> bandwidth;
+    // Waits without loading the card; returns false when the wait was cut short
+    // by a stop request. Empty: the search does not wait (tests).
+    std::function<bool(double seconds)> rest;
 };
 
 struct OptimizeResult {
@@ -122,6 +136,9 @@ struct OptimizeResult {
     int mem_confirmed = 0;
     StabilityResult baseline;
     StabilityResult soak;
+    // Reset events in this run, the recovery included. A STALLED or blind probe
+    // is counted although it only suggests a reset.
+    int driver_resets = 0;
 };
 
 // The whole tuning run (spec §3): baseline, power, memory, core, soak. Leaves

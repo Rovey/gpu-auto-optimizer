@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <climits>
 #include <map>
+#include <optional>
 #include <vector>
 
 using namespace gao;
@@ -99,6 +100,14 @@ struct FakeCard {
     bool abort_in_recover = false;   // a stop request arrives while recover() runs
     int lost_at_probe = -1;          // the N-th probe of the run ends DEVICE LOST and the driver resets
     bool bw_loses_device = false;    // a bandwidth measurement fails and the driver resets
+    int sick_health_probes = 0;      // this many 5 s probes after a reset score 50 % of normal (computing, not back)
+    std::optional<Verdict> health_verdict;   // the first 5 s probe ends with this verdict instead
+    bool health_stalls = false;      // the first 5 s probe "passes" at 3 % of the normal score
+    bool stock_write_fails_after_recover = false;   // reset_to_stock fails once, right after a successful recover
+    bool fail_next_stock = false;    // armed by that recover, cleared by the reset it fails
+    std::vector<std::string> events; // "recover", "stock", "rest", "health", "begin" in the order they happen
+    bool abort_during_rest = false;  // a stop request arrives while the search rests
+    int rests = 0;
     int probes = 0, power_probes = 0;
     std::vector<std::string> journal;
     std::string last_set_begin_ok;   // "" if every set had its begin line first
@@ -121,7 +130,9 @@ struct FakeCard {
         g.set_mem_offset = [this](int v) { if (stale) return false; mem = v; max_mem_seen = std::max(max_mem_seen, v); return true; };
         g.reset_to_stock = [this] {
             if (stale) return false;
+            if (fail_next_stock) { fail_next_stock = false; return false; }
             if (reset_fails_from >= 0 && ++reset_calls > reset_fails_from) return false;
+            events.push_back("stock");
             power = 100; core = 0; mem = 0; return true;
         };
         if (with_power) {
@@ -138,6 +149,7 @@ struct FakeCard {
         if (with_recover)
             g.recover = [this] {
                 ++recover_calls;
+                events.push_back("recover");
                 // The reconnect can crash or hang: it must never run inside an
                 // open journal entry, or that candidate becomes a false ceiling.
                 if (!journal.empty() && journal.back().find("\"begin\"") != std::string::npos) ++recovers_with_entry_open;
@@ -150,6 +162,7 @@ struct FakeCard {
                     return false;
                 }
                 stale = false;
+                if (stock_write_fails_after_recover) { stock_write_fails_after_recover = false; fail_next_stock = true; }
                 return true;
             };
         return g;
@@ -171,6 +184,15 @@ struct FakeCard {
             r.seconds = seconds;
             if (seconds == abort_in_probe_s) { r.verdict = Verdict::Aborted; return r; }
             if (seconds == 3 && blind_probes > 0) { --blind_probes; r.verdict = Verdict::NoTelemetry; return r; }
+            // The 5 s probe is the health probe after a driver reset.
+            const bool health = seconds == 5;
+            if (health) events.push_back("health");
+            if (health && health_verdict) {
+                r.verdict = *health_verdict;
+                health_verdict.reset();
+                if (r.verdict == Verdict::DeviceLost) driver_reset();
+                return r;
+            }
             if (probes == lost_at_probe || (lost_core_from >= 0 && core >= lost_core_from)) {
                 driver_reset();
                 r.verdict = Verdict::DeviceLost;
@@ -180,6 +202,9 @@ struct FakeCard {
                             (seconds == 30 ? confirm_extra_heat : 0);
             if (seconds == 300 && abort_on_soak) aborted_now = true;
             r.score = 1000.0 * std::min(power, 90) / 90;
+            if (health && health_stalls) { health_stalls = false; r.score *= 0.03; return r; }   // verdict stays Stable
+            // Half the normal score is above kStalledScore: a slow card, not a reset verdict.
+            if (health && sick_health_probes > 0) { --sick_health_probes; r.score *= 0.5; }
             if (stall_core_from >= 0 && core >= stall_core_from) { r.score *= 0.03; return r; }   // verdict stays Stable
             if (seconds == 20 && power == noisy_power_pct) r.score *= 0.9;
             if (seconds == 30 && std::find(confirm_fail_core.begin(), confirm_fail_core.end(), core) != confirm_fail_core.end()) {
@@ -198,10 +223,12 @@ struct Run {
     FakeCard card;
     std::vector<std::string> log;
     int abort_after_probes = -1;
+    bool no_rest = false;            // the application gives the search no way to wait
     OptimizeResult go(Preset preset, GpuControl gpu) {
         Journal j(card.journal, [this](const std::string& l) {
             if (l.find("\"complete\"") != std::string::npos && card.completes_ok >= 0 && card.completes_ok-- == 0)
                 return false;
+            if (l.find("\"begin\"") != std::string::npos) card.events.push_back("begin");
             card.journal.push_back(l);
             return true;
         });
@@ -209,6 +236,13 @@ struct Run {
         io.probe = card.probe();
         io.aborted = [this] { return card.aborted_now || (abort_after_probes >= 0 && card.probes >= abort_after_probes); };
         io.log = [this](const std::string& m) { log.push_back(m); };
+        if (!no_rest)
+            io.rest = [this](double) {
+                ++card.rests;
+                card.events.push_back("rest");
+                if (card.abort_during_rest) { card.aborted_now = true; return false; }
+                return true;
+            };
         if (card.bw_curve)
             io.bandwidth = [this]() -> std::optional<double> {
                 if (card.bw_loses_device) { card.driver_reset(); return std::nullopt; }
@@ -218,12 +252,37 @@ struct Run {
         return optimize(gpu, objectives_for(preset), j, io);
     }
     OptimizeResult go(Preset preset) { return go(preset, card.gpu()); }
-    bool logged(const std::string& what) const {
-        for (const auto& m : log)
-            if (m.find(what) != std::string::npos) return true;
-        return false;
+    bool logged(const std::string& what) const { return count_logged(what) > 0; }
+    int count_logged(const std::string& what) const {
+        int n = 0;
+        for (const auto& m : log) n += m.find(what) != std::string::npos;
+        return n;
     }
 };
+
+using Events = std::vector<std::string>;
+
+int count_events(const FakeCard& card, const std::string& what) {
+    return static_cast<int>(std::count(card.events.begin(), card.events.end(), what));
+}
+
+// Everything that happened after the journal entry of the candidate the
+// driver reset under was opened: the events after the last "begin" before the
+// first "recover".
+Events events_after_lost(const FakeCard& card) {
+    const auto first_recover = std::find(card.events.begin(), card.events.end(), "recover");
+    auto from = first_recover;
+    while (from != card.events.begin() && *(from - 1) != "begin") --from;
+    if (from == card.events.begin()) return {};   // no candidate was open before the first reconnect
+    return {from, card.events.end()};
+}
+
+// The first n of them.
+Events first_events_after_lost(const FakeCard& card, std::size_t n) {
+    auto all = events_after_lost(card);
+    if (all.size() > n) all.resize(n);
+    return all;
+}
 
 // The offsets of the journal's `begin` lines that carry `field` and not
 // `other`, in the order they were written.
@@ -389,6 +448,7 @@ TEST_CASE("a setter that fails stops the run at stock") {
     CHECK_FALSE(r.ok);
     CHECK(r.reason.find("core") != std::string::npos);
     CHECK(run.card.core == 0);
+    CHECK(run.card.mem == 0);      // core +150 was written with memory +550 applied
     CHECK(run.card.power == 100);
 }
 
@@ -577,6 +637,7 @@ TEST_CASE("a journal entry that cannot be closed stops the run at stock") {
     CHECK(r.reason.find("journal") != std::string::npos);
     CHECK(run.card.core == 0);
     CHECK(run.card.mem == 0);     // the entry that fails to close is memory +150
+    CHECK(begins_with_only(run.card, "mem", "core") == std::vector<int>{50, 100, 150});
     CHECK(run.card.power == 100);
 }
 
@@ -953,6 +1014,7 @@ TEST_CASE("a write that keeps failing still stops the run at stock") {
     CHECK(r.reason == "setting core +150 failed");
     CHECK(r.stock_restored);
     CHECK(run.card.core == 0);
+    CHECK(run.card.mem == 0);      // core +150 was written with memory +550 applied
     CHECK(run.card.power == 100);
     CHECK(run.card.recover_calls == 1);          // one retry per candidate, none on the way out
     CHECK(run.card.count("SET FAILED") == 2);    // the first write and the retry, each in its own entry
@@ -1040,8 +1102,8 @@ TEST_CASE("a driver reset during a memory candidate is survived") {
     CHECK(r.mem_confirmed == 350);
     CHECK(r.mem_mhz == 200);       // 70 % of 350, rounded down to a step
     CHECK(run.card.mem == 200);
-    CHECK(run.card.core == 105);   // the full state was rewritten after the reset
-    CHECK(run.card.power == 115);
+    CHECK(run.card.core == 105);
+    CHECK(run.card.power == 115);  // the full state was rewritten after the reset
     CHECK(run.card.recover_calls == 1);
     CHECK_FALSE(run.card.stale);
     check_reconnected_up_front(run);
@@ -1073,7 +1135,8 @@ TEST_CASE("a driver reset during the soak is survived: clocks step down and the 
     const auto r = run.go(Preset::BestOfMyGpu);
     REQUIRE(r.ok);
     CHECK(run.logged("soak: DEVICE LOST"));
-    CHECK(run.card.probes == 37);
+    CHECK(run.card.probes == 38);   // the lost soak, the health probe at stock, the second soak
+    CHECK(count_events(run.card, "health") == 1);
     CHECK(r.soak.seconds == 300);
     CHECK(r.core_mhz == 90);
     CHECK(r.mem_mhz == 500);
@@ -1198,7 +1261,6 @@ TEST_CASE("the core climb runs with the chosen memory applied") {
 
 TEST_CASE("the core climb advances one step at a time") {
     Run run;
-    run.card.core_edge = 150;
     const auto r = run.go(Preset::BestOfMyGpu);
     REQUIRE(r.ok);
     // The climb, then the one 30 s confirm probe at the edge.
@@ -1251,4 +1313,246 @@ TEST_CASE("a profile without core tuning and a card without power control still 
     CHECK(b.power_pct == 100);
     CHECK(b.core_mhz == 105);
     CHECK(b.mem_mhz == 550);
+}
+
+// The recovery gate. Unless stated, the card loses the device at core +135:
+// probe 32 of the run, the only driver reset, between the climb and the
+// confirm step.
+namespace {
+Run lost_at_135() {
+    Run run;
+    run.card.with_recover = true;
+    run.card.lost_core_from = 135;
+    return run;
+}
+}
+
+TEST_CASE("after a reset the search reconnects, goes to stock, rests and proves the card is back before the next candidate") {
+    Run run = lost_at_135();
+    const auto r = run.go(Preset::BestOfMyGpu);
+    REQUIRE(r.ok);
+    CHECK(first_events_after_lost(run.card, 5) == Events{"recover", "stock", "rest", "health", "begin"});
+    CHECK(run.card.rests == 1);
+    CHECK(count_events(run.card, "health") == 1);
+    CHECK(r.driver_resets == 1);
+    CHECK(run.card.recovers_with_entry_open == 0);
+    CHECK(run.logged("resting 20 s before the card is loaded again"));
+    CHECK(run.logged("checking that the card is back: 5 s at stock"));
+    CHECK(run.count_logged("health: ") == 1);
+    CHECK(run.logged("health: STABLE"));
+    check_journal_rules(run);
+}
+
+TEST_CASE("a card that needs a second rest is accepted") {
+    Run run = lost_at_135();
+    run.card.sick_health_probes = 1;
+    const auto r = run.go(Preset::BestOfMyGpu);
+    REQUIRE(r.ok);
+    CHECK(run.card.rests == 2);
+    CHECK(count_events(run.card, "health") == 2);
+    // No candidate between the two health probes.
+    CHECK(first_events_after_lost(run.card, 7) == Events{"recover", "stock", "rest", "health", "rest", "health", "begin"});
+    CHECK(r.driver_resets == 1);
+    CHECK(run.card.recover_calls == 1);
+    check_journal_rules(run);
+}
+
+TEST_CASE("a card that never recovers ends the run at stock without opening another entry") {
+    Run run = lost_at_135();
+    run.card.sick_health_probes = 99;
+    const auto r = run.go(Preset::BestOfMyGpu);
+    CHECK_FALSE(r.ok);
+    CHECK(r.reason == "the card did not recover after a driver reset");
+    CHECK(run.card.rests == 3);
+    CHECK(count_events(run.card, "health") == 3);
+    // Three rests and probes, no entry after the lost candidate's, and one
+    // reset to stock on the way out without another reconnect.
+    CHECK(events_after_lost(run.card) == Events{"recover", "stock", "rest", "health", "rest", "health", "rest", "health", "stock"});
+    CHECK(r.stock_restored);
+    CHECK(run.card.core == 0);
+    CHECK(run.card.mem == 0);
+    CHECK(run.card.power == 100);
+    CHECK(r.driver_resets == 1);
+    check_journal_rules(run);
+}
+
+TEST_CASE("a driver reset during the health probe ends the run at once") {
+    Run run = lost_at_135();
+    run.card.health_verdict = Verdict::DeviceLost;
+    const auto r = run.go(Preset::BestOfMyGpu);
+    CHECK_FALSE(r.ok);
+    CHECK(r.reason == "the card was not usable when checked after a driver reset (DEVICE LOST)");
+    CHECK(r.driver_resets == 2);
+    CHECK(count_events(run.card, "health") == 1);
+    CHECK(run.card.rests == 1);
+    // After the health probe: no entry, no rest, no second health probe; one
+    // reconnect and one reset to stock on the way out.
+    CHECK(events_after_lost(run.card) == Events{"recover", "stock", "rest", "health", "recover", "stock"});
+    CHECK(run.card.recover_calls == 2);
+    CHECK(r.stock_restored);
+    CHECK(run.card.core == 0);
+    CHECK(run.card.mem == 0);
+    CHECK(run.card.power == 100);
+    CHECK_FALSE(run.card.stale);
+    CHECK(run.logged("health: DEVICE LOST"));
+    check_journal_rules(run);
+}
+
+TEST_CASE("a blind health probe ends the run at once") {
+    Run run = lost_at_135();
+    run.card.health_verdict = Verdict::NoTelemetry;
+    const auto r = run.go(Preset::BestOfMyGpu);
+    CHECK_FALSE(r.ok);
+    CHECK(r.reason == "the card was not usable when checked after a driver reset (NO TELEMETRY)");
+    CHECK(r.driver_resets == 2);
+    CHECK(count_events(run.card, "health") == 1);
+    CHECK(run.card.rests == 1);
+    CHECK(events_after_lost(run.card) == Events{"recover", "stock", "rest", "health", "recover", "stock"});
+    CHECK(r.stock_restored);
+    check_journal_rules(run);
+}
+
+TEST_CASE("a health probe that computes almost nothing ends the run at once") {
+    Run run = lost_at_135();
+    run.card.health_stalls = true;
+    const auto r = run.go(Preset::BestOfMyGpu);
+    CHECK_FALSE(r.ok);
+    CHECK(r.reason == "the card computed almost nothing after a driver reset");
+    CHECK(r.driver_resets == 2);
+    CHECK(count_events(run.card, "health") == 1);
+    CHECK(run.card.rests == 1);
+    CHECK(events_after_lost(run.card) == Events{"recover", "stock", "rest", "health", "recover", "stock"});
+    CHECK(run.logged("health: STALLED"));
+    CHECK(r.stock_restored);
+    CHECK(run.card.core == 0);
+    check_journal_rules(run);
+}
+
+TEST_CASE("a health probe that only computes wrong or runs hot is retried, not counted") {
+    for (const Verdict v : {Verdict::WrongResult, Verdict::TooHot}) {
+        Run run = lost_at_135();
+        run.card.health_verdict = v;
+        const auto r = run.go(Preset::BestOfMyGpu);
+        REQUIRE(r.ok);
+        CHECK(r.driver_resets == 1);
+        CHECK(count_events(run.card, "health") == 2);
+        CHECK(run.card.rests == 2);
+        CHECK(first_events_after_lost(run.card, 7) == Events{"recover", "stock", "rest", "health", "rest", "health", "begin"});
+        CHECK(run.card.recover_calls == 1);
+        check_journal_rules(run);
+    }
+}
+
+TEST_CASE("a stock write that fails while recovering ends the run without a rest or a health probe") {
+    Run run = lost_at_135();
+    run.card.stock_write_fails_after_recover = true;
+    const auto r = run.go(Preset::BestOfMyGpu);
+    CHECK_FALSE(r.ok);
+    CHECK(r.reason == "could not set the card to stock while recovering");
+    CHECK(run.card.rests == 0);
+    CHECK(count_events(run.card, "health") == 0);
+    // The failed write pushes nothing; the way out reconnects once and resets.
+    CHECK(events_after_lost(run.card) == Events{"recover", "recover", "stock"});
+    CHECK(r.driver_resets == 1);
+    CHECK(r.stock_restored);
+    check_journal_rules(run);
+}
+
+TEST_CASE("a driver that does not come back is not asked twice") {
+    Run run = lost_at_135();
+    run.card.recover_fails = true;
+    const auto r = run.go(Preset::BestOfMyGpu);
+    CHECK_FALSE(r.ok);
+    CHECK(r.reason == "the driver did not come back after a reset");
+    CHECK(run.card.recover_calls == 1);
+    CHECK(run.card.rests == 0);
+    CHECK(count_events(run.card, "health") == 0);
+    CHECK(events_after_lost(run.card) == Events{"recover"});
+    CHECK_FALSE(r.stock_restored);
+    CHECK(r.driver_resets == 1);
+    check_journal_rules(run);
+}
+
+TEST_CASE("an abort while resting ends as aborted") {
+    Run run = lost_at_135();
+    run.card.abort_during_rest = true;
+    const auto r = run.go(Preset::BestOfMyGpu);
+    CHECK_FALSE(r.ok);
+    CHECK(r.reason == "aborted");
+    CHECK(run.card.core == 0);
+    CHECK(run.card.mem == 0);
+    CHECK(run.card.power == 100);
+    CHECK(count_events(run.card, "health") == 0);
+    CHECK(events_after_lost(run.card) == Events{"recover", "stock", "rest", "stock"});
+    CHECK(r.stock_restored);
+    check_journal_rules(run);
+}
+
+TEST_CASE("the health probe is not journaled") {
+    Run run = lost_at_135();
+    const auto r = run.go(Preset::BestOfMyGpu);
+    REQUIRE(r.ok);
+    CHECK(count_events(run.card, "health") == 1);
+    // Every clock candidate logs "core +C / mem +M: ...", every soak attempt
+    // "soak: 300 s at ...": one journal entry each, and none for the health probe.
+    const int entries = run.count_logged(" / mem +") + run.count_logged("soak: 300 s at");
+    CHECK(entries > 0);
+    CHECK(run.card.count("\"begin\"") == entries);
+    CHECK(run.card.count("\"complete\"") == entries);
+}
+
+TEST_CASE("without a rest callback the gate still proves the card is back") {
+    Run run = lost_at_135();
+    run.no_rest = true;
+    const auto r = run.go(Preset::BestOfMyGpu);
+    REQUIRE(r.ok);
+    CHECK(count_events(run.card, "health") == 1);
+    CHECK(run.card.rests == 0);
+    CHECK(first_events_after_lost(run.card, 4) == Events{"recover", "stock", "health", "begin"});
+    CHECK_FALSE(run.logged("resting"));   // nothing waited, so the log does not say it did
+    check_journal_rules(run);
+}
+
+TEST_CASE("a connection that is stale at the start gets a rest before the baseline") {
+    Run run;
+    run.card.with_recover = true;
+    run.card.stale = true;
+    const auto r = run.go(Preset::BestOfMyGpu);
+    REQUIRE(r.ok);
+    // The first reset fails on the stale connection and pushes nothing.
+    REQUIRE(run.card.events.size() >= 4);
+    CHECK(Events(run.card.events.begin(), run.card.events.begin() + 4) == Events{"recover", "stock", "rest", "begin"});
+    CHECK(run.card.rests == 1);
+    CHECK(run.logged("resting 20 s before the card is loaded again"));
+    CHECK(count_events(run.card, "health") == 0);
+    CHECK(r.driver_resets == 0);
+    CHECK(run.card.probes == 36);   // the run of a card with no reset
+    check_journal_rules(run);
+}
+
+TEST_CASE("an abort while resting at the start ends before the baseline") {
+    Run run;
+    run.card.with_recover = true;
+    run.card.stale = true;
+    run.card.abort_during_rest = true;
+    const auto r = run.go(Preset::BestOfMyGpu);
+    CHECK_FALSE(r.ok);
+    CHECK(r.reason == "aborted");
+    CHECK(run.card.probes == 0);
+    CHECK(r.stock_restored);
+    CHECK(run.card.recover_calls == 1);
+}
+
+TEST_CASE("without a reconnect nothing changes") {
+    Run run;
+    run.card.lost_core_from = 135;
+    const auto r = run.go(Preset::BestOfMyGpu);
+    CHECK_FALSE(r.ok);
+    CHECK(r.reason.find("failed") != std::string::npos);
+    CHECK_FALSE(r.stock_restored);
+    CHECK(run.card.rests == 0);
+    CHECK(count_events(run.card, "health") == 0);
+    CHECK(count_events(run.card, "recover") == 0);
+    Journal reread(run.card.journal, [](const std::string&) { return true; });
+    CHECK(reread.freezes().empty());
 }
