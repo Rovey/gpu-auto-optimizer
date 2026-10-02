@@ -16,3 +16,7 @@ logs/
 # Review/planning workspace (briefs, reports, raw diffs) -- not project
 # output, and not meant to be published in this public repo.
 .superpowers/
+
+# Design specs and implementation plans are working documents: kept locally,
+# not published in this public repo.
+docs/superpowers/
