@@ -129,9 +129,12 @@ struct FakeCard {
     int lost_mem_from = -1;          // at or above this memory offset a 3 s probe ends DEVICE LOST
     int recover_fails_from_call = -1;     // recover() fails from this call on (1 = the first)
     std::vector<std::string> probe_order; // every probe as "seconds:power:core:mem", in the order they ran
+    bool fail_power_set_in_entry = false; // the first power write made while a journal entry is open fails once
 
-    // True while the journal's last line opens a soak entry: the only entry
-    // that carries both a core and a memory offset.
+    bool entry_open() const { return !journal.empty() && journal.back().find("\"begin\"") != std::string::npos; }
+    // True while the journal's last line opens the entry of a soak with both
+    // clocks above stock: the only entry that carries both a core and a memory
+    // offset.
     bool soak_entry_open() const {
         if (journal.empty()) return false;
         const std::string& l = journal.back();
@@ -166,6 +169,7 @@ struct FakeCard {
             g.set_power_limit = [this](int p) {
                 if (stale) return false;
                 if (flaky_power_sets > 0) { --flaky_power_sets; return false; }
+                if (fail_power_set_in_entry && entry_open()) { fail_power_set_in_entry = false; return false; }
                 power = p; return true;
             };
             g.power_limit_range_pct = [range] { return range; };
@@ -331,7 +335,9 @@ Events events_after_last_begin(const FakeCard& card) {
     return {from, card.events.end()};
 }
 
-// The soak entries: the `begin` lines that carry both a core and a memory offset.
+// The soak entries of a run whose soak has both clocks above stock: the
+// `begin` lines that carry both a core and a memory offset. (A soak journals
+// only the clocks that are above stock.)
 int soak_entries(const FakeCard& card) {
     int n = 0;
     for (const auto& l : card.journal)
@@ -1530,10 +1536,43 @@ TEST_CASE("a second reset in a confirm probe ends the run and starts nothing") {
     CHECK(events_after_last_begin(run.card) == Events{"recover", "stock"});
     CHECK(run.card.rests == 1);
     CHECK(count_events(run.card, "health") == 1);
+    // 23 probes up to the memory confirm, core +15 .. +135 (24-32), the health
+    // probe (33), the lost confirm probe (34), and none after it.
+    CHECK(run.card.probes == 34);
     CHECK(run.card.core == 0);
     CHECK(run.card.mem == 0);
     CHECK(run.card.power == 100);
     CHECK(r.stock_restored);
+    REQUIRE_FALSE(run.card.journal.empty());
+    CHECK(run.card.journal.back().find("DEVICE LOST") != std::string::npos);
+    check_journal_rules(run);
+}
+
+TEST_CASE("a second reset in the memory confirm probe ends the run and starts nothing") {
+    Run run = recovering();
+    run.card.lost_mem_from = 300;                // the first event, in the memory climb
+    run.card.lost_on_first_mem_confirm = true;   // the second, in the confirm probe at +50
+    const auto r = run.go(Preset::BestOfMyGpu);
+    CHECK_FALSE(r.ok);
+    CHECK(r.reason == "the driver reset twice");
+    CHECK(r.driver_resets == 2);
+    CHECK(run.logged("core +0 / mem +300: DEVICE LOST"));
+    CHECK(run.logged("confirm core +0 / mem +50: DEVICE LOST"));
+    // The climb to +300, then the one confirm entry four steps below +250.
+    CHECK(mem_begins(run.card) == climb(50, 300, 50, {50}));
+    CHECK(core_begins(run.card).empty());
+    check_nothing_started(events_after_last_begin(run.card));
+    CHECK(events_after_last_begin(run.card) == Events{"recover", "stock"});
+    CHECK(run.card.rests == 1);
+    CHECK(count_events(run.card, "health") == 1);
+    // The baseline (1), four power probes (2-5), memory +50 .. +300 (6-11), the
+    // health probe (12), the lost confirm probe (13), and none after it.
+    CHECK(run.card.probes == 13);
+    CHECK(run.card.core == 0);
+    CHECK(run.card.mem == 0);
+    CHECK(run.card.power == 100);
+    CHECK(r.stock_restored);
+    CHECK_FALSE(run.card.stale);
     REQUIRE_FALSE(run.card.journal.empty());
     CHECK(run.card.journal.back().find("DEVICE LOST") != std::string::npos);
     check_journal_rules(run);
@@ -1579,6 +1618,37 @@ TEST_CASE("a second reset in the soak ends the run and starts nothing") {
     CHECK(events_after_last_begin(run.card) == Events{"recover", "stock"});
     CHECK(run.card.rests == 1);
     CHECK(count_events(run.card, "health") == 1);
+    // 32 probes up to the lost core +135, the health probe (33), the confirm
+    // probe at +60 (34), the lost soak (35), and none after it.
+    CHECK(run.card.probes == 35);
+    CHECK(run.card.core == 0);
+    CHECK(run.card.mem == 0);
+    CHECK(run.card.power == 100);
+    CHECK(r.stock_restored);
+    check_journal_rules(run);
+}
+
+TEST_CASE("a second reset as a failed soak write ends the run and starts nothing") {
+    Run run = recovering();
+    run.card.lost_core_from = 135;            // the first event, in the core climb
+    run.card.fail_set_on_first_soak = true;   // the second: the soak's core write, +30
+    const auto r = run.go(Preset::BestOfMyGpu);
+    CHECK_FALSE(r.ok);
+    CHECK(r.reason == "the driver reset twice");
+    CHECK(r.driver_resets == 2);
+    CHECK(run.logged("setting core +30 failed; treated as a driver reset"));
+    CHECK(soak_entries(run.card) == 1);
+    REQUIRE_FALSE(run.card.journal.empty());
+    CHECK(run.card.journal.back().find("SET FAILED") != std::string::npos);
+    CHECK(run.card.count("SET FAILED") == 1);
+    CHECK(run.count_logged("soak: 300 s at") == 0);   // the soak never ran
+    check_nothing_started(events_after_last_begin(run.card));
+    CHECK(events_after_last_begin(run.card) == Events{"recover", "stock"});
+    CHECK(run.card.rests == 1);                        // the one of the first event
+    CHECK(count_events(run.card, "health") == 1);
+    // 32 probes up to the lost core +135, the health probe (33), the confirm
+    // probe at +60 (34), and none after it: the soak's write failed.
+    CHECK(run.card.probes == 34);
     CHECK(run.card.core == 0);
     CHECK(run.card.mem == 0);
     CHECK(run.card.power == 100);
@@ -1686,11 +1756,14 @@ TEST_CASE("one blind probe ends the climb at the last value that passed") {
     CHECK(r.driver_resets == 1);
     CHECK(r.core_max_stable == 120);
     CHECK(run.logged("core +135 / mem +550: NO TELEMETRY"));
-    // No 3 s core probe after it: nine climb entries and one confirm entry.
+    // No 3 s core probe after it: nine climb entries and one confirm entry,
+    // four steps below +120. That 30 s probe is not blind and holds.
     CHECK(run.card.max_core_seen == 135);
     const auto begins = core_begins(run.card);
     REQUIRE(begins.size() == 10);
     CHECK(std::vector<int>(begins.begin(), begins.begin() + 9) == climb(15, 135, 15));
+    CHECK(begins[9] == 60);
+    CHECK(r.core_confirmed == 60);
     CHECK(run.card.recover_calls == 1);
     check_journal_rules(run);
 }
@@ -1713,7 +1786,6 @@ TEST_CASE("a blind probe in the memory climb ends exploring; a second blind prob
     CHECK(run.card.max_core_seen == 0);
     CHECK(run.logged("core: not searched; the driver reset earlier in this run"));
     CHECK(run.card.recover_calls == 1);
-    CHECK_FALSE(run.logged("counted as failed"));
     CHECK_FALSE(run.logged("lost telemetry"));
     check_journal_rules(run);
 }
@@ -1980,8 +2052,10 @@ TEST_CASE("a first reset in the memory confirm probe leaves the core unsearched"
     REQUIRE(r.ok);
     CHECK(r.driver_resets == 1);
     CHECK(run.logged("confirm core +0 / mem +800: DEVICE LOST"));
-    // The next confirm try is four steps down.
-    CHECK(mem_begins(run.card) == climb(50, 850, 50, {800, 600}));
+    // The next confirm try is four steps down. The last entry is the soak's:
+    // it runs at core +0 / memory +400 and journals only the memory.
+    CHECK(mem_begins(run.card) == climb(50, 850, 50, {800, 600, 400}));
+    CHECK(core_begins(run.card).empty());
     CHECK(r.mem_max_stable == 800);
     CHECK(r.mem_confirmed == 600);
     CHECK(r.mem_mhz == 400);
@@ -1990,6 +2064,33 @@ TEST_CASE("a first reset in the memory confirm probe leaves the core unsearched"
     CHECK(run.logged("core: not searched; the driver reset earlier in this run"));
     CHECK(run.card.recover_calls == 1);
     check_journal_rules(run);
+}
+
+TEST_CASE("a soak entry carries only the clocks that are above stock") {
+    // The same run: the core is not searched, so the soak runs at core +0 /
+    // memory +400.
+    Run run = recovering();
+    run.card.lost_on_first_mem_confirm = true;
+    const auto r = run.go(Preset::BestOfMyGpu);
+    REQUIRE(r.ok);
+    CHECK(r.core_mhz == 0);
+    CHECK(r.mem_mhz == 400);
+    CHECK(run.logged("soak: 300 s at power 115 %, core +0, mem +400"));
+    // The soak's entry is the last one of the run: its `begin` and its `complete`.
+    REQUIRE(run.card.journal.size() >= 2);
+    const std::string& soak_begin = run.card.journal[run.card.journal.size() - 2];
+    REQUIRE(soak_begin.find("\"begin\"") != std::string::npos);
+    CHECK(soak_begin.find("\"mem\":400") != std::string::npos);
+    CHECK(soak_begin.find("\"core\":") == std::string::npos);
+    // A machine that froze during that soak leaves the entry open. That must
+    // not become a core ceiling of 0, which would keep every later run from
+    // searching the core at all.
+    REQUIRE(run.card.journal.back().find("\"complete\"") != std::string::npos);
+    const std::vector<std::string> frozen(run.card.journal.begin(), run.card.journal.end() - 1);
+    Journal reread(frozen, [](const std::string&) { return true; });
+    CHECK(reread.freezes().size() == 1);
+    CHECK(reread.ceilings().core_mhz == INT_MAX);
+    CHECK(reread.ceilings().mem_mhz == 400);
 }
 
 TEST_CASE("a soak reset at stock clocks ends the run") {
@@ -2006,6 +2107,62 @@ TEST_CASE("a soak reset at stock clocks ends the run") {
     CHECK(events_after_last_begin(run.card) == Events{"recover", "stock"});
     CHECK(r.stock_restored);
     CHECK(run.card.power == 100);
+    check_journal_rules(run);
+}
+
+TEST_CASE("a failed soak write at stock clocks ends the run") {
+    // The cool preset tunes neither clock: its soak runs at core +0 / memory
+    // +0, and its entry is the only one of the run.
+    Run clean = recovering();
+    REQUIRE(clean.go(Preset::CoolAndEfficient).ok);
+
+    Run run = recovering();
+    run.card.fail_power_set_in_entry = true;   // the soak's power write
+    const auto r = run.go(Preset::CoolAndEfficient);
+    CHECK_FALSE(r.ok);
+    CHECK(r.reason == "the driver reset at stock clocks (setting power 85 % failed)");
+    CHECK(run.logged("setting power 85 % failed; treated as a driver reset"));
+    CHECK(r.driver_resets == 1);
+    CHECK_FALSE(run.card.fail_power_set_in_entry);   // the knob fired
+    CHECK(run.card.count("\"begin\"") == 1);          // exactly one soak entry
+    REQUIRE(run.card.journal.size() == 2);
+    CHECK(run.card.journal.back().find("SET FAILED") != std::string::npos);
+    CHECK(run.count_logged("soak: 300 s at") == 0);   // the soak never ran
+    CHECK(run.card.probes == clean.card.probes - 1);  // every probe of a clean run but the soak
+    CHECK(run.card.rests == 0);
+    CHECK(count_events(run.card, "health") == 0);
+    CHECK(events_after_last_begin(run.card) == Events{"recover", "stock"});
+    CHECK(run.card.recover_calls == 1);
+    CHECK(r.stock_restored);
+    CHECK(run.card.power == 100);
+    CHECK(run.card.core == 0);
+    CHECK(run.card.mem == 0);
+    check_journal_rules(run);
+}
+
+TEST_CASE("a failed write of the +0 memory sample ends the run") {
+    Run run = recovering();
+    run.card.bw_curve = [](int m) { return 500 + m * 0.3; };
+    run.card.fail_power_set_in_entry = true;   // the first entry of the run is the +0 sample
+    const auto r = run.go(Preset::BestOfMyGpu);
+    CHECK_FALSE(r.ok);
+    CHECK(r.reason == "the driver reset at stock clocks (setting power 115 % failed)");
+    CHECK(run.logged("setting power 115 % failed; treated as a driver reset"));
+    CHECK(r.driver_resets == 1);
+    CHECK_FALSE(run.card.fail_power_set_in_entry);   // the knob fired
+    CHECK(mem_begins(run.card) == std::vector<int>{0});
+    REQUIRE(run.card.journal.size() == 2);
+    CHECK(run.card.journal.back().find("SET FAILED") != std::string::npos);
+    CHECK(run.card.probes == 5);   // the baseline and four power probes; the sample never ran
+    CHECK(run.card.bw_measurements == 0);
+    CHECK(run.card.rests == 0);
+    CHECK(count_events(run.card, "health") == 0);
+    CHECK(events_after_last_begin(run.card) == Events{"recover", "stock"});
+    CHECK(run.card.recover_calls == 1);
+    CHECK(r.stock_restored);
+    CHECK(run.card.power == 100);
+    CHECK(run.card.core == 0);
+    CHECK(run.card.mem == 0);
     check_journal_rules(run);
 }
 

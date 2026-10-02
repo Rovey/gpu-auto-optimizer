@@ -306,7 +306,10 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
     // the probe did not report looks exactly like a failed write, so it gets
     // no second try: the entry is closed as SET FAILED, and the gate runs
     // before whatever comes next. Without gpu.recover a failed write stops the
-    // run.
+    // run. The write is not undone here: a partial one (the core written, the
+    // memory write failed) can leave the new, not yet probed value of one
+    // clock applied until the gate or the way out writes stock. Nothing loads
+    // the card in between.
     auto begin_candidate = [&](std::optional<int> core_j, std::optional<int> mem_j, int core, int mem) -> std::optional<int> {
         const int id = journal.begin(core_j, mem_j);
         if (id < 0) { stopped = "could not write the journal"; return std::nullopt; }
@@ -590,8 +593,11 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
         if (!ensure_hw()) return finish_fail(stopped);
         reset_in_step = false;
         const bool stock_clocks = r.core_mhz == 0 && r.mem_mhz == 0;
-        const auto id = begin_candidate(obj.core_oc ? std::optional<int>(r.core_mhz) : std::nullopt,
-                                        obj.mem_oc ? std::optional<int>(r.mem_mhz) : std::nullopt, r.core_mhz, r.mem_mhz);
+        // A clock at stock is not journaled: if the machine froze in this
+        // soak, the open entry would leave a ceiling of 0 for that clock, and
+        // no later run would search it at all.
+        const auto id = begin_candidate(r.core_mhz > 0 ? std::optional<int>(r.core_mhz) : std::nullopt,
+                                        r.mem_mhz > 0 ? std::optional<int>(r.mem_mhz) : std::nullopt, r.core_mhz, r.mem_mhz);
         if (!id) {
             if (!stopped.empty()) return finish_fail(stopped);
             // The write failed and was counted as a reset event: this attempt

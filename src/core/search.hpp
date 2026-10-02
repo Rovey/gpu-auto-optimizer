@@ -93,7 +93,8 @@ inline constexpr int kHealthTries = 3;
 
 // After a reset event the search explores nothing new, and the long probes
 // keep their distance from where it happened: confirmation starts this many
-// grid steps below the last value that passed, and a confirm try or a soak
+// grid steps below the last value that passed (in a bandwidth scan: below the
+// bandwidth peak of the values that passed), and a confirm try or a soak
 // attempt that had a reset event is followed by one this many steps lower.
 inline constexpr int kResetBackoffSteps = 4;
 
