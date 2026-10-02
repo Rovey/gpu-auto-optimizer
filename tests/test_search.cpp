@@ -71,10 +71,11 @@ struct FakeCard {
     int power = 100, core = 0, mem = 0;
     int core_edge = 150, mem_edge = 800;
     bool stock_unstable = false;
-    int soak_failures = 0;           // how many 60 s probes fail before one passes
+    int soak_failures = 0;           // how many 300 s probes fail before one passes
     int noisy_power_pct = -1;        // a 20 s probe at this power reads 10 % low
-    int soak_extra_heat = 0;         // a 60 s probe peaks this much hotter than a 20 s one
+    int soak_extra_heat = 0;         // a 300 s probe peaks this much hotter than a 20 s one
     int confirm_extra_heat = 0;      // a 30 s probe peaks this much hotter than a 20 s one
+    int abort_in_probe_s = -1;       // a probe of this length is cut short by a stop request
     bool abort_on_soak = false;      // Ctrl+C arrives while the soak probe runs
     bool aborted_now = false;
     int reset_calls = 0, reset_fails_from = -1;   // reset_to_stock fails from this call on
@@ -116,9 +117,10 @@ struct FakeCard {
             if (seconds == 20) ++power_probes;
             StabilityResult r;
             r.seconds = seconds;
-            r.peak_temp_c = static_cast<int>(40 + 0.3 * power) + (seconds == 60 ? soak_extra_heat : 0) +
+            if (seconds == abort_in_probe_s) { r.verdict = Verdict::Aborted; return r; }
+            r.peak_temp_c = static_cast<int>(40 + 0.3 * power) + (seconds == 300 ? soak_extra_heat : 0) +
                             (seconds == 30 ? confirm_extra_heat : 0);
-            if (seconds == 60 && abort_on_soak) aborted_now = true;
+            if (seconds == 300 && abort_on_soak) aborted_now = true;
             r.score = 1000.0 * std::min(power, 90) / 90;
             if (seconds == 20 && power == noisy_power_pct) r.score *= 0.9;
             if (seconds == 30 && std::find(confirm_fail_core.begin(), confirm_fail_core.end(), core) != confirm_fail_core.end()) {
@@ -126,7 +128,7 @@ struct FakeCard {
                 return r;
             }
             if (stock_unstable || core > core_edge || mem > mem_edge) r.verdict = Verdict::WrongResult;
-            else if (seconds == 60 && soak_failures > 0) { --soak_failures; r.verdict = Verdict::WrongResult; }
+            else if (seconds == 300 && soak_failures > 0) { --soak_failures; r.verdict = Verdict::WrongResult; }
             else if (r.peak_temp_c > max_temp) r.verdict = Verdict::TooHot;
             return r;
         };
@@ -331,7 +333,7 @@ TEST_CASE("a failed reset is reported, not claimed as stock") {
 }
 
 TEST_CASE("a soak that runs too hot lowers power, not clocks") {
-    // 20 s power probes read cooler than a 60 s soak; lower clocks barely
+    // 20 s power probes read cooler than a 300 s soak; lower clocks barely
     // change temperature, lower power does.
     Run run;
     run.card.soak_extra_heat = 2;    // at 115 %: 74 + 2 = 76 > 75
@@ -475,4 +477,68 @@ TEST_CASE("a journal entry that cannot be closed stops the run at stock") {
     CHECK(r.reason.find("journal") != std::string::npos);
     CHECK(run.card.core == 0);
     CHECK(run.card.power == 100);
+}
+
+TEST_CASE("the soak runs 300 s and the log says so") {
+    Run run;
+    const auto r = run.go(Preset::BestOfMyGpu);
+    REQUIRE(r.ok);
+    CHECK(r.soak.seconds == 300);
+    bool told = false;
+    for (const auto& m : run.log) told |= m.find("soak: 300 s at power") != std::string::npos;
+    CHECK(told);
+}
+
+TEST_CASE("a soak stopped while it runs ends at stock and leaves no ceiling") {
+    Run run;
+    run.card.abort_in_probe_s = 300;
+    const auto r = run.go(Preset::BestOfMyGpu);
+    CHECK_FALSE(r.ok);
+    CHECK(r.reason == "aborted");
+    CHECK(r.stock_restored);
+    CHECK(run.card.core == 0);
+    CHECK(run.card.mem == 0);
+    CHECK(run.card.power == 100);
+    REQUIRE_FALSE(run.card.journal.empty());
+    CHECK(run.card.journal.back().find("ABORTED") != std::string::npos);
+    Journal reread(run.card.journal, [](const std::string&) { return true; });
+    CHECK(reread.freezes().empty());
+    CHECK(reread.ceilings().core_mhz == INT_MAX);
+    CHECK(reread.ceilings().mem_mhz == INT_MAX);
+}
+
+TEST_CASE("a clock probe stopped while it runs is closed as ABORTED, not left open") {
+    Run run;
+    run.card.abort_in_probe_s = 3;   // the first core candidate
+    const auto r = run.go(Preset::BestOfMyGpu);
+    CHECK_FALSE(r.ok);
+    CHECK(r.reason == "aborted");
+    CHECK(run.card.core == 0);
+    CHECK(run.card.power == 100);
+    REQUIRE(run.card.journal.size() == 2);   // one begin, one complete
+    CHECK(run.card.journal.back().find("ABORTED") != std::string::npos);
+    Journal reread(run.card.journal, [](const std::string&) { return true; });
+    CHECK(reread.freezes().empty());
+    CHECK(reread.ceilings().core_mhz == INT_MAX);
+}
+
+TEST_CASE("a baseline stopped while it runs ends before any clock is touched") {
+    Run run;
+    run.card.abort_in_probe_s = 30;   // the baseline is the first 30 s probe
+    const auto r = run.go(Preset::BestOfMyGpu);
+    CHECK_FALSE(r.ok);
+    CHECK(r.reason == "aborted");
+    CHECK(run.card.probes == 1);
+    CHECK(run.card.max_core_seen == 0);
+    CHECK(run.card.journal.empty());
+}
+
+TEST_CASE("a power probe stopped while it runs restores stock power") {
+    Run run;
+    run.card.abort_in_probe_s = 20;
+    const auto r = run.go(Preset::BestOfMyGpu);
+    CHECK_FALSE(r.ok);
+    CHECK(r.reason == "aborted");
+    CHECK(run.card.power == 100);
+    CHECK(run.card.max_core_seen == 0);
 }

@@ -158,7 +158,7 @@ OptimizeOutcome run_optimize(Preset preset, const OptimizeHooks& hooks, const st
             if (now.mode != before && now.mode == FanMode::Foreign) log("fans: another program set them; leaving them alone");
             return t;
         };
-        return run_stability([&] { return load.Batch(); }, read, seconds, max_temp);
+        return run_stability([&] { return load.Batch(); }, read, seconds, max_temp, hooks.aborted);
     };
     io.aborted = hooks.aborted;
     io.log = hooks.log;

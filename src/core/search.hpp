@@ -59,7 +59,7 @@ using Probe = std::function<StabilityResult(double seconds, int max_temp_c)>;
 
 struct OptimizeIo {
     Probe probe;
-    std::function<bool()> aborted;                      // polled between probes
+    std::function<bool()> aborted;                      // polled between probes; the probe itself must honour it too
     std::function<void(const std::string&)> log;
     // GB/s at the currently applied settings; nullopt when the measurement
     // failed. Empty: the memory search falls back to stability only.

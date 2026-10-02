@@ -669,7 +669,7 @@ void run_screen(UiState& s, const OptimizeWorker::Snapshot& run, const UiActions
         align_right(button_width(abort) + em());
         if (ImGui::Button(abort.c_str(), ImVec2(button_width(abort) + em(), 0))) act.abort();
     }
-    dim("Aborting finishes the current probe, then restores stock.");
+    dim("Aborting stops the running probe and restores stock.");
     ImGui::Spacing();
     telemetry_tiles(s);
     ImGui::Spacing();

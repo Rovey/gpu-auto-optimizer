@@ -170,7 +170,7 @@ static const gao::GpuControl* g_gpu = nullptr;   // set while --optimize runs
 static BOOL WINAPI OnConsoleCtrl(DWORD type) {
     if (type == CTRL_C_EVENT || type == CTRL_BREAK_EVENT) {
         g_abort = true;
-        std::printf("\nabort requested -- finishing the current probe, then restoring stock\n");
+        std::printf("\nabort requested -- stopping the probe and restoring stock\n");
         return TRUE;
     }
     if (type == CTRL_CLOSE_EVENT || type == CTRL_LOGOFF_EVENT || type == CTRL_SHUTDOWN_EVENT) {

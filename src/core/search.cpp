@@ -73,7 +73,7 @@ namespace {
 constexpr int kCoreStep = 15, kCoreMax = kCoreMaxMhz;
 constexpr int kMemStep = 50, kMemMax = kMemMaxMhz;
 constexpr int kPowerStep = 5;
-constexpr double kBaselineS = 30, kPowerProbeS = 20, kClockProbeS = 3, kSoakS = 60;
+constexpr double kBaselineS = 30, kPowerProbeS = 20, kClockProbeS = 3, kSoakS = 300;
 constexpr int kSafetyTempC = 85;
 constexpr int kSoakRetries = 3;
 constexpr double kEfficiencyScore = 0.98;
@@ -121,7 +121,14 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
         if (io.aborted && io.aborted()) { stopped = "aborted"; return std::nullopt; }
         const StabilityResult s = io.probe(seconds, max_temp);
         if (s.verdict == Verdict::NoTelemetry) { stopped = "lost telemetry"; return std::nullopt; }
+        if (s.verdict == Verdict::Aborted) { stopped = "aborted"; return std::nullopt; }
         return s;
+    };
+    // What a journal entry is closed with. A candidate the user stopped is
+    // ABORTED: closed, so it never becomes a ceiling.
+    auto closed_as = [&](const std::optional<StabilityResult>& s) -> std::string {
+        if (s) return verdict_name(s->verdict);
+        return stopped == "aborted" ? "ABORTED" : "NOT RUN";
     };
 
     if (!gpu.reset_to_stock || !gpu.reset_to_stock()) return finish_fail("could not reset to stock");
@@ -188,7 +195,7 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
         if (!set_state(r.power_pct, core, mem)) { journal.complete(id, "SET FAILED"); return std::nullopt; }
         const auto s = probe(seconds, obj.max_temp_c);
         if (s && s->verdict == Verdict::Stable && extra) extra();
-        if (!journal.complete(id, s ? verdict_name(s->verdict) : "NOT RUN")) {
+        if (!journal.complete(id, closed_as(s))) {
             stopped = "could not write the journal";
             return std::nullopt;
         }
@@ -257,10 +264,10 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
                                      obj.mem_oc ? std::optional<int>(r.mem_mhz) : std::nullopt);
         if (id < 0) return finish_fail("could not write the journal");
         if (!set_state(r.power_pct, r.core_mhz, r.mem_mhz)) { journal.complete(id, "SET FAILED"); return finish_fail(stopped); }
-        log("soak: 60 s at power " + std::to_string(r.power_pct) + " %, core +" + std::to_string(r.core_mhz) +
+        log("soak: " + std::to_string(static_cast<int>(kSoakS)) + " s at power " + std::to_string(r.power_pct) + " %, core +" + std::to_string(r.core_mhz) +
             ", mem +" + std::to_string(r.mem_mhz));
         const auto s = probe(kSoakS, obj.max_temp_c);
-        if (!journal.complete(id, s ? verdict_name(s->verdict) : "NOT RUN"))
+        if (!journal.complete(id, closed_as(s)))
             return finish_fail("could not write the journal");
         if (!s) return finish_fail(stopped);
         log("soak: " + describe(*s));
