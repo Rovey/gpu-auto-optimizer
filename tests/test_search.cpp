@@ -550,6 +550,7 @@ TEST_CASE("a power probe stopped while it runs restores stock power") {
     CHECK(r.reason == "aborted");
     CHECK(run.card.power == 100);
     CHECK(run.card.max_core_seen == 0);
+    CHECK(run.card.journal.empty());
 }
 
 TEST_CASE("climb_to_edge climbs in strides, then refines on the step grid") {

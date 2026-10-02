@@ -166,3 +166,21 @@ TEST_CASE("a profile inside the built-in limits still applies when the card repo
     CHECK(card.core == 135);
     CHECK(card.mem == 1050);
 }
+
+TEST_CASE("a reported range below the built-in limits does not refuse a profile those limits allow") {
+    // The range comes from an undocumented buffer, verified on one card. A
+    // low reading must not turn every logon into a refused apply and a strike.
+    Card card;
+    card.ranges = ClockOffsetRanges{{-500, 150}, {-1000, 400}};
+    std::string why;
+    CHECK(apply_profile(card.gpu(), *with_profile("x").profile, &why));   // core +135, mem +1050
+    CHECK(card.core == 135);
+    CHECK(card.mem == 1050);
+
+    Card over;
+    over.ranges = ClockOffsetRanges{{-500, 150}, {-1000, 400}};
+    Profile p = *with_profile("x").profile;
+    p.core_mhz = 315;   // above both the reported and the built-in limit
+    CHECK_FALSE(apply_profile(over.gpu(), p, &why));
+    CHECK(over.writes == 0);
+}

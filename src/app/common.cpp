@@ -148,6 +148,12 @@ OptimizeOutcome run_optimize(Preset preset, const OptimizeHooks& hooks, const st
         log("warning: a previous run froze the machine at " + f + "; staying below it from now on");
     if (!gpu.set_power_limit) log("power limit: not adjustable on this card, skipped");
 
+    // A run lasts minutes with a candidate applied and a journal entry open;
+    // idle sleep must not interrupt it. The display may still turn off.
+    struct KeepAwake {
+        KeepAwake() { SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED); }
+        ~KeepAwake() { SetThreadExecutionState(ES_CONTINUOUS); }   // every exit
+    } keep_awake;
     OptimizeIo io;
     io.probe = [&](double seconds, int max_temp) {
         auto read = [&] {
