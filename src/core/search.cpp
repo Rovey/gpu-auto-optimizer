@@ -112,8 +112,11 @@ SearchBounds search_bounds(const GpuControl& gpu) {
 namespace {
 constexpr int kCoreStep = 15;
 constexpr int kMemStep = 50;
-constexpr int kCoreStride = 60;    // four core steps
-constexpr int kMemStride = 200;    // four memory steps
+// The strides equal the steps, so climb_to_edge never bisects: the first value
+// that fails is exactly one step above the last one that passed, and no value
+// is probed next to one that just failed or reset the driver.
+constexpr int kCoreStride = kCoreStep;
+constexpr int kMemStride = kMemStep;
 constexpr int kPowerStep = 5;
 constexpr double kBaselineS = 30, kPowerProbeS = 20, kClockProbeS = 3, kSoakS = 300;
 constexpr int kSafetyTempC = 85;
@@ -352,25 +355,15 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
     // lowers power), not a reason to throw the clock edge away.
     auto holds = [](std::optional<Verdict> v) { return v == Verdict::Stable || v == Verdict::TooHot; };
 
-    if (obj.core_oc) {
-        r.core_max_stable = climb_to_edge(0, bounds.core_max_mhz, kCoreStep, kCoreStride, journal.ceilings().core_mhz,
-                                          [&](int v) { return is_stable(clock_candidate(v, std::nullopt, v, 0, kClockProbeS)); });
-        if (!stopped.empty()) return finish_fail(stopped);
-        r.core_confirmed = confirm_edge(r.core_max_stable, 0, kCoreStep, kConfirmTries, [&](int v) {
-            return holds(clock_candidate(v, std::nullopt, v, 0, kConfirmProbeS));
-        });
-        if (!stopped.empty()) return finish_fail(stopped);
-        r.core_mhz = apply_margin(r.core_confirmed, kCoreStep, obj.perf_push);
-        log("core: highest stable +" + std::to_string(r.core_max_stable) + ", confirmed +" +
-            std::to_string(r.core_confirmed) + ", applying +" + std::to_string(r.core_mhz));
-    }
+    // Memory comes first, at core 0: the core climb is where a card is most
+    // likely to give out, and it must not keep the memory from being tuned.
     if (obj.mem_oc) {
         const int ceiling = journal.ceilings().mem_mhz;
         if (io.bandwidth) {
             r.mem_max_stable = best_bandwidth_offset(0, bounds.mem_max_mhz, kMemStep, ceiling, [&](int v) {
                 MemSample m;
                 std::optional<double> gbps;
-                m.stable = is_stable(clock_candidate(std::nullopt, v, r.core_mhz, v, kClockProbeS,
+                m.stable = is_stable(clock_candidate(std::nullopt, v, 0, v, kClockProbeS,
                                                      [&] { gbps = io.bandwidth(); }));
                 // A failed measurement (device lost) makes the step unusable,
                 // and the driver may have been reset under it.
@@ -388,18 +381,32 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
             });
         } else {
             r.mem_max_stable = climb_to_edge(0, bounds.mem_max_mhz, kMemStep, kMemStride, ceiling, [&](int v) {
-                return is_stable(clock_candidate(std::nullopt, v, r.core_mhz, v, kClockProbeS));
+                return is_stable(clock_candidate(std::nullopt, v, 0, v, kClockProbeS));
             });
         }
         if (!stopped.empty()) return finish_fail(stopped);
         r.mem_confirmed = confirm_edge(r.mem_max_stable, 0, kMemStep, kConfirmTries, [&](int v) {
-            return holds(clock_candidate(std::nullopt, v, r.core_mhz, v, kConfirmProbeS));
+            return holds(clock_candidate(std::nullopt, v, 0, v, kConfirmProbeS));
         });
         if (!stopped.empty()) return finish_fail(stopped);
         r.mem_mhz = apply_margin(r.mem_confirmed, kMemStep, obj.perf_push);
         log(std::string("mem: ") + (io.bandwidth ? "bandwidth peak +" : "highest stable +") +
             std::to_string(r.mem_max_stable) + ", confirmed +" + std::to_string(r.mem_confirmed) +
             ", applying +" + std::to_string(r.mem_mhz));
+    }
+    // The core comes second and runs with the chosen memory offset applied
+    // (0 when the profile does not tune memory).
+    if (obj.core_oc) {
+        r.core_max_stable = climb_to_edge(0, bounds.core_max_mhz, kCoreStep, kCoreStride, journal.ceilings().core_mhz,
+                                          [&](int v) { return is_stable(clock_candidate(v, std::nullopt, v, r.mem_mhz, kClockProbeS)); });
+        if (!stopped.empty()) return finish_fail(stopped);
+        r.core_confirmed = confirm_edge(r.core_max_stable, 0, kCoreStep, kConfirmTries, [&](int v) {
+            return holds(clock_candidate(v, std::nullopt, v, r.mem_mhz, kConfirmProbeS));
+        });
+        if (!stopped.empty()) return finish_fail(stopped);
+        r.core_mhz = apply_margin(r.core_confirmed, kCoreStep, obj.perf_push);
+        log("core: highest stable +" + std::to_string(r.core_max_stable) + ", confirmed +" +
+            std::to_string(r.core_confirmed) + ", applying +" + std::to_string(r.core_mhz));
     }
 
     // Soak. On failure: too hot -> one power step down (lower clocks barely

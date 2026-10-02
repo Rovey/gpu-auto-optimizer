@@ -50,7 +50,8 @@ int highest_stable(int lo, int hi, int step, int ceiling, const std::function<bo
 // reached, then bisects between the last passing and the first failing value
 // on the step grid. The first failing probe is at most one stride above the
 // highest stable value. No value is probed twice, lo is never probed, and
-// nothing above hi or at or above ceiling is.
+// nothing above hi or at or above ceiling is. With stride == step, as
+// optimize uses it, it climbs one step at a time and never bisects.
 int climb_to_edge(int lo, int hi, int step, int stride, int ceiling, const std::function<bool(int)>& is_stable);
 
 // Lowest value in hi, hi-step, ... (>= lo) for which passes holds, assuming
@@ -123,7 +124,7 @@ struct OptimizeResult {
     StabilityResult soak;
 };
 
-// The whole tuning run (spec §3): baseline, power, core, memory, soak. Leaves
+// The whole tuning run (spec §3): baseline, power, memory, core, soak. Leaves
 // the result applied when ok; any !ok return leaves the card at stock.
 OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& journal, const OptimizeIo& io);
 

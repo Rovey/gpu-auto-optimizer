@@ -104,6 +104,7 @@ struct FakeCard {
     std::string last_set_begin_ok;   // "" if every set had its begin line first
     std::optional<ClockOffsetRanges> ranges;   // what the card reports; empty = it reports nothing
     bool ranges_read_fails = false;            // the callback exists but returns nothing
+    std::vector<int> mem_during_core_probes;   // the memory offset applied at each probe with a core offset
 
     GpuControl gpu(bool with_power = true, std::pair<int, int> range = {50, 120}) {
         GpuControl g;
@@ -165,6 +166,7 @@ struct FakeCard {
         return [this](double seconds, int max_temp, double /*stall_below*/) {
             ++probes;
             if (seconds == 20) ++power_probes;
+            if (core != 0) mem_during_core_probes.push_back(mem);
             StabilityResult r;
             r.seconds = seconds;
             if (seconds == abort_in_probe_s) { r.verdict = Verdict::Aborted; return r; }
@@ -222,6 +224,19 @@ struct Run {
         return false;
     }
 };
+
+// The offsets of the journal's `begin` lines that carry `field` and not
+// `other`, in the order they were written.
+std::vector<int> begins_with_only(const FakeCard& card, const std::string& field, const std::string& other) {
+    std::vector<int> out;
+    const std::string key = "\"" + field + "\":";
+    for (const auto& l : card.journal) {
+        if (l.find("\"begin\"") == std::string::npos || l.find("\"" + other + "\":") != std::string::npos) continue;
+        const auto at = l.find(key);
+        if (at != std::string::npos) out.push_back(std::stoi(l.substr(at + key.size())));
+    }
+    return out;
+}
 
 // What every run with a reconnect must leave behind: no reconnect was made
 // inside an open journal entry, and no entry is left open.
@@ -329,11 +344,16 @@ TEST_CASE("four failed soaks give up and restore stock") {
 
 TEST_CASE("abort during the clock search restores stock") {
     Run run;
-    run.abort_after_probes = 6;   // baseline + ~3 power probes + into core
+    // Probe 25 is core +30 with memory +550 applied: baseline, 4 power, 17
+    // memory, the memory confirm, core +15, then this one.
+    run.abort_after_probes = 25;
     const auto r = run.go(Preset::BestOfMyGpu);
     CHECK_FALSE(r.ok);
     CHECK(r.reason == "aborted");
+    CHECK(run.card.probes == 25);
+    CHECK(run.logged("core +30 / mem +550: STABLE"));
     CHECK(run.card.core == 0);
+    CHECK(run.card.mem == 0);
     CHECK(run.card.power == 100);
 }
 
@@ -556,6 +576,7 @@ TEST_CASE("a journal entry that cannot be closed stops the run at stock") {
     CHECK_FALSE(r.ok);
     CHECK(r.reason.find("journal") != std::string::npos);
     CHECK(run.card.core == 0);
+    CHECK(run.card.mem == 0);     // the entry that fails to close is memory +150
     CHECK(run.card.power == 100);
 }
 
@@ -589,17 +610,20 @@ TEST_CASE("a soak stopped while it runs ends at stock and leaves no ceiling") {
 
 TEST_CASE("a clock probe stopped while it runs is closed as ABORTED, not left open") {
     Run run;
-    run.card.abort_in_probe_s = 3;   // the first core candidate
+    run.card.abort_in_probe_s = 3;   // the first clock candidate, memory +50
     const auto r = run.go(Preset::BestOfMyGpu);
     CHECK_FALSE(r.ok);
     CHECK(r.reason == "aborted");
     CHECK(run.card.core == 0);
+    CHECK(run.card.mem == 0);
     CHECK(run.card.power == 100);
     REQUIRE(run.card.journal.size() == 2);   // one begin, one complete
+    CHECK(begins_with_only(run.card, "mem", "core") == std::vector<int>{50});
     CHECK(run.card.journal.back().find("ABORTED") != std::string::npos);
     Journal reread(run.card.journal, [](const std::string&) { return true; });
     CHECK(reread.freezes().empty());
     CHECK(reread.ceilings().core_mhz == INT_MAX);
+    CHECK(reread.ceilings().mem_mhz == INT_MAX);
 }
 
 TEST_CASE("a baseline stopped while it runs ends before any clock is touched") {
@@ -682,7 +706,7 @@ TEST_CASE("the core search probes upward from stock, never from the middle of th
     const auto r = run.go(Preset::BestOfMyGpu);
     REQUIRE(r.ok);
     CHECK(r.core_max_stable == 150);
-    CHECK(run.card.max_core_seen == 180);   // one stride past the edge, not +225 or +300
+    CHECK(run.card.max_core_seen == 165);   // one step past the edge, not +225 or +300
 }
 
 TEST_CASE("plausible_range accepts a normal range and rejects each kind of nonsense") {
@@ -748,8 +772,8 @@ TEST_CASE("a card that holds more than the old cap is searched to its own edge")
     CHECK(r.core_mhz == 315);            // 70 % of 450
     CHECK(r.mem_max_stable == 2000);
     CHECK(r.mem_mhz == 1400);            // 70 % of 2000
-    CHECK(run.card.max_core_seen == 480);    // one stride past the edge
-    CHECK(run.card.max_mem_seen == 2200);
+    CHECK(run.card.max_core_seen == 465);    // one step past the edge
+    CHECK(run.card.max_mem_seen == 2050);
     bool told = false;
     for (const auto& m : run.log) told |= m.find("core range: up to +1000 MHz (reported by the card)") != std::string::npos;
     CHECK(told);
@@ -822,9 +846,11 @@ TEST_CASE("a driver reset at the edge is survived: the search reconnects and car
     const auto r = run.go(Preset::BestOfMyGpu);
     REQUIRE(r.ok);
     CHECK(r.core_max_stable == 120);
-    // One reconnect per lost candidate, before the next one: +180, +150 and
-    // +135 are lost; the confirm at +120 and everything after it pass.
-    CHECK(run.card.recover_calls == 3);
+    // One reconnect per lost candidate, before the next one: +135 is lost and
+    // ends the climb; the confirm at +120 and everything after it pass.
+    CHECK(run.card.recover_calls == 1);
+    CHECK(run.logged("core +135 / mem +550: DEVICE LOST"));
+    CHECK(run.card.max_core_seen == 135);   // nothing above the lost candidate was tried
     CHECK_FALSE(run.card.stale);
     CHECK(run.card.core == r.core_mhz);   // the result is really applied
     check_reconnected_up_front(run);
@@ -873,9 +899,14 @@ TEST_CASE("one probe without telemetry is a failed candidate; two in a row end t
     once.card.blind_probes = 1;
     const auto a = once.go(Preset::BestOfMyGpu);
     REQUIRE(a.ok);
-    // The blind probe is the first 3 s one, core +60: it counts as the first
-    // failure, so the search bisects below it (+30, +45 pass) and ends at +45.
-    CHECK(a.core_max_stable == 45);
+    // The blind probe is the first 3 s one, memory +50: it counts as the first
+    // failure, so the memory climb ends at stock. The core search runs after
+    // the reconnect and finds its edge.
+    CHECK(once.logged("core +0 / mem +50: NO TELEMETRY"));
+    CHECK(a.mem_max_stable == 0);
+    CHECK(a.mem_mhz == 0);
+    CHECK(once.card.max_mem_seen == 50);
+    CHECK(a.core_max_stable == 150);
     CHECK(once.card.recover_calls == 1);
     CHECK(once.logged("no telemetry during this probe; counted as failed"));
     check_journal_rules(once);
@@ -929,16 +960,18 @@ TEST_CASE("a write that keeps failing still stops the run at stock") {
 }
 
 TEST_CASE("a run stopped while the card is stale reconnects before it resets to stock") {
-    // Probe 8 is core +180, the first lost candidate; the stop request is
-    // seen before the next candidate, with the old connections still dead.
+    // Probe 32 is core +135, the lost candidate (23 probes up to the memory
+    // confirm, then core +15 .. +120); the stop request is seen before the
+    // next candidate, with the old connections still dead.
     Run run;
     run.card.with_recover = true;
     run.card.lost_core_from = 135;
-    run.abort_after_probes = 8;
+    run.abort_after_probes = 32;
     const auto r = run.go(Preset::BestOfMyGpu);
     CHECK_FALSE(r.ok);
     CHECK(r.reason == "aborted");
-    CHECK(run.card.probes == 8);
+    CHECK(run.card.probes == 32);
+    CHECK(run.logged("core +135 / mem +550: DEVICE LOST"));
     CHECK(r.stock_restored);
     CHECK(run.card.core == 0);
     CHECK(run.card.mem == 0);
@@ -949,14 +982,13 @@ TEST_CASE("a run stopped while the card is stale reconnects before it resets to 
 }
 
 // The probes of a default best-preset run, in order: 1 baseline; 2-5 power
-// (85, 105, 115, 120 %); 6-10 core (+60, +120, +180, +150, +165); 11 core
-// confirm (+150); 12-18 memory (+200, +400, +600, +800, +1000, +900, +850);
-// 19 memory confirm (+800); 20 soak.
+// (85, 105, 115, 120 %); 6-22 memory (+50, +100, ... +850); 23 memory confirm
+// (+800); 24-34 core (+15, +30, ... +165); 35 core confirm (+150); 36 soak.
 TEST_CASE("the probe order the driver-reset tests rely on") {
     Run run;
     const auto r = run.go(Preset::BestOfMyGpu);
     REQUIRE(r.ok);
-    CHECK(run.card.probes == 20);
+    CHECK(run.card.probes == 36);
 }
 
 TEST_CASE("a driver reset during the baseline ends the run at stock") {
@@ -1000,8 +1032,10 @@ TEST_CASE("a driver reset during a memory candidate is survived") {
     run.card.lost_at_probe = 13;   // memory +400
     const auto r = run.go(Preset::BestOfMyGpu);
     REQUIRE(r.ok);
-    CHECK(run.logged("core +105 / mem +400: DEVICE LOST"));
-    // +400 counts as the first failure; +300 and +350 pass after the reconnect.
+    CHECK(run.logged("core +0 / mem +400: DEVICE LOST"));
+    // +400 counts as the first failure and ends the climb: +350, the step
+    // below it, had already passed. Its confirm runs after the reconnect.
+    CHECK(begins_with_only(run.card, "mem", "core") == std::vector<int>{50, 100, 150, 200, 250, 300, 350, 400, 350});
     CHECK(r.mem_max_stable == 350);
     CHECK(r.mem_confirmed == 350);
     CHECK(r.mem_mhz == 200);       // 70 % of 350, rounded down to a step
@@ -1017,14 +1051,15 @@ TEST_CASE("a driver reset during a memory candidate is survived") {
 TEST_CASE("a driver reset during a confirm probe is survived") {
     Run run;
     run.card.with_recover = true;
-    run.card.lost_at_probe = 11;   // the 30 s confirm of core +150
+    run.card.lost_at_probe = 35;   // the 30 s confirm of core +150
     const auto r = run.go(Preset::BestOfMyGpu);
     REQUIRE(r.ok);
-    CHECK(run.logged("confirm core +150 / mem +0: DEVICE LOST"));
+    CHECK(run.logged("confirm core +150 / mem +550: DEVICE LOST"));
     CHECK(r.core_max_stable == 150);
     CHECK(r.core_confirmed == 135);   // the next confirm, after the reconnect, holds
     CHECK(r.core_mhz == 90);
     CHECK(run.card.core == 90);
+    CHECK(run.card.mem == 550);    // the full state was rewritten after the reset
     CHECK(run.card.recover_calls == 1);
     CHECK_FALSE(run.card.stale);
     check_reconnected_up_front(run);
@@ -1034,11 +1069,11 @@ TEST_CASE("a driver reset during a confirm probe is survived") {
 TEST_CASE("a driver reset during the soak is survived: clocks step down and the next soak passes") {
     Run run;
     run.card.with_recover = true;
-    run.card.lost_at_probe = 20;   // the first soak
+    run.card.lost_at_probe = 36;   // the first soak
     const auto r = run.go(Preset::BestOfMyGpu);
     REQUIRE(r.ok);
     CHECK(run.logged("soak: DEVICE LOST"));
-    CHECK(run.card.probes == 21);
+    CHECK(run.card.probes == 37);
     CHECK(r.soak.seconds == 300);
     CHECK(r.core_mhz == 90);
     CHECK(r.mem_mhz == 500);
@@ -1063,7 +1098,7 @@ TEST_CASE("a bandwidth measurement that loses the device is followed by a reconn
     CHECK(r.mem_mhz == 0);
     CHECK(run.card.core == r.core_mhz);
     CHECK(run.card.recover_calls == 1);
-    CHECK(run.card.count("SET FAILED") == 0);   // reconnected before the soak's entry, not after a failed write in it
+    CHECK(run.card.count("SET FAILED") == 0);   // reconnected before the first core candidate's entry, not after a failed write in it
     CHECK(run.logged("the driver was reset; reconnecting"));
     check_journal_rules(run);
 }
@@ -1128,4 +1163,92 @@ TEST_CASE("a start that cannot reset to stock even after a reconnect says so") {
     CHECK(stuck.logged("reset FAILED"));
     CHECK(stuck.card.recover_calls == 1);
     CHECK(stuck.card.probes == 0);
+}
+
+TEST_CASE("memory is searched before the core") {
+    Run run;
+    run.card.bw_curve = [](int m) { return 500 + m * 0.3; };
+    const auto r = run.go(Preset::BestOfMyGpu);
+    REQUIRE(r.ok);
+    int mem_begins = 0, core_begins = 0, mem_after_core = 0;
+    for (const auto& l : run.card.journal) {
+        if (l.find("\"begin\"") == std::string::npos) continue;
+        const bool has_core = l.find("\"core\":") != std::string::npos;
+        const bool has_mem = l.find("\"mem\":") != std::string::npos;
+        if (has_core && !has_mem) ++core_begins;
+        if (has_mem && !has_core) {
+            ++mem_begins;
+            if (core_begins > 0) ++mem_after_core;
+        }
+    }
+    CHECK(mem_begins > 0);
+    CHECK(core_begins > 0);
+    CHECK(mem_after_core == 0);
+}
+
+TEST_CASE("the core climb runs with the chosen memory applied") {
+    Run run;
+    const auto r = run.go(Preset::BestOfMyGpu);
+    REQUIRE(r.ok);
+    CHECK(r.mem_mhz == 550);
+    // 11 core candidates, the core confirm probe and the soak.
+    CHECK(run.card.mem_during_core_probes.size() == 13);
+    for (int mem : run.card.mem_during_core_probes) CHECK(mem == r.mem_mhz);
+}
+
+TEST_CASE("the core climb advances one step at a time") {
+    Run run;
+    run.card.core_edge = 150;
+    const auto r = run.go(Preset::BestOfMyGpu);
+    REQUIRE(r.ok);
+    // The climb, then the one 30 s confirm probe at the edge.
+    CHECK(begins_with_only(run.card, "core", "mem") ==
+          std::vector<int>{15, 30, 45, 60, 75, 90, 105, 120, 135, 150, 165, 150});
+    CHECK(r.core_max_stable == 150);
+    CHECK(run.card.max_core_seen == 165);
+}
+
+TEST_CASE("the stability-only memory climb advances one step at a time") {
+    Run run;   // no bw_curve: no bandwidth measurement
+    const auto r = run.go(Preset::BestOfMyGpu);
+    REQUIRE(r.ok);
+    // The climb, then the one 30 s confirm probe at the edge.
+    CHECK(begins_with_only(run.card, "mem", "core") ==
+          std::vector<int>{50, 100, 150, 200, 250, 300, 350, 400, 450, 500, 550, 600, 650, 700, 750, 800, 850, 800});
+    CHECK(r.mem_max_stable == 800);
+    CHECK(run.card.max_mem_seen == 850);
+}
+
+TEST_CASE("every profile gives today's result on a card with no reset") {
+    struct Want { Preset preset; int power, core, mem; };
+    const Want wants[] = {{Preset::BestOfMyGpu, 115, 105, 550}, {Preset::Quiet, 90, 60, 300},
+                          {Preset::MaxPerformance, 120, 135, 750}, {Preset::CoolAndEfficient, 85, 0, 0}};
+    for (const auto& w : wants) {
+        Run run;
+        const auto r = run.go(w.preset);
+        REQUIRE(r.ok);
+        CHECK(r.power_pct == w.power);
+        CHECK(r.core_mhz == w.core);
+        CHECK(r.mem_mhz == w.mem);
+        CHECK(run.card.power == w.power);
+        CHECK(run.card.core == w.core);
+        CHECK(run.card.mem == w.mem);
+    }
+}
+
+TEST_CASE("a profile without core tuning and a card without power control still run") {
+    Run cool;
+    const auto a = cool.go(Preset::CoolAndEfficient);
+    REQUIRE(a.ok);
+    CHECK(cool.card.max_core_seen == 0);
+    CHECK(cool.card.max_mem_seen == 0);
+    CHECK(cool.card.journal.empty() == false);   // the soak is journaled
+
+    Run fixed;
+    const auto b = fixed.go(Preset::BestOfMyGpu, fixed.card.gpu(/*with_power=*/false));
+    REQUIRE(b.ok);
+    CHECK(fixed.card.power_probes == 0);
+    CHECK(b.power_pct == 100);
+    CHECK(b.core_mhz == 105);
+    CHECK(b.mem_mhz == 550);
 }
