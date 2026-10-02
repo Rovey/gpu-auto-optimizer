@@ -137,16 +137,28 @@ OptimizeOutcome run_optimize(Preset preset, const OptimizeHooks& hooks, const st
     FanDriver fans(gpu, curve, objectives_for(preset).max_temp_c, fan_min_for(load_config(), hw.GpuUuid(), gpu.fan_min_pct));
     struct FanRelease {
         FanDriver& f;
+        const GuardedGpu& hw;
         const GpuControl& gpu;
+        const OptimizeHooks& hooks;
         ~FanRelease() {   // every exit: done, aborted, failed or thrown
             f.release();
-            // A fan driver that failed handed the fans back at that moment and
-            // release() does not try again; if that hand-back never reached the
-            // driver (no connection), the fans may still be at a manual speed.
-            // One more attempt: hand back only, never a speed.
-            if (f.state().mode == FanMode::Failed && gpu.set_fan_auto) gpu.set_fan_auto();
+            // A hand-back that did not reach the driver, from a fan driver
+            // that failed earlier or from the release() above, is remembered
+            // by `hw`; the fans may still be at a manual speed. One more
+            // attempt, and only then: a hand-back that was delivered is not
+            // repeated, it would take the fans from another program that set
+            // them since. Hand back only, never a speed.
+            if (hw.FanAutoOwed() && gpu.set_fan_auto) gpu.set_fan_auto();
+            if (!hw.FanAutoOwed()) return;
+            // No reconnect at exit, so nothing will deliver it any more. A
+            // destructor must not throw; the line is lost if it cannot be built.
+            try {
+                if (hooks.log)
+                    hooks.log("fans: could not be handed back to the driver; they may still be at a manual speed -- run `gao --fan auto`");
+            } catch (...) {
+            }
         }
-    } fan_release{fans, gpu};
+    } fan_release{fans, hw, gpu, hooks};
     if (!gpu.set_fan_pct) log("fans: not controllable on this card; the driver keeps them");
 
     const auto path = journal_path();
@@ -205,6 +217,15 @@ OptimizeOutcome run_optimize(Preset preset, const OptimizeHooks& hooks, const st
         // An access violation somewhere in the search: in a driver DLL, in the
         // stress load's D3D calls or in our own code. A candidate may still be
         // applied and its journal entry open.
+        //
+        // Leaked on purpose, and before anything that can throw, so that no
+        // exception from the steps below destroys it on the way out. The
+        // fault skipped the frames of the search, so a D3D call of the stress
+        // load may have been abandoned halfway; its destructor would release
+        // COM objects into that same user-mode driver and could fault outside
+        // any guard, or hang. The process is about to report the failure; the
+        // device goes with the process.
+        (void)load.release();
         bool stock = false;
         {
             // The emergency handler stays registered until the card and the
@@ -234,12 +255,6 @@ OptimizeOutcome run_optimize(Preset preset, const OptimizeHooks& hooks, const st
             log(std::string("the search ended in an access violation -- ") +
                 (stock ? "card restored to stock" : "reset FAILED, run `gao --reset`"));
         }
-        // Leaked on purpose. The fault skipped the frames of the search, so a
-        // D3D call of the stress load may have been abandoned halfway; its
-        // destructor would release COM objects into that same user-mode
-        // driver and could fault outside any guard, or hang. The process is
-        // about to report the failure; the device goes with the process.
-        (void)load.release();
         out.ran = true;
         out.result.ok = false;
         out.result.stock_restored = stock;

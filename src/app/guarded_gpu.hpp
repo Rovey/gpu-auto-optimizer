@@ -51,6 +51,10 @@ public:
     // From the current NVML instance, guarded; empty when it cannot be read.
     std::string GpuUuid();
     std::string DriverVersion();
+    // True while a set_fan_auto is remembered as not delivered: the fans may
+    // still be at a manual speed. No driver call. Takes the lock, so not for
+    // use from inside a callback of control().
+    bool FanAutoOwed() const;
 
 private:
     bool Connect(std::string* why);
@@ -63,7 +67,7 @@ private:
     const unsigned gpu_;
     // One driver call at a time, and never one while the libraries are being
     // replaced: an emergency handler calls control() from another thread.
-    std::mutex mutex_;
+    mutable std::mutex mutex_;
     std::unique_ptr<Nvml> nvml_;     // never null; not initialised while disconnected
     std::unique_ptr<Nvapi> nvapi_;   // never null; not initialised while disconnected
     bool live_ = false;              // both initialised and no call has faulted since

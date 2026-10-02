@@ -204,6 +204,13 @@ bool GuardedGpu::Recover() {
     return false;
 }
 
+// Only reads the flag under the lock: no driver call, no guard, and nothing
+// else is called while the lock is held.
+bool GuardedGpu::FanAutoOwed() const {
+    const std::lock_guard<std::mutex> lock(mutex_);
+    return fan_auto_owed_;
+}
+
 std::string GuardedGpu::GpuUuid() {
     return Call(std::string(), [this] { return nvml_->GpuUuid(gpu_); });
 }
