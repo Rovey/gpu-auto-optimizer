@@ -20,7 +20,7 @@
 
 ## What it does
 
-GPU Auto Optimizer tunes the **power limit** and the **core and memory clock offsets** of an NVIDIA card. It stress-tests every candidate setting and keeps the highest one that computes correct results, then backs off by a safety margin. You pick a goal and press one button; a run takes about ten minutes.
+GPU Auto Optimizer tunes the **power limit** and the **core and memory clock offsets** of an NVIDIA card. It stress-tests every candidate setting and keeps the highest one that computes correct results, then backs off by a safety margin. You pick a goal and press one button; a run takes about a quarter of an hour.
 
 - **Four profiles:** Best of my GPU, Cool & efficient, Quiet and Max performance.
 - **Verified, not trusted:** every value written to the driver is read back and checked, and a failed apply ends at stock.
@@ -70,11 +70,9 @@ The safety margin: the search finds the highest stable offset and applies a frac
 ```mermaid
 flowchart LR
     A[Baseline<br/>30 s at stock] --> B[Power limit]
-    B --> C[Memory offset<br/>bandwidth peak]
-    C --> D[Core offset<br/>climb from stock]
-    D --> E[Confirm edges<br/>30 s probes]
-    E --> F[Safety margin]
-    F --> G[Soak<br/>300 s]
+    B --> C[Memory offset<br/>bandwidth peak, confirmed,<br/>safety margin]
+    C --> D[Core offset<br/>single steps, confirmed,<br/>safety margin]
+    D --> G[Soak<br/>300 s]
     G --> H[Save profile]
 ```
 
@@ -82,7 +80,7 @@ flowchart LR
 - **Memory comes first and stops at the bandwidth peak,** not at the first error. GDDR6 and GDDR6X retry failed transfers, so an overclocked memory bus loses speed long before it returns a wrong result. The search raises the offset 50 MHz at a time, measures bandwidth at each step and keeps the lowest offset within 1 % of the best. Where bandwidth cannot be measured, it climbs until a probe fails instead.
 - **The core search climbs from stock.** With the chosen memory offset applied, it raises the core offset 15 MHz at a time until a probe fails, and keeps the last value that passed. How far it may go comes from the range the driver reports for your card, so a card that can hold more is not stopped at a fixed limit.
 - **Each edge is confirmed.** The value a search ends on gets a 30 s probe, and a lower value is tried if it does not hold. The safety margin is applied to the confirmed value, and the result as a whole must pass the 300 s soak.
-- **A driver reset ends the exploring.** On a card the search can push past its edge, a run resets the driver once: the screen goes black for a moment. The run then reconnects to the driver, sets the card to stock, leaves it without load for 20 seconds and checks with a short probe at stock that it computes normally again. After that it tries no new values: it keeps the last value that passed, confirms four steps below it, and goes on to the soak; if the reset came during the memory search, the core is left at stock for that run. A second reset ends the run at stock with nothing saved, and so does a card that does not come back.
+- **A driver reset ends the exploring.** On a card the search can push past its edge, a run resets the driver once: the screen goes black for a moment. The run then reconnects to the driver, sets the card to stock, leaves it without load for 20 seconds and checks with a short probe at stock that it computes normally again. After that it tries no new values: it keeps the last value that passed, confirms four steps below it, and goes on to the soak; if the reset came during the memory search, the core is left at stock for that run. A second reset ends the run at stock with nothing saved, and so does a card that does not come back. This handling is implemented and unit-tested, but it has not yet been run on a real card ([docs/hardware-checks.md](docs/hardware-checks.md), checks 51 and 52).
 - **Crash journal.** Before a candidate touches the hardware, a `begin` line is flushed to disk. If the machine freezes, the unmatched `begin` becomes a ceiling the next run stays below.
 - **Apply at logon.** A scheduled task starts the app in the tray at logon, which applies the saved profile. It refuses when the driver version or the card changed since tuning, and it stops after three logons in a row that crashed within two minutes.
 - **Tune watchdog.** Every 30 seconds the tray app reads back what the driver reports. It re-applies after a reset, gives up if the tune is reset four times in an hour (a sign it is not stable), and backs off when another program changed the settings.
@@ -130,7 +128,7 @@ During a search, the crash journal makes sure that setting is never tried again,
 
 Yes. The edge of a card is found by crossing it. A probe that computes a wrong value ends in `WRONG RESULT`, and the search keeps the last value that passed. A probe that ends in `DEVICE LOST`, `STALLED` or `NO TELEMETRY` is treated as a driver reset.
 
-A run may reset the driver once: the screen goes black for a moment. The run then reconnects, sets the card to stock, rests for 20 seconds, checks that the card computes normally again, and stops exploring: it tries no new values, and confirms and soaks a little below the last value that passed. A second reset ends the run at stock with nothing saved, and so does a card that does not come back after the first. Nothing about a reset is remembered, so the next run on such a card crosses the edge again.
+A run may reset the driver once: the screen goes black for a moment. The run then reconnects, sets the card to stock, rests for 20 seconds, checks that the card computes normally again, and stops exploring: it tries no new values, and confirms and soaks a little below the last value that passed. A second reset ends the run at stock with nothing saved, and so does a card that does not come back after the first. Nothing about a reset is remembered, so the next run on such a card crosses the edge again. This handling is implemented and unit-tested, but it has not yet been run on a real card ([docs/hardware-checks.md](docs/hardware-checks.md), checks 51 and 52).
 
 A driver reset also reaches the other programs on the desktop. In a test during development, with an earlier build that put the load back on the card right after a forced reset, no application window could be opened or seen afterwards and one application crashed; the user had to sign out and in. The rest after a reset was added since; whether it prevents this has not been tested. Save your work before a run.
 
