@@ -181,7 +181,7 @@ OptimizeOutcome run_optimize(Preset preset, const OptimizeHooks& hooks, const st
         ~KeepAwake() { SetThreadExecutionState(ES_CONTINUOUS); }   // every exit
     } keep_awake;
     OptimizeIo io;
-    io.probe = [&](double seconds, int max_temp) {
+    io.probe = [&](double seconds, int max_temp, double stall_below) {
         auto read = [&] {
             const Telemetry t = gpu.read();
             const FanMode before = fans.state().mode;
@@ -190,7 +190,8 @@ OptimizeOutcome run_optimize(Preset preset, const OptimizeHooks& hooks, const st
             if (now.mode != before && now.mode == FanMode::Foreign) log("fans: another program set them; leaving them alone");
             return t;
         };
-        return run_stability([&] { return load->Batch(); }, read, seconds, max_temp, hooks.aborted);
+        return run_stability([&] { return load->Batch(); }, read, seconds, max_temp, hooks.aborted,
+                             stall_below);
     };
     io.aborted = hooks.aborted;
     io.log = hooks.log;

@@ -162,7 +162,7 @@ struct FakeCard {
         return n;
     }
     Probe probe() {
-        return [this](double seconds, int max_temp) {
+        return [this](double seconds, int max_temp, double /*stall_below*/) {
             ++probes;
             if (seconds == 20) ++power_probes;
             StabilityResult r;

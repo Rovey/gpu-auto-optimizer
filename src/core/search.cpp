@@ -222,7 +222,8 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
     auto probe = [&](double seconds, int max_temp) -> std::optional<StabilityResult> {
         if (!stopped.empty()) return std::nullopt;
         if (io.aborted && io.aborted()) { stopped = "aborted"; return std::nullopt; }
-        StabilityResult s = io.probe(seconds, max_temp);
+        // A card that stops computing ends the probe itself, so a long soak never loads a dead card.
+        StabilityResult s = io.probe(seconds, max_temp, r.baseline.score > 0 ? kStalledScore * r.baseline.score : 0.0);
         if (s.verdict == Verdict::Aborted) { stopped = "aborted"; return std::nullopt; }
         // r.baseline.score is 0 until the baseline itself has been judged.
         if (s.verdict == Verdict::Stable && r.baseline.score > 0 && s.score < kStalledScore * r.baseline.score)

@@ -1,5 +1,6 @@
 #include "core/stability.hpp"
 #include <algorithm>
+#include <deque>
 
 namespace gao {
 
@@ -18,10 +19,15 @@ struct Avg {
 StabilityResult run_stability(const std::function<StressBatch()>& batch,
                               const std::function<Telemetry()>& read,
                               double seconds, int max_temp_c,
-                              const std::function<bool()>& should_stop) {
+                              const std::function<bool()>& should_stop,
+                              double stall_below) {
     StabilityResult r;
     long long iterations = 0;
     Avg power, core, mem;
+    struct Recent { long long iterations; double seconds; };
+    std::deque<Recent> recent;   // the batches covering the last kStallWindowS
+    long long recent_its = 0;
+    double recent_s = 0;
     do {
         const StressBatch b = batch();
         // A batch that claims no time would never advance the loop; count it
@@ -39,6 +45,19 @@ StabilityResult run_stability(const std::function<StressBatch()>& batch,
         core.add(t.core_mhz, batch_s);
         mem.add(t.mem_mhz, batch_s);
         if (t.temp_c > max_temp_c) { r.verdict = Verdict::TooHot; break; }
+        recent.push_back({b.iterations, batch_s});
+        recent_its += b.iterations;
+        recent_s += batch_s;
+        while (recent.size() > 1 && recent_s - recent.front().seconds >= kStallWindowS) {
+            recent_its -= recent.front().iterations;
+            recent_s -= recent.front().seconds;
+            recent.pop_front();
+        }
+        if (stall_below > 0 && recent_s >= kStallWindowS &&
+            static_cast<double>(recent_its) / recent_s < stall_below) {
+            r.verdict = Verdict::Stalled;
+            break;
+        }
         if (should_stop && should_stop()) { r.verdict = Verdict::Aborted; break; }
     } while (r.seconds < seconds);
     r.score = static_cast<double>(iterations) / r.seconds;

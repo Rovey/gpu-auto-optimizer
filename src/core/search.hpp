@@ -97,7 +97,7 @@ int best_bandwidth_offset(int lo, int hi, int step, int ceiling, const std::func
 int confirm_edge(int edge, int lo, int step, int tries, const std::function<bool(int)>& holds);
 
 // One stress run: seconds of load, aborting above max_temp_c.
-using Probe = std::function<StabilityResult(double seconds, int max_temp_c)>;
+using Probe = std::function<StabilityResult(double seconds, int max_temp_c, double stall_below)>;
 
 struct OptimizeIo {
     Probe probe;
