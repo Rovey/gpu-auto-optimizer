@@ -155,6 +155,7 @@ static int stress(int seconds, int max_temp_c, gao::StressSelftest selftest) {
         case gao::Verdict::DeviceLost: return 2;
         case gao::Verdict::TooHot:
         case gao::Verdict::NoTelemetry: return 3;
+        case gao::Verdict::Aborted: return 1;
     }
     return 1;
 }

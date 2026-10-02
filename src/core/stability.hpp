@@ -12,7 +12,7 @@ struct StressBatch {
     double elapsed_ms = 0;
 };
 
-enum class Verdict { Stable, WrongResult, DeviceLost, TooHot, NoTelemetry };
+enum class Verdict { Stable, WrongResult, DeviceLost, TooHot, NoTelemetry, Aborted };
 
 struct StabilityResult {
     Verdict verdict = Verdict::Stable;
@@ -26,11 +26,15 @@ struct StabilityResult {
 
 // Runs batches until `seconds` of batch time are covered or something fails,
 // whichever comes first. Always runs at least one batch. Stops at the first
-// of: lost device, wrong value, missing telemetry, temp_c > max_temp_c.
+// of: lost device, wrong value, missing telemetry, temp_c > max_temp_c, or
+// should_stop() returning true. should_stop is asked once per batch (~250 ms)
+// after that batch was judged, so a real failure is never reported as
+// Aborted. Aborted is neither a pass nor a failure of the settings.
 // Time is the sum of batch elapsed_ms, not the wall clock, so tests are exact.
 StabilityResult run_stability(const std::function<StressBatch()>& batch,
                               const std::function<Telemetry()>& read,
-                              double seconds, int max_temp_c);
+                              double seconds, int max_temp_c,
+                              const std::function<bool()>& should_stop = {});
 
 const char* verdict_name(Verdict v);
 

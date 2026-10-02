@@ -17,7 +17,8 @@ struct Avg {
 
 StabilityResult run_stability(const std::function<StressBatch()>& batch,
                               const std::function<Telemetry()>& read,
-                              double seconds, int max_temp_c) {
+                              double seconds, int max_temp_c,
+                              const std::function<bool()>& should_stop) {
     StabilityResult r;
     long long iterations = 0;
     Avg power, core, mem;
@@ -38,6 +39,7 @@ StabilityResult run_stability(const std::function<StressBatch()>& batch,
         core.add(t.core_mhz, batch_s);
         mem.add(t.mem_mhz, batch_s);
         if (t.temp_c > max_temp_c) { r.verdict = Verdict::TooHot; break; }
+        if (should_stop && should_stop()) { r.verdict = Verdict::Aborted; break; }
     } while (r.seconds < seconds);
     r.score = static_cast<double>(iterations) / r.seconds;
     r.avg_power_w = power.get();
@@ -53,6 +55,7 @@ const char* verdict_name(Verdict v) {
         case Verdict::DeviceLost: return "DEVICE LOST";
         case Verdict::TooHot: return "TOO HOT";
         case Verdict::NoTelemetry: return "NO TELEMETRY";
+        case Verdict::Aborted: return "ABORTED";
     }
     return "UNKNOWN";
 }

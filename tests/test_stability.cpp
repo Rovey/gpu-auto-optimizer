@@ -113,4 +113,30 @@ TEST_CASE("every verdict has a name") {
     CHECK(std::string(verdict_name(Verdict::DeviceLost)) == "DEVICE LOST");
     CHECK(std::string(verdict_name(Verdict::TooHot)) == "TOO HOT");
     CHECK(std::string(verdict_name(Verdict::NoTelemetry)) == "NO TELEMETRY");
+    CHECK(std::string(verdict_name(Verdict::Aborted)) == "ABORTED");
+}
+
+TEST_CASE("a stop request ends the run after the batch it arrives in") {
+    int calls = 0;
+    const auto r = run_stability([&] { ++calls; return good(); }, [] { return tel(60); }, 300.0, 85,
+                                 [&] { return calls >= 3; });
+    CHECK(r.verdict == Verdict::Aborted);
+    CHECK(calls == 3);
+    CHECK(r.seconds == doctest::Approx(0.75));
+}
+
+TEST_CASE("a failure in the same batch wins over a stop request") {
+    const auto wrong = run_stability([] { return StressBatch{100, 1, false, 250}; }, [] { return tel(60); },
+                                     300.0, 85, [] { return true; });
+    CHECK(wrong.verdict == Verdict::WrongResult);
+    const auto hot = run_stability([] { return good(); }, [] { return tel(90); }, 300.0, 85, [] { return true; });
+    CHECK(hot.verdict == Verdict::TooHot);
+}
+
+TEST_CASE("a stop callback that never fires changes nothing") {
+    int calls = 0;
+    const auto r = run_stability([&] { ++calls; return good(); }, [] { return tel(60); }, 3.0, 85,
+                                 [] { return false; });
+    CHECK(r.verdict == Verdict::Stable);
+    CHECK(calls == 12);
 }
