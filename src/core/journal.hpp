@@ -28,6 +28,8 @@ public:
     // Human-readable description of each unfinished candidate, in file order.
     const std::vector<std::string>& freezes() const { return freezes_; }
     int next_id() const { return next_id_; }
+    // The entry begin() opened and complete() has not closed; -1 when none.
+    int open_id() const { return open_id_; }
 
     // Returns the entry id, or -1 when the line could not be written -- in
     // which case the caller must not touch the hardware.
@@ -45,6 +47,7 @@ private:
     Ceilings ceilings_;
     std::vector<std::string> freezes_;
     int next_id_ = 1;
+    int open_id_ = -1;
 };
 
 }

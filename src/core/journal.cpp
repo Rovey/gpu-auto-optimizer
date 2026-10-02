@@ -68,12 +68,15 @@ int Journal::begin(std::optional<int> core, std::optional<int> mem) {
     if (core) j["core"] = *core;
     if (mem) j["mem"] = *mem;
     if (!write(j.dump())) return -1;
+    open_id_ = next_id_;
     return next_id_++;
 }
 
 bool Journal::complete(int id, const std::string& verdict) {
     const nlohmann::json j = {{"id", id}, {"state", "complete"}, {"verdict", verdict}};
-    return write(j.dump());
+    if (!write(j.dump())) return false;
+    if (id == open_id_) open_id_ = -1;
+    return true;
 }
 
 bool Journal::write(const std::string& line) {

@@ -12,6 +12,7 @@
 #include <wrl/client.h>
 
 #include "app/common.hpp"
+#include "app/guarded_gpu.hpp"
 #include "app/gui/ui.hpp"
 #include "app/gui/worker.hpp"
 #include "core/boot.hpp"
@@ -38,6 +39,7 @@
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND, UINT, WPARAM, LPARAM);
 
 using Microsoft::WRL::ComPtr;
+using gao::app::guarded;
 using gao::app::kGpu;
 
 namespace {
@@ -414,7 +416,8 @@ void render() {
 // A driver reset (TDR) can leave NVML and NVAPI state in this long-running
 // process stale, and a call during the reset has faulted inside nvml.dll
 // (hardware check 33). The tray exists to survive exactly that: its periodic
-// hardware work runs guarded, and after a reset the libraries are re-created.
+// hardware work runs guarded (app/guarded_gpu.hpp), and after a reset the
+// libraries are re-created.
 
 void init_hw() {
     g.nvml = std::make_unique<gao::Nvml>();
@@ -422,22 +425,6 @@ void init_hw() {
     g.nvml_ok = g.nvml->Init();
     g.nvapi_ok = g.nvapi->Init();
     g.gpu = g.nvml_ok && g.nvapi_ok ? gao::make_gpu_control(*g.nvml, *g.nvapi, kGpu) : gao::GpuControl{};
-}
-
-// Structured exceptions, not C++ ones: an access violation inside a driver DLL.
-// A function with __try may not hold destructible objects, hence the function
-// pointer. Objects in the frames it skips are not destroyed (/EHsc); that leak
-// is the price of keeping the watchdog alive.
-bool guarded(void (*fn)(void*), void* ctx) {
-    __try {
-        fn(ctx);
-        return true;
-    } __except (GetExceptionCode() == EXCEPTION_ACCESS_VIOLATION ? EXCEPTION_EXECUTE_HANDLER : EXCEPTION_CONTINUE_SEARCH) {
-        return false;
-    }
-}
-template <class F> bool guarded(F f) {
-    return guarded([](void* p) { (*static_cast<F*>(p))(); }, &f);
 }
 
 // Stop using the libraries and re-create them a few seconds from now, when

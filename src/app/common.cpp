@@ -1,4 +1,5 @@
 #include "app/common.hpp"
+#include "app/guarded_gpu.hpp"
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
@@ -118,17 +119,19 @@ OptimizeOutcome run_optimize(Preset preset, const OptimizeHooks& hooks, const st
     if (!lock.owned()) return fail("another optimize is already running (in the app or on the command line)");
     std::string why;
     if (!prepare_state(&why)) return fail(why);
-    Nvml nvml;
-    if (!nvml.Init()) return fail("NVML init failed: " + nvml.Error());
-    Nvapi nvapi;
-    if (!nvapi.Init()) return fail("NVAPI init failed: " + nvapi.Error());
+    // Every driver call of the run goes through `hw`: guarded against a fault
+    // inside the driver DLLs, and reconnected by gpu.recover after a driver
+    // reset. `gpu` is never reassigned, so the references the fan driver, the
+    // search and the emergency handlers hold stay valid across a reconnect.
+    GuardedGpu hw(kGpu);
+    if (!hw.Init(&why)) return fail(why);
     Stress load;
     if (!load.Init()) return fail("stress init failed: " + load.Error());
-    const GpuControl gpu = make_gpu_control(nvml, nvapi, kGpu);
+    const GpuControl& gpu = hw.control();
     // The profile's curve drives the fans for the whole run, so the clocks it
     // finds hold at the temperatures that curve produces.
     const FanCurve curve = fan_curve.value_or(default_curve(preset));
-    FanDriver fans(gpu, curve, objectives_for(preset).max_temp_c, fan_min_for(load_config(), nvml.GpuUuid(kGpu), gpu.fan_min_pct));
+    FanDriver fans(gpu, curve, objectives_for(preset).max_temp_c, fan_min_for(load_config(), hw.GpuUuid(), gpu.fan_min_pct));
     struct FanRelease {
         FanDriver& f;
         ~FanRelease() { f.release(); }   // every exit: done, aborted, failed or thrown
@@ -174,18 +177,39 @@ OptimizeOutcome run_optimize(Preset preset, const OptimizeHooks& hooks, const st
         return gbps;
     };
     if (hooks.active_gpu) hooks.active_gpu(&gpu);
+    // The last line of defence: a fault that escapes the per-call guards (in
+    // the stress load's D3D calls, say) must not kill the process with a
+    // journal entry open. The frames of the search are skipped, not unwound;
+    // everything that must run on the way out lives in this frame. A C++
+    // exception passes through the guard to the catch below.
+    bool crashed = false;
     try {
-        out.result = optimize(gpu, objectives_for(preset), journal, io);
+        crashed = !guarded([&] { out.result = optimize(gpu, objectives_for(preset), journal, io); });
     } catch (...) {   // never leave a candidate applied, whatever went wrong
         if (hooks.active_gpu) hooks.active_gpu(nullptr);
         if (gpu.reset_to_stock) gpu.reset_to_stock();
         throw;
     }
     if (hooks.active_gpu) hooks.active_gpu(nullptr);
+    if (crashed) {
+        // A fault inside a driver DLL. The machine did not freeze, so the
+        // candidate must not become a ceiling: close its entry -- but only
+        // once the card is dealt with, so a freeze in these last steps, with
+        // the candidate possibly still applied, still counts against it.
+        if (gpu.recover) gpu.recover();
+        const bool stock = gpu.reset_to_stock && gpu.reset_to_stock();
+        if (journal.open_id() >= 0) journal.complete(journal.open_id(), "CRASHED");
+        log(std::string("the run crashed inside the driver -- ") + (stock ? "card restored to stock" : "reset FAILED, run `gao --reset`"));
+        out.ran = true;
+        out.result.ok = false;
+        out.result.stock_restored = stock;
+        out.result.reason = "crashed inside the driver";
+        return out;
+    }
     out.ran = true;
     if (!out.result.ok) return out;
 
-    const std::string driver = nvml.DriverVersion(), gpu_id = nvml.GpuUuid(kGpu);
+    const std::string driver = hw.DriverVersion(), gpu_id = hw.GpuUuid();
     if (driver.empty() || gpu_id.empty()) {
         out.save_note = "NVML did not report the driver version or GPU id, so the profile could never be re-applied";
         return out;

@@ -130,3 +130,24 @@ TEST_CASE("ids and clock values outside sane bounds are ignored") {
     CHECK(j.next_id() == 10);
     CHECK(j.begin(15, std::nullopt) == 10);
 }
+
+TEST_CASE("open_id names the entry that is begun and not yet completed") {
+    Sink s;
+    Journal j({}, s.append());
+    CHECK(j.open_id() == -1);
+    const int id = j.begin(150, std::nullopt);
+    CHECK(j.open_id() == id);
+    CHECK(j.complete(id, "STABLE"));
+    CHECK(j.open_id() == -1);
+}
+
+TEST_CASE("open_id keeps the entry when its complete line could not be written") {
+    Sink s;
+    Journal j({}, s.append());
+    const int id = j.begin(150, std::nullopt);
+    s.ok = false;
+    CHECK(!j.complete(id, "STABLE"));
+    CHECK(j.open_id() == id);
+    CHECK(j.begin(165, std::nullopt) == -1);   // a failed begin opens nothing new
+    CHECK(j.open_id() == id);
+}

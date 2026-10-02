@@ -80,7 +80,10 @@ target_include_directories(hw PUBLIC src)
 target_link_libraries(hw PUBLIC core d3d11 dxgi d3dcompiler shell32 ole32 PRIVATE gao_warnings gao_hardening)
 
 # UI-independent application logic shared by both executables.
-add_library(app STATIC src/app/common.hpp src/app/common.cpp)
+add_library(app STATIC
+  src/app/common.hpp src/app/common.cpp
+  src/app/guarded_gpu.hpp src/app/guarded_gpu.cpp
+)
 target_link_libraries(app PUBLIC core hw PRIVATE gao_warnings gao_hardening)
 
 add_executable(gao src/app/main.cpp src/app/gao.manifest src/app/app.rc)
