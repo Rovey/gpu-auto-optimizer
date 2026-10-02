@@ -38,6 +38,14 @@ constexpr int kOffEditable = 4;     // uint32 -- must be 1 or SET is a no-op
 constexpr int kOffNumPstates = 8;   // uint32 -- 1 restricts the SET to P0
 constexpr int kOffCoreDelta = 40;   // int32, kHz
 constexpr int kOffMemDelta = 84;    // int32, kHz
+// The public NV_GPU_PERF_PSTATES20_PARAM_DELTA is {value, valueRange.min,
+// valueRange.max}, which puts each range right behind its delta. Unlike the
+// deltas, these offsets were not proven by the Python implementation; they
+// hold only as far as docs/hardware-checks.md check 45 says they do.
+constexpr int kOffCoreDeltaMin = 44;   // int32, kHz
+constexpr int kOffCoreDeltaMax = 48;   // int32, kHz
+constexpr int kOffMemDeltaMin = 88;    // int32, kHz
+constexpr int kOffMemDeltaMax = 92;    // int32, kHz
 
 constexpr int kToleranceKhz = 1000;
 constexpr unsigned kMaxPhysicalGpus = 64;  // NVAPI_MAX_PHYSICAL_GPUS
@@ -119,6 +127,15 @@ std::optional<std::pair<int, int>> Nvapi::ReadOffsetsMhz(unsigned gpu) {
     unsigned char buf[kBufferSize];
     if (!GetPstates20(gpu, buf)) return std::nullopt;  // error_ set by GetPstates20
     return std::make_pair(GetI32(buf, kOffCoreDelta) / 1000, GetI32(buf, kOffMemDelta) / 1000);
+}
+
+std::optional<ClockOffsetRanges> Nvapi::ReadOffsetRangesMhz(unsigned gpu) {
+    unsigned char buf[kBufferSize];
+    if (!GetPstates20(gpu, buf)) return std::nullopt;  // error_ set by GetPstates20
+    ClockOffsetRanges r;
+    r.core = {GetI32(buf, kOffCoreDeltaMin) / 1000, GetI32(buf, kOffCoreDeltaMax) / 1000};
+    r.mem = {GetI32(buf, kOffMemDeltaMin) / 1000, GetI32(buf, kOffMemDeltaMax) / 1000};
+    return r;
 }
 
 bool Nvapi::SetDeltaKhz(unsigned gpu, int offset_bytes, int khz) {

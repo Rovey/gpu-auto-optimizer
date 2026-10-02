@@ -1,4 +1,5 @@
 #pragma once
+#include "core/types.hpp"
 #include <optional>
 #include <string>
 #include <utility>
@@ -23,6 +24,8 @@ public:
     bool SetMemOffsetMhz(unsigned gpu, int mhz);
     bool ResetOffsets(unsigned gpu);
     std::optional<std::pair<int, int>> ReadOffsetsMhz(unsigned gpu);  // {core, mem}, MHz
+    // The range the driver accepts for each offset, from the same buffer.
+    std::optional<ClockOffsetRanges> ReadOffsetRangesMhz(unsigned gpu);
 
     const std::string& Error() const { return error_; }
 
