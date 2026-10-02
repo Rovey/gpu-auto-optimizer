@@ -13,7 +13,7 @@ those specific calls with an NVAPI error, not a crash. Checks 1-2 only read
 telemetry through NVML and do not need elevation. Checks 10-12 need no
 elevation either: the stress load only computes, it writes no settings.
 Checks 13-16 run `--optimize`, which writes clocks and the power limit: elevated.
-Checks 46-50 run `--optimize` as well and need an elevated shell; check 45 compares `--probe` with another tool.
+Checks 46-51 run `--optimize` as well and need an elevated shell; check 45 compares `--probe` with another tool.
 Checks 17-22 cover persistence; 19 and 20 need a log-off and log-on.
 
 Commands assume a Release build at `.\build\Release\gao.exe` from the repo
@@ -75,6 +75,7 @@ root; adjust the path for a Debug build.
 | 48 | Abort during a clock probe and during the baseline | `gao --optimize best`, Ctrl+C during the first `core +N` lines; again during the 30 s baseline | yes | both end with `aborted (card at stock)`; the next `gao --optimize best` prints no `a previous run froze the machine` warning | |
 | 49 | The core search climbs | `gao --optimize best` and `gao --optimize max` (elevated), each to the end | yes | the log starts with `core range: up to +N MHz (...)`; core candidates ascend by 60 until the first failure, then refine by 15; `soak: 300 s`; note the total run time of each | |
 | 50 | A freeze during the climb becomes a ceiling | after a run in which a core candidate froze the machine (or after adding a line `{"core":N,"id":9999,"state":"begin"}` to the journal by hand), `gao --optimize best` | yes | the run warns `a previous run froze the machine at core +N` and never applies core +N or higher | |
+| 51 | A driver reset during an optimize run is survived | `gao --optimize best` (elevated); during the first `core +N` lines run `dxcap -forcetdr` in a second elevated shell; let the run continue, or press Ctrl+C once the search has clearly carried on; then `gao --status` and the last lines of `%ProgramData%\GpuAutoOptimizer\journal.jsonl` | yes | the candidate that was running logs `DEVICE LOST`; `gao.exe` does not crash; the search carries on with lower candidates (or ends cleanly with a reason); at the end the card is at stock or at the saved result; the journal has no `begin` without a `complete` | |
 
 ## Notes
 

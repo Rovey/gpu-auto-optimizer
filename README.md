@@ -70,7 +70,7 @@ The safety margin: the search finds the highest stable offset and applies a frac
 ```mermaid
 flowchart LR
     A[Baseline<br/>30 s at stock] --> B[Power limit]
-    B --> C[Core offset<br/>binary search]
+    B --> C[Core offset<br/>climb from stock]
     C --> D[Memory offset<br/>bandwidth peak]
     D --> E[Confirm edges<br/>30 s probes]
     E --> F[Safety margin]
@@ -97,7 +97,7 @@ flowchart LR
 | `gao --boot on\|off` | Turns apply-at-logon on or off |
 | `gao --fan auto` | Hands every fan back to the NVIDIA driver, whatever set it (a running tray app takes them again on its next tick; switch Fan control off to keep the driver in charge) |
 | `gao --status` | Saved profile, what is applied now, apply-at-logon state |
-| `gao --probe` | Live telemetry: clocks, temperature, fan, power |
+| `gao --probe` | Live telemetry: clocks, temperature, fan, power, clock-offset ranges |
 | `gao --stress <seconds>` | Runs the stress test alone and prints its verdict; changes nothing |
 | `gao --bandwidth` | Measures the current memory bandwidth |
 
