@@ -27,8 +27,12 @@ struct StabilityResult {
     int avg_mem_mhz = -1;
 };
 
-// Why three seconds: one delayed batch (a UAC prompt, a display mode switch)
-// must not look like a dead card, and a dead card is still caught within seconds.
+// Why three seconds: a batch delayed by up to about two seconds (a UAC prompt,
+// a display mode switch) does not look like a dead card, because the window
+// still holds enough normal batches next to it, and a dead card is still
+// caught within seconds. A single batch that takes three seconds or more fills
+// the window alone and is judged on its own: if it computed little, the run
+// ends STALLED.
 inline constexpr double kStallWindowS = 3.0;
 
 // Runs batches until `seconds` of batch time are covered or something fails,

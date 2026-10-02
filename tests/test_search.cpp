@@ -130,6 +130,7 @@ struct FakeCard {
     int recover_fails_from_call = -1;     // recover() fails from this call on (1 = the first)
     std::vector<std::string> probe_order; // every probe as "seconds:power:core:mem", in the order they ran
     bool fail_power_set_in_entry = false; // the first power write made while a journal entry is open fails once
+    std::vector<std::pair<double, double>> probe_floors;   // every probe as (seconds, stall_below), in the order they ran
 
     bool entry_open() const { return !journal.empty() && journal.back().find("\"begin\"") != std::string::npos; }
     // True while the journal's last line opens the entry of a soak with both
@@ -212,8 +213,9 @@ struct FakeCard {
         return n;
     }
     Probe probe() {
-        return [this](double seconds, int max_temp, double /*stall_below*/) {
+        return [this](double seconds, int max_temp, double stall_below) {
             ++probes;
+            probe_floors.emplace_back(seconds, stall_below);
             if (seconds == 20) ++power_probes;
             if (core != 0) mem_during_core_probes.push_back(mem);
             StabilityResult r;
@@ -1257,6 +1259,8 @@ TEST_CASE("a card that never recovers ends the run at stock without opening anot
     CHECK(run.card.mem == 0);
     CHECK(run.card.power == 100);
     CHECK(r.driver_resets == 1);
+    // The connections were good on the way out: no reconnect, and no line that says one was made.
+    CHECK_FALSE(run.logged("reconnecting to the driver to restore stock"));
     check_journal_rules(run);
 }
 
@@ -1279,7 +1283,47 @@ TEST_CASE("a driver reset during the health probe ends the run at once") {
     CHECK(run.card.power == 100);
     CHECK_FALSE(run.card.stale);
     CHECK(run.logged("health: DEVICE LOST"));
+    // The reconnect on the way out can take half a minute: the log says so first.
+    CHECK(run.count_logged("reconnecting to the driver to restore stock") == 1);
     check_journal_rules(run);
+}
+
+TEST_CASE("the stall floor of every probe is a quarter of the baseline score, except the baseline and the health probe") {
+    Run run = lost_at_135();
+    const auto r = run.go(Preset::BestOfMyGpu);
+    REQUIRE(r.ok);
+    REQUIRE(r.baseline.score > 0);
+    const double floor = kStalledScore * r.baseline.score;
+    const auto& probes = run.card.probe_floors;
+    REQUIRE(probes.size() == static_cast<std::size_t>(run.card.probes));
+    // The baseline has nothing to be measured against yet.
+    CHECK(probes.front().first == 30);
+    CHECK(probes.front().second == 0);
+    int power = 0, clock = 0, confirm = 0, soak = 0, health = 0;
+    for (std::size_t i = 1; i < probes.size(); ++i) {
+        const double seconds = probes[i].first, stall_below = probes[i].second;
+        CAPTURE(i);
+        CAPTURE(seconds);
+        if (seconds == 5) {
+            // The health probe is judged on its whole run, after it ends.
+            ++health;
+            CHECK(stall_below == 0);
+            continue;
+        }
+        if (seconds == 20) ++power;
+        else if (seconds == 3) ++clock;
+        else if (seconds == 30) ++confirm;
+        else if (seconds == 300) ++soak;
+        else FAIL_CHECK("a probe of an unexpected length");
+        CHECK(stall_below == floor);
+    }
+    // Every kind of probe ran: 4 power steps, 17 memory and 9 core candidates,
+    // the memory and the core confirm probe, one health probe and the soak.
+    CHECK(power == 4);
+    CHECK(clock == 26);
+    CHECK(confirm == 2);
+    CHECK(health == 1);
+    CHECK(soak == 1);
 }
 
 TEST_CASE("a blind health probe ends the run at once") {

@@ -196,10 +196,12 @@ static int optimize(gao::Preset preset, const std::optional<gao::FanCurve>& fan_
     if (!r.ok) {
         std::printf("RESULT: not applied -- %s (%s)\n", r.reason.c_str(),
                     r.stock_restored ? "card at stock" : "reset to stock FAILED, run `gao --reset`");
+        if (r.driver_resets > 0) std::printf("  driver resets during this run: %d\n", r.driver_resets);
         return 1;
     }
     std::printf("RESULT: power %d %%, core +%d MHz (confirmed +%d), mem +%d MHz (confirmed +%d)\n",
                 r.power_pct, r.core_mhz, r.core_confirmed, r.mem_mhz, r.mem_confirmed);
+    if (r.driver_resets > 0) std::printf("  driver resets during this run: %d\n", r.driver_resets);
     std::printf("  before: score=%.0f it/s  core=%d MHz  mem=%d MHz  peak=%d C  power=%d W\n",
                 r.baseline.score, r.baseline.avg_core_mhz, r.baseline.avg_mem_mhz, r.baseline.peak_temp_c, r.baseline.avg_power_w);
     std::printf("  after:  score=%.0f it/s  core=%d MHz  mem=%d MHz  peak=%d C  power=%d W\n",

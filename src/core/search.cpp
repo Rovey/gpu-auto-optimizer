@@ -117,7 +117,10 @@ constexpr int kCoreStep = 15;
 constexpr int kMemStep = 50;
 // The strides equal the steps, so climb_to_edge never bisects: the first value
 // that fails is exactly one step above the last one that passed, and the climb
-// probes nothing more after a value that failed or reset the driver.
+// probes nothing more after a value that failed or reset the driver. The
+// confirm probe then runs one step below an ordinary failure (at the last
+// value that passed) and, after a reset, kResetBackoffSteps (four) steps below
+// the last value that passed.
 constexpr int kCoreStride = kCoreStep;
 constexpr int kMemStride = kMemStep;
 constexpr int kPowerStep = 5;
@@ -176,7 +179,8 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
     };
     // Every failing return goes through here, with no journal entry open
     // (unless the journal itself could not close it). It runs no load and
-    // does not wait: at most one reconnect and the reset to stock.
+    // does not wait: at most one reconnect, announced in the log, and the
+    // reset to stock.
     auto finish_fail = [&](const std::string& why) {
         // After a driver reset the old connections are dead: reconnect first,
         // or the reset to stock fails on a card the driver already reset. A
@@ -184,10 +188,17 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
         // earlier one failed.
         const bool can_reconnect = gpu.recover && !reconnect_futile;
         const bool reconnected = hw_suspect && can_reconnect;
-        if (reconnected) reconnect();
+        // The reconnect can take half a minute: say so before it starts.
+        const char* const reconnecting = "reconnecting to the driver to restore stock";
+        if (reconnected) {
+            log(reconnecting);
+            reconnect();
+        }
         r.stock_restored = reset_to_stock();
-        if (!r.stock_restored && can_reconnect && !reconnected && reconnect())
-            r.stock_restored = reset_to_stock();
+        if (!r.stock_restored && can_reconnect && !reconnected) {
+            log(reconnecting);
+            if (reconnect()) r.stock_restored = reset_to_stock();
+        }
         r.ok = false;
         r.reason = why;
         log("stopped: " + why + (r.stock_restored ? " -- card restored to stock"
