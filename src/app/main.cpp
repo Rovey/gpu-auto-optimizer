@@ -151,7 +151,8 @@ static int stress(int seconds, int max_temp_c, gao::StressSelftest selftest) {
     switch (r.verdict) {
         case gao::Verdict::Stable: return 0;
         case gao::Verdict::WrongResult:
-        case gao::Verdict::DeviceLost: return 2;
+        case gao::Verdict::DeviceLost:
+        case gao::Verdict::Stalled: return 2;
         case gao::Verdict::TooHot:
         case gao::Verdict::NoTelemetry: return 3;
         case gao::Verdict::Aborted: return 1;

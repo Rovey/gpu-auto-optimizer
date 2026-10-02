@@ -12,7 +12,9 @@ struct StressBatch {
     double elapsed_ms = 0;
 };
 
-enum class Verdict { Stable, WrongResult, DeviceLost, TooHot, NoTelemetry, Aborted };
+// Stalled: the run found nothing wrong but computed almost nothing (set by
+// the search, which knows the baseline; run_stability never returns it).
+enum class Verdict { Stable, WrongResult, DeviceLost, TooHot, NoTelemetry, Aborted, Stalled };
 
 struct StabilityResult {
     Verdict verdict = Verdict::Stable;

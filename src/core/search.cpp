@@ -161,9 +161,12 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
     auto probe = [&](double seconds, int max_temp) -> std::optional<StabilityResult> {
         if (!stopped.empty()) return std::nullopt;
         if (io.aborted && io.aborted()) { stopped = "aborted"; return std::nullopt; }
-        const StabilityResult s = io.probe(seconds, max_temp);
+        StabilityResult s = io.probe(seconds, max_temp);
         if (s.verdict == Verdict::NoTelemetry) { stopped = "lost telemetry"; return std::nullopt; }
         if (s.verdict == Verdict::Aborted) { stopped = "aborted"; return std::nullopt; }
+        // r.baseline.score is 0 until the baseline itself has been judged.
+        if (s.verdict == Verdict::Stable && r.baseline.score > 0 && s.score < kStalledScore * r.baseline.score)
+            s.verdict = Verdict::Stalled;
         return s;
     };
     // What a journal entry is closed with. A candidate the user stopped is

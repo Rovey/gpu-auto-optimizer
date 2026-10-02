@@ -114,6 +114,7 @@ TEST_CASE("every verdict has a name") {
     CHECK(std::string(verdict_name(Verdict::TooHot)) == "TOO HOT");
     CHECK(std::string(verdict_name(Verdict::NoTelemetry)) == "NO TELEMETRY");
     CHECK(std::string(verdict_name(Verdict::Aborted)) == "ABORTED");
+    CHECK(std::string(verdict_name(Verdict::Stalled)) == "STALLED");
 }
 
 TEST_CASE("a stop request ends the run after the batch it arrives in") {

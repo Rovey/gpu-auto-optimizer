@@ -56,6 +56,7 @@ const char* verdict_name(Verdict v) {
         case Verdict::TooHot: return "TOO HOT";
         case Verdict::NoTelemetry: return "NO TELEMETRY";
         case Verdict::Aborted: return "ABORTED";
+        case Verdict::Stalled: return "STALLED";
     }
     return "UNKNOWN";
 }

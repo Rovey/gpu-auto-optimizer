@@ -71,6 +71,13 @@ inline constexpr double kBandwidthDrop = 0.01;   // stop once 1 % below the best
 // noise pick the offset.
 inline constexpr double kBandwidthTie = 0.01;
 
+// A probe judged STABLE that scores below this fraction of the baseline is
+// STALLED: the card stopped computing without a wrong value or a lost device.
+// Measured on an RTX 5070 past its edge: 167 it/s against a baseline of 5869
+// (3 %). The lowest score a working card has shown in the hardware checks is
+// 94 % of its baseline, so a quarter separates the two with room on both sides.
+inline constexpr double kStalledScore = 0.25;
+
 struct MemSample {
     bool stable = false;
     double gbps = 0;

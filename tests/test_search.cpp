@@ -86,6 +86,7 @@ struct FakeCard {
     std::function<double(int)> bw_curve;  // GB/s by memory offset; empty = no bandwidth
     bool bw_fails = false;                // every bandwidth measurement fails
     int max_mem_seen = 0;
+    int stall_core_from = -1;        // at or above this core offset a probe "passes" at 3 % of the normal score
     int probes = 0, power_probes = 0;
     std::vector<std::string> journal;
     std::string last_set_begin_ok;   // "" if every set had its begin line first
@@ -131,6 +132,7 @@ struct FakeCard {
                             (seconds == 30 ? confirm_extra_heat : 0);
             if (seconds == 300 && abort_on_soak) aborted_now = true;
             r.score = 1000.0 * std::min(power, 90) / 90;
+            if (stall_core_from >= 0 && core >= stall_core_from) { r.score *= 0.03; return r; }   // verdict stays Stable
             if (seconds == 20 && power == noisy_power_pct) r.score *= 0.9;
             if (seconds == 30 && std::find(confirm_fail_core.begin(), confirm_fail_core.end(), core) != confirm_fail_core.end()) {
                 r.verdict = Verdict::WrongResult;
@@ -717,4 +719,29 @@ TEST_CASE("a failing range read leaves the built-in limits in place") {
     const auto r = run.go(Preset::BestOfMyGpu);
     REQUIRE(r.ok);
     CHECK(r.core_max_stable == 300);
+}
+
+TEST_CASE("a probe that passes at a fraction of the baseline score is stalled, not stable") {
+    // Measured on an RTX 5070: at +480 the card stopped computing, the probe
+    // found no wrong value and no lost device, and scored 167 against 5869.
+    Run run;
+    run.card.stall_core_from = 135;
+    const auto r = run.go(Preset::BestOfMyGpu);
+    REQUIRE(r.ok);
+    CHECK(r.core_max_stable == 120);
+    bool journaled = false;
+    for (const auto& l : run.card.journal) journaled |= l.find("STALLED") != std::string::npos;
+    CHECK(journaled);
+    bool logged = false;
+    for (const auto& m : run.log) logged |= m.find("STALLED") != std::string::npos;
+    CHECK(logged);
+}
+
+TEST_CASE("a low score at a low power limit is not a stall") {
+    // The quiet preset probes power limits down to the card's minimum; the
+    // fixture's score at 50 % power is 56 % of the baseline.
+    Run run;
+    const auto r = run.go(Preset::Quiet);
+    REQUIRE(r.ok);
+    for (const auto& m : run.log) CHECK(m.find("STALLED") == std::string::npos);
 }
