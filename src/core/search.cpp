@@ -135,8 +135,15 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
     OptimizeResult r;
     std::string stopped;   // non-empty once the run must end; later probes become no-ops
     auto log = [&](const std::string& m) { if (io.log) io.log(m); };
+    bool hw_suspect = false;   // a probe ended in a way a driver reset explains
+    int blind_probes = 0;      // consecutive probes without telemetry
     auto finish_fail = [&](const std::string& why) {
+        // After a driver reset the old connections are dead: reconnect first,
+        // or the reset to stock fails on a card the driver already reset.
+        if (hw_suspect && gpu.recover) gpu.recover();
         r.stock_restored = gpu.reset_to_stock && gpu.reset_to_stock();
+        if (!r.stock_restored && gpu.recover && gpu.recover())
+            r.stock_restored = gpu.reset_to_stock && gpu.reset_to_stock();
         r.ok = false;
         r.reason = why;
         log("stopped: " + why + (r.stock_restored ? " -- card restored to stock"
@@ -145,28 +152,61 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
     };
     bool power_ctl = obj.power && gpu.set_power_limit && gpu.power_limit_range_pct;   // false once skipped
 
+    // Reconnects after a driver reset. Called before a journal entry is
+    // opened and before the next hardware write, so a driver that does not
+    // come back never leaves an entry behind.
+    auto ensure_hw = [&]() -> bool {
+        if (!hw_suspect) return true;
+        hw_suspect = false;
+        if (!gpu.recover) return true;   // nothing to reconnect with; the next write decides
+        log("the driver was reset; reconnecting");
+        if (gpu.recover()) return true;
+        stopped = "the driver did not come back after a reset";
+        return false;
+    };
+
+    // Writes the full state; returns what failed, or nothing.
+    auto write_state = [&](int power, int core, int mem) -> std::string {
+        if (power_ctl && !gpu.set_power_limit(power)) return "setting power " + std::to_string(power) + " % failed";
+        if ((obj.core_oc || core != 0) && !(gpu.set_core_offset && gpu.set_core_offset(core)))
+            return "setting core +" + std::to_string(core) + " failed";
+        if ((obj.mem_oc || mem != 0) && !(gpu.set_mem_offset && gpu.set_mem_offset(mem)))
+            return "setting mem +" + std::to_string(mem) + " failed";
+        return {};
+    };
     // Applies the full state for every candidate, so a TDR that reset the
     // driver (or a previous candidate) can never leave stale settings behind.
+    // A failed write gets one reconnect and one more try: a driver reset the
+    // probe did not report looks exactly like this.
     auto set_state = [&](int power, int core, int mem) -> bool {
-        if (power_ctl && !gpu.set_power_limit(power)) { stopped = "setting power " + std::to_string(power) + " % failed"; return false; }
-        if ((obj.core_oc || core != 0) && !(gpu.set_core_offset && gpu.set_core_offset(core))) {
-            stopped = "setting core +" + std::to_string(core) + " failed"; return false;
+        std::string why = write_state(power, core, mem);
+        if (!why.empty() && gpu.recover) {
+            log(why + "; reconnecting and trying once more");
+            if (gpu.recover()) why = write_state(power, core, mem);
         }
-        if ((obj.mem_oc || mem != 0) && !(gpu.set_mem_offset && gpu.set_mem_offset(mem))) {
-            stopped = "setting mem +" + std::to_string(mem) + " failed"; return false;
-        }
-        return true;
+        if (why.empty()) return true;
+        stopped = why;
+        return false;
     };
     // One probe, with the abort and blindness checks every step shares.
     auto probe = [&](double seconds, int max_temp) -> std::optional<StabilityResult> {
         if (!stopped.empty()) return std::nullopt;
         if (io.aborted && io.aborted()) { stopped = "aborted"; return std::nullopt; }
         StabilityResult s = io.probe(seconds, max_temp);
-        if (s.verdict == Verdict::NoTelemetry) { stopped = "lost telemetry"; return std::nullopt; }
         if (s.verdict == Verdict::Aborted) { stopped = "aborted"; return std::nullopt; }
         // r.baseline.score is 0 until the baseline itself has been judged.
         if (s.verdict == Verdict::Stable && r.baseline.score > 0 && s.score < kStalledScore * r.baseline.score)
             s.verdict = Verdict::Stalled;
+        // Telemetry goes blind when the driver resets. With a way to
+        // reconnect, one blind probe is a failed candidate; a second in a row
+        // means the sensor is gone, not the driver.
+        if (s.verdict == Verdict::NoTelemetry) {
+            if (!gpu.recover || ++blind_probes >= 2) { stopped = "lost telemetry"; return std::nullopt; }
+        } else {
+            blind_probes = 0;
+        }
+        if (s.verdict == Verdict::DeviceLost || s.verdict == Verdict::Stalled || s.verdict == Verdict::NoTelemetry)
+            hw_suspect = true;
         return s;
     };
     // What a journal entry is closed with. A candidate the user stopped is
@@ -205,6 +245,7 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
             auto run_power = [&](int pct) -> std::optional<StabilityResult> {
                 if (!stopped.empty()) return std::nullopt;
                 if (io.aborted && io.aborted()) { stopped = "aborted"; return std::nullopt; }
+                if (!ensure_hw()) return std::nullopt;
                 if (!set_state(pct, 0, 0)) return std::nullopt;
                 const auto s = probe(kPowerProbeS, kSafetyTempC);
                 if (s) { seen[pct] = *s; log("power " + std::to_string(pct) + " %: " + describe(*s)); }
@@ -242,6 +283,7 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
                                double seconds, const std::function<void()>& extra = {}) -> std::optional<Verdict> {
         if (!stopped.empty()) return std::nullopt;
         if (io.aborted && io.aborted()) { stopped = "aborted"; return std::nullopt; }
+        if (!ensure_hw()) return std::nullopt;
         const int id = journal.begin(core_j, mem_j);
         if (id < 0) { stopped = "could not write the journal"; return std::nullopt; }
         if (!set_state(r.power_pct, core, mem)) { journal.complete(id, "SET FAILED"); return std::nullopt; }
@@ -312,6 +354,7 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
     // cool the card); anything else -> both clocks one step down.
     for (int attempt = 0; attempt <= kSoakRetries; ++attempt) {
         if (io.aborted && io.aborted()) return finish_fail("aborted");
+        if (!ensure_hw()) return finish_fail(stopped);
         const int id = journal.begin(obj.core_oc ? std::optional<int>(r.core_mhz) : std::nullopt,
                                      obj.mem_oc ? std::optional<int>(r.mem_mhz) : std::nullopt);
         if (id < 0) return finish_fail("could not write the journal");

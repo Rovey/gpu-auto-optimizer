@@ -74,8 +74,9 @@ inline constexpr double kBandwidthTie = 0.01;
 // A probe judged STABLE that scores below this fraction of the baseline is
 // STALLED: the card stopped computing without a wrong value or a lost device.
 // Measured on an RTX 5070 past its edge: 167 it/s against a baseline of 5869
-// (3 %). The lowest score a working card has shown in the hardware checks is
-// 94 % of its baseline, so a quarter separates the two with room on both sides.
+// (3 %). A working card stays far above a quarter: the lowest score recorded
+// in docs/hardware-checks.md is 5486 against a reference of 5718 (96 %, RTX
+// 4070 at a lowered power limit).
 inline constexpr double kStalledScore = 0.25;
 
 struct MemSample {

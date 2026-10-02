@@ -68,6 +68,9 @@ struct GpuControl {
     // The offset ranges the driver reports; nullopt when a read fails. Empty:
     // the search and apply_profile use their built-in limits.
     std::function<std::optional<ClockOffsetRanges>()> clock_offset_range_mhz;
+    // Re-creates the driver connections after a driver reset (TDR); true when
+    // the hardware answers again. May take many seconds. Empty: not supported.
+    std::function<bool()> recover;
     std::function<bool(int)> set_fan_pct;                 // every fan to pct, verified by the target read-back
     std::function<bool()> set_fan_auto;                    // every fan back to the driver, verified by the policy
     std::function<std::optional<FanReading>()> read_fan;   // nullopt when a read fails

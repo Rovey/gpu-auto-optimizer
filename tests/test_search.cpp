@@ -87,6 +87,14 @@ struct FakeCard {
     bool bw_fails = false;                // every bandwidth measurement fails
     int max_mem_seen = 0;
     int stall_core_from = -1;        // at or above this core offset a probe "passes" at 3 % of the normal score
+    int lost_core_from = -1;         // at or above this core offset a probe ends DEVICE LOST and the driver resets
+    bool stale = false;              // after a driver reset: every write fails until recover()
+    bool with_recover = false;       // the card offers GpuControl::recover
+    bool recover_fails = false;
+    int recover_calls = 0;
+    int blind_probes = 0;            // this many 3 s probes report NO TELEMETRY
+    int flaky_core_sets = 0;         // this many set_core_offset calls fail although nothing is wrong
+    int begins_when_recover_failed = -1;   // journal `begin` lines at the moment recover() first failed
     int probes = 0, power_probes = 0;
     std::vector<std::string> journal;
     std::string last_set_begin_ok;   // "" if every set had its begin line first
@@ -97,19 +105,22 @@ struct FakeCard {
         GpuControl g;
         g.read = [this] { Telemetry t; t.ok = true; t.temp_c = 40; t.core_mhz = 2800; return t; };
         g.set_core_offset = [this](int v) {
+            if (stale) return false;
+            if (v != 0 && flaky_core_sets > 0) { --flaky_core_sets; return false; }
             // Every non-stock clock must be preceded by an open journal line.
             if (v != 0 && (journal.empty() || journal.back().find("\"begin\"") == std::string::npos))
                 last_set_begin_ok = "core " + std::to_string(v) + " set without begin";
             if (v == fail_core_set_at) return false;
             core = v; max_core_seen = std::max(max_core_seen, v); return true;
         };
-        g.set_mem_offset = [this](int v) { mem = v; max_mem_seen = std::max(max_mem_seen, v); return true; };
+        g.set_mem_offset = [this](int v) { if (stale) return false; mem = v; max_mem_seen = std::max(max_mem_seen, v); return true; };
         g.reset_to_stock = [this] {
+            if (stale) return false;
             if (reset_fails_from >= 0 && ++reset_calls > reset_fails_from) return false;
             power = 100; core = 0; mem = 0; return true;
         };
         if (with_power) {
-            g.set_power_limit = [this](int p) { power = p; return true; };
+            g.set_power_limit = [this](int p) { if (stale) return false; power = p; return true; };
             g.power_limit_range_pct = [range] { return range; };
         }
         if (ranges || ranges_read_fails) {
@@ -119,6 +130,19 @@ struct FakeCard {
             };
             g.read_applied = [this] { return std::optional<AppliedState>(AppliedState{core, mem, power}); };
         }
+        if (with_recover)
+            g.recover = [this] {
+                ++recover_calls;
+                if (recover_fails) {
+                    if (begins_when_recover_failed < 0) {
+                        begins_when_recover_failed = 0;
+                        for (const auto& l : journal) begins_when_recover_failed += l.find("\"begin\"") != std::string::npos;
+                    }
+                    return false;
+                }
+                stale = false;
+                return true;
+            };
         return g;
     }
     Probe probe() {
@@ -128,6 +152,14 @@ struct FakeCard {
             StabilityResult r;
             r.seconds = seconds;
             if (seconds == abort_in_probe_s) { r.verdict = Verdict::Aborted; return r; }
+            if (seconds == 3 && blind_probes > 0) { --blind_probes; r.verdict = Verdict::NoTelemetry; return r; }
+            if (lost_core_from >= 0 && core >= lost_core_from) {
+                // What a real TDR does: the driver comes back at stock and the
+                // old connections to it are dead.
+                core = 0; mem = 0; power = 100; stale = true;
+                r.verdict = Verdict::DeviceLost;
+                return r;
+            }
             r.peak_temp_c = static_cast<int>(40 + 0.3 * power) + (seconds == 300 ? soak_extra_heat : 0) +
                             (seconds == 30 ? confirm_extra_heat : 0);
             if (seconds == 300 && abort_on_soak) aborted_now = true;
@@ -744,4 +776,100 @@ TEST_CASE("a low score at a low power limit is not a stall") {
     const auto r = run.go(Preset::Quiet);
     REQUIRE(r.ok);
     for (const auto& m : run.log) CHECK(m.find("STALLED") == std::string::npos);
+}
+
+TEST_CASE("a driver reset at the edge is survived: the search reconnects and carries on") {
+    Run run;
+    run.card.with_recover = true;
+    run.card.lost_core_from = 135;
+    const auto r = run.go(Preset::BestOfMyGpu);
+    REQUIRE(r.ok);
+    CHECK(r.core_max_stable == 120);
+    CHECK(run.card.recover_calls >= 1);
+    CHECK_FALSE(run.card.stale);
+    CHECK(run.card.core == r.core_mhz);   // the result is really applied
+    Journal reread(run.card.journal, [](const std::string&) { return true; });
+    CHECK(reread.freezes().empty());
+}
+
+TEST_CASE("a stalled probe also triggers a reconnect") {
+    Run run;
+    run.card.with_recover = true;
+    run.card.stall_core_from = 135;
+    const auto r = run.go(Preset::BestOfMyGpu);
+    REQUIRE(r.ok);
+    CHECK(run.card.recover_calls >= 1);
+}
+
+TEST_CASE("without a reconnect a driver reset still ends the run cleanly") {
+    // Today's behaviour, kept for a GpuControl that cannot reconnect.
+    Run run;
+    run.card.lost_core_from = 135;
+    const auto r = run.go(Preset::BestOfMyGpu);
+    CHECK_FALSE(r.ok);
+    CHECK(r.reason.find("failed") != std::string::npos);
+    CHECK_FALSE(r.stock_restored);
+    Journal reread(run.card.journal, [](const std::string&) { return true; });
+    CHECK(reread.freezes().empty());
+}
+
+TEST_CASE("a driver that does not come back ends the run without opening another journal entry") {
+    Run run;
+    run.card.with_recover = true;
+    run.card.recover_fails = true;
+    run.card.lost_core_from = 135;
+    const auto r = run.go(Preset::BestOfMyGpu);
+    CHECK_FALSE(r.ok);
+    CHECK(r.reason == "the driver did not come back after a reset");
+    CHECK_FALSE(r.stock_restored);
+    int begins = 0;
+    for (const auto& l : run.card.journal) begins += l.find("\"begin\"") != std::string::npos;
+    CHECK(begins == run.card.begins_when_recover_failed);   // nothing was journaled after the failed reconnect
+    Journal reread(run.card.journal, [](const std::string&) { return true; });
+    CHECK(reread.freezes().empty());
+}
+
+TEST_CASE("one probe without telemetry is a failed candidate; two in a row end the run") {
+    Run once;
+    once.card.with_recover = true;
+    once.card.blind_probes = 1;
+    const auto a = once.go(Preset::BestOfMyGpu);
+    REQUIRE(a.ok);
+    CHECK(once.card.recover_calls >= 1);
+
+    Run twice;
+    twice.card.with_recover = true;
+    twice.card.blind_probes = 2;
+    const auto b = twice.go(Preset::BestOfMyGpu);
+    CHECK_FALSE(b.ok);
+    CHECK(b.reason == "lost telemetry");
+    CHECK(twice.card.core == 0);
+}
+
+TEST_CASE("without a reconnect a probe without telemetry ends the run at once") {
+    Run run;
+    run.card.blind_probes = 1;
+    const auto r = run.go(Preset::BestOfMyGpu);
+    CHECK_FALSE(r.ok);
+    CHECK(r.reason == "lost telemetry");
+}
+
+TEST_CASE("a write that fails once is retried after a reconnect") {
+    Run run;
+    run.card.with_recover = true;
+    run.card.flaky_core_sets = 1;
+    const auto r = run.go(Preset::BestOfMyGpu);
+    REQUIRE(r.ok);
+    CHECK(r.core_max_stable == 150);
+    CHECK(run.card.recover_calls == 1);
+}
+
+TEST_CASE("a write that keeps failing still stops the run at stock") {
+    Run run;
+    run.card.with_recover = true;
+    run.card.fail_core_set_at = 150;
+    const auto r = run.go(Preset::BestOfMyGpu);
+    CHECK_FALSE(r.ok);
+    CHECK(r.reason.find("core") != std::string::npos);
+    CHECK(run.card.core == 0);
 }
