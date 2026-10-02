@@ -151,3 +151,79 @@ TEST_CASE("open_id keeps the entry when its complete line could not be written")
     CHECK(j.begin(165, std::nullopt) == -1);   // a failed begin opens nothing new
     CHECK(j.open_id() == id);
 }
+
+TEST_CASE("an open entry at offset 0 is a freeze but never a ceiling of zero") {
+    // A ceiling of 0 would mean "never search this clock", which no freeze at
+    // stock can justify. Earlier versions wrote such entries.
+    Sink s;
+    Journal mem({"{\"id\":5,\"mem\":0,\"state\":\"begin\"}"}, s.append());
+    CHECK(mem.ceilings().mem_mhz == INT_MAX);
+    CHECK(mem.ceilings().core_mhz == INT_MAX);
+    CHECK(mem.freezes().size() == 1);
+    CHECK(mem.next_id() == 6);
+
+    Journal core({"{\"id\":5,\"core\":0,\"state\":\"begin\"}"}, s.append());
+    CHECK(core.ceilings().core_mhz == INT_MAX);
+    CHECK(core.ceilings().mem_mhz == INT_MAX);
+    CHECK(core.freezes().size() == 1);
+}
+
+TEST_CASE("an open entry with one clock at 0 still caps the other") {
+    Sink s;
+    Journal j({"{\"id\":5,\"core\":0,\"mem\":400,\"state\":\"begin\"}"}, s.append());
+    CHECK(j.ceilings().core_mhz == INT_MAX);
+    CHECK(j.ceilings().mem_mhz == 400);
+    CHECK(j.freezes().size() == 1);
+}
+
+TEST_CASE("an open entry above 0 still caps its clock") {
+    Sink s;
+    Journal j({"{\"id\":5,\"core\":150,\"state\":\"begin\"}"}, s.append());
+    CHECK(j.ceilings().core_mhz == 150);
+    CHECK(j.ceilings().mem_mhz == INT_MAX);
+    CHECK(j.freezes().size() == 1);
+}
+
+TEST_CASE("a freeze with no clock above stock is described as stock clocks and caps nothing") {
+    Sink s;
+    const std::vector<std::string> lines = {
+        "{\"id\":1,\"state\":\"begin\"}",                        // a soak or a bandwidth sample at stock
+        "{\"id\":2,\"mem\":0,\"state\":\"begin\"}",              // written by an earlier version
+        "{\"id\":3,\"core\":0,\"mem\":0,\"state\":\"begin\"}",
+    };
+    Journal j(lines, s.append());
+    REQUIRE(j.freezes().size() == 3);
+    REQUIRE(j.freeze_entries().size() == 3);
+    for (size_t i = 0; i < 3; ++i) {
+        CAPTURE(i);
+        CHECK(j.freezes()[i] == "stock clocks");
+        CHECK(j.freeze_entries()[i].description == "stock clocks");
+        CHECK_FALSE(j.freeze_entries()[i].caps_anything);
+    }
+    CHECK(j.ceilings().core_mhz == INT_MAX);
+    CHECK(j.ceilings().mem_mhz == INT_MAX);
+}
+
+TEST_CASE("a freeze that names a clock above stock caps something") {
+    Sink s;
+    const std::vector<std::string> lines = {
+        "{\"id\":1,\"core\":150,\"state\":\"begin\"}",
+        "{\"id\":2,\"core\":0,\"mem\":400,\"state\":\"begin\"}",   // a soak entry of an earlier version
+        "{\"id\":3,\"core\":105,\"mem\":700,\"state\":\"begin\"}",
+    };
+    Journal j(lines, s.append());
+    REQUIRE(j.freeze_entries().size() == 3);
+    CHECK(j.freeze_entries()[0].description == "core +150");
+    CHECK(j.freeze_entries()[1].description == "core +0 / mem +400");
+    CHECK(j.freeze_entries()[2].description == "core +105 / mem +700");
+    for (const auto& f : j.freeze_entries()) CHECK(f.caps_anything);
+    // The same text, in the same order, as freezes().
+    REQUIRE(j.freezes().size() == 3);
+    for (size_t i = 0; i < 3; ++i) CHECK(j.freezes()[i] == j.freeze_entries()[i].description);
+}
+
+TEST_CASE("an empty journal has no freeze entries") {
+    Sink s;
+    Journal j({}, s.append());
+    CHECK(j.freeze_entries().empty());
+}

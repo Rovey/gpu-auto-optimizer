@@ -506,8 +506,12 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
             const int peak = best_bandwidth_offset(0, bounds.mem_max_mhz, kMemStep, ceiling, [&](int v) {
                 MemSample m;
                 std::optional<double> gbps;
+                // The +0 sample is journaled without a clock, like a soak at
+                // stock: if the machine froze in it, an open entry that said
+                // memory 0 would read as "never search memory again".
+                const std::optional<int> mem_j = v > 0 ? std::optional<int>(v) : std::nullopt;
                 m.stable = explore(v, reset_at, [&] {
-                    if (!is_stable(clock_candidate(std::nullopt, v, 0, v, kClockProbeS, [&] { gbps = io.bandwidth(); })))
+                    if (!is_stable(clock_candidate(std::nullopt, mem_j, 0, v, kClockProbeS, [&] { gbps = io.bandwidth(); })))
                         return false;
                     if (gbps) return true;
                     // The candidate passed, the measurement failed: the step is unusable.

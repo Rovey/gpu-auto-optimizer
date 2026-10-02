@@ -1461,6 +1461,15 @@ std::vector<int> climb(int from, int to, int step, std::vector<int> then = {}) {
 
 std::vector<int> core_begins(const FakeCard& card) { return begins_with_only(card, "core", "mem"); }
 std::vector<int> mem_begins(const FakeCard& card) { return begins_with_only(card, "mem", "core"); }
+// The `begin` lines that carry neither clock: the +0 sample of the bandwidth
+// scan, and a soak with both clocks at stock.
+int clockless_begins(const FakeCard& card) {
+    int n = 0;
+    for (const auto& l : card.journal)
+        n += l.find("\"begin\"") != std::string::npos && l.find("\"core\":") == std::string::npos &&
+             l.find("\"mem\":") == std::string::npos;
+    return n;
+}
 
 // Nothing that loads the card or waits for it, and no journal entry.
 void check_nothing_started(const Events& events) {
@@ -1927,8 +1936,13 @@ TEST_CASE("a failed bandwidth measurement ends the memory scan and leaves the co
     REQUIRE(r.ok);
     CHECK(r.driver_resets == 1);
     // The scan samples +0 .. +300; the confirm probe runs four steps below
-    // +250, the best of the values that were measured.
-    CHECK(mem_begins(run.card) == climb(0, 300, 50, {50}));
+    // +250, the best of the values that were measured. The +0 sample names no
+    // clock in the journal, and neither does the soak, which runs at stock.
+    CHECK(mem_begins(run.card) == climb(50, 300, 50, {50}));
+    CHECK(clockless_begins(run.card) == 2);
+    CHECK(run.card.count("\"begin\"") == 9);   // +0, +50 .. +300, the confirm probe, the soak
+    CHECK(run.logged("core +0 / mem +0: STABLE"));
+    CHECK(run.logged("mem +0: bandwidth 500.0 GB/s"));
     CHECK(run.card.max_mem_seen == 300);
     CHECK(run.card.bw_measurements == 7);
     CHECK(r.mem_max_stable == 250);
@@ -1989,7 +2003,14 @@ TEST_CASE("a measurement that is unavailable from the start falls back to the st
     REQUIRE(r.ok);
     CHECK(r.driver_resets == 0);
     CHECK(run.card.bw_measurements == 1);   // a failed measurement never raises memory: stability alone does
-    CHECK(mem_begins(run.card) == climb(0, 850, 50, {800}));
+    // The +0 sample ran and is the first entry of the run, without a clock;
+    // the stability climb then goes +50 .. +850, and +800 is confirmed.
+    CHECK(mem_begins(run.card) == climb(50, 850, 50, {800}));
+    CHECK(clockless_begins(run.card) == 1);
+    REQUIRE_FALSE(run.card.journal.empty());
+    CHECK(run.card.journal.front().find("\"mem\":") == std::string::npos);
+    CHECK(run.card.journal.front().find("\"core\":") == std::string::npos);
+    CHECK(run.logged("core +0 / mem +0: STABLE"));
     CHECK(r.mem_max_stable == 800);
     CHECK(r.mem_confirmed == 800);
     CHECK(r.mem_mhz == 550);
@@ -2013,9 +2034,16 @@ TEST_CASE("a measurement that fails at +0 because the device was lost is caught 
     CHECK(r.driver_resets == 1);
     CHECK(run.logged("bandwidth measurement not available; searching memory by stability only"));
     CHECK(run.card.bw_measurements == 1);
-    // Journal: +0 opened and closed, +50 opened and closed as SET FAILED.
-    CHECK(mem_begins(run.card) == std::vector<int>{0, 50});
+    // Journal: +0 opened (without a clock) and closed, +50 opened and closed
+    // as SET FAILED. The only entry after them is the soak, at stock.
+    CHECK(mem_begins(run.card) == std::vector<int>{50});
+    CHECK(clockless_begins(run.card) == 2);
+    CHECK(run.card.count("\"begin\"") == 3);
+    CHECK(run.logged("core +0 / mem +0: STABLE"));
     REQUIRE(run.card.journal.size() >= 4);
+    CHECK(run.card.journal[0].find("\"begin\"") != std::string::npos);
+    CHECK(run.card.journal[0].find("\"mem\":") == std::string::npos);
+    CHECK(run.card.journal[2].find("\"mem\":50") != std::string::npos);
     CHECK(run.card.journal[3].find("SET FAILED") != std::string::npos);
     CHECK(run.card.count("SET FAILED") == 1);
     CHECK(run.logged("failed; treated as a driver reset"));
@@ -2036,7 +2064,12 @@ TEST_CASE("a reset verdict on the +0 memory sample ends the run") {
     CHECK_FALSE(r.ok);
     CHECK(r.reason == "the driver reset at stock clocks (DEVICE LOST)");
     CHECK(r.driver_resets == 1);
-    CHECK(mem_begins(run.card) == std::vector<int>{0});
+    // The +0 sample is the only entry of the run, and it names no clock.
+    CHECK(run.card.count("\"begin\"") == 1);
+    CHECK(clockless_begins(run.card) == 1);
+    CHECK(mem_begins(run.card).empty());
+    CHECK(run.logged("core +0 / mem +0: DEVICE LOST"));
+    CHECK(run.card.max_mem_seen == 0);
     CHECK(run.card.bw_measurements == 0);
     CHECK(run.card.rests == 0);
     CHECK(count_events(run.card, "health") == 0);
@@ -2091,6 +2124,46 @@ TEST_CASE("a soak entry carries only the clocks that are above stock") {
     CHECK(reread.freezes().size() == 1);
     CHECK(reread.ceilings().core_mhz == INT_MAX);
     CHECK(reread.ceilings().mem_mhz == 400);
+}
+
+TEST_CASE("the +0 sample of the bandwidth scan journals no clock") {
+    Run run;
+    run.card.bw_curve = [](int m) { return 500 + m * 0.3; };
+    const auto r = run.go(Preset::BestOfMyGpu);
+    REQUIRE(r.ok);
+    CHECK(r.mem_max_stable == 800);
+    // The first entry of the run is the +0 sample: it ran and was measured,
+    // and its `begin` line names neither clock.
+    CHECK(run.logged("core +0 / mem +0: STABLE"));
+    CHECK(run.logged("mem +0: bandwidth 500.0 GB/s"));
+    REQUIRE(run.card.journal.size() >= 3);
+    const std::string& sample_begin = run.card.journal[0];
+    REQUIRE(sample_begin.find("\"begin\"") != std::string::npos);
+    CHECK(sample_begin.find("\"mem\":") == std::string::npos);
+    CHECK(sample_begin.find("\"core\":") == std::string::npos);
+    REQUIRE(run.card.journal[1].find("\"complete\"") != std::string::npos);
+    // The entry after it is the first one above stock, and it names its clock.
+    CHECK(run.card.journal[2].find("\"mem\":50") != std::string::npos);
+    CHECK(clockless_begins(run.card) == 1);   // the soak runs above stock
+    REQUIRE_FALSE(mem_begins(run.card).empty());
+    CHECK(mem_begins(run.card).front() == 50);
+
+    // A machine that froze during that sample leaves its entry open. That is
+    // a freeze, and it must not become a ceiling of 0 for either clock.
+    const std::vector<std::string> frozen{sample_begin};
+    Journal reread(frozen, [](const std::string&) { return true; });
+    CHECK(reread.freezes().size() == 1);
+    CHECK(reread.ceilings().mem_mhz == INT_MAX);
+    CHECK(reread.ceilings().core_mhz == INT_MAX);
+
+    // The next run on that journal searches memory as far as the first did.
+    Run next;
+    next.card.bw_curve = run.card.bw_curve;
+    next.card.journal = frozen;
+    const auto b = next.go(Preset::BestOfMyGpu);
+    REQUIRE(b.ok);
+    CHECK(b.mem_max_stable == 800);
+    CHECK(b.core_max_stable == 150);
 }
 
 TEST_CASE("a soak reset at stock clocks ends the run") {
@@ -2150,7 +2223,11 @@ TEST_CASE("a failed write of the +0 memory sample ends the run") {
     CHECK(run.logged("setting power 115 % failed; treated as a driver reset"));
     CHECK(r.driver_resets == 1);
     CHECK_FALSE(run.card.fail_power_set_in_entry);   // the knob fired
-    CHECK(mem_begins(run.card) == std::vector<int>{0});
+    // The +0 sample is the only entry of the run, and it names no clock.
+    CHECK(run.card.count("\"begin\"") == 1);
+    CHECK(clockless_begins(run.card) == 1);
+    CHECK(mem_begins(run.card).empty());
+    CHECK(run.card.max_mem_seen == 0);
     REQUIRE(run.card.journal.size() == 2);
     CHECK(run.card.journal.back().find("SET FAILED") != std::string::npos);
     CHECK(run.card.probes == 5);   // the baseline and four power probes; the sample never ran

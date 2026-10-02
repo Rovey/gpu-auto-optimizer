@@ -13,6 +13,7 @@
 #include "hw/nvapi.hpp"
 #include "hw/nvml.hpp"
 #include "hw/stress.hpp"
+#include <algorithm>
 #include <ctime>
 #include <chrono>
 #include <filesystem>
@@ -170,8 +171,9 @@ OptimizeOutcome run_optimize(Preset preset, const OptimizeHooks& hooks, const st
     // ignores lines without an id, so this one never becomes a ceiling.
     if (!append_line_durable(path, "{\"session\":\"" + now_text() + "\"}"))
         return fail("cannot write the crash journal " + path.string() + "; not tuning without it");
-    for (const auto& f : journal.freezes())
-        log("warning: a previous run froze the machine at " + f + "; staying below it from now on");
+    for (const auto& f : journal.freeze_entries())
+        log("warning: a previous run froze the machine at " + f.description +
+            (f.caps_anything ? "; staying below it from now on" : "; there is no setting to stay below"));
     if (!gpu.set_power_limit) log("power limit: not adjustable on this card, skipped");
 
     // A run lasts minutes with a candidate applied and a journal entry open;
@@ -209,7 +211,7 @@ OptimizeOutcome run_optimize(Preset preset, const OptimizeHooks& hooks, const st
         if (stop_requested()) return false;
         if (!(seconds > 0)) return true;   // nothing to wait for
         using namespace std::chrono;
-        const auto end = steady_clock::now() + duration_cast<steady_clock::duration>(duration<double>(seconds));
+        const auto end = steady_clock::now() + duration_cast<steady_clock::duration>(duration<double>(std::min(seconds, 3600.0)));
         for (;;) {
             const auto left_ms = duration_cast<milliseconds>(end - steady_clock::now()).count();
             if (left_ms <= 0) return true;
