@@ -542,3 +542,64 @@ TEST_CASE("a power probe stopped while it runs restores stock power") {
     CHECK(run.card.power == 100);
     CHECK(run.card.max_core_seen == 0);
 }
+
+TEST_CASE("climb_to_edge climbs in strides, then refines on the step grid") {
+    std::vector<int> probed;
+    const int r = climb_to_edge(0, 300, 15, 60, INT_MAX, [&](int v) { probed.push_back(v); return v <= 150; });
+    CHECK(r == 150);
+    CHECK(probed == std::vector<int>{60, 120, 180, 150, 165});
+}
+
+TEST_CASE("climb_to_edge finds an edge between strides and between grid points") {
+    CHECK(climb_to_edge(0, 300, 15, 60, INT_MAX, [](int v) { return v <= 100; }) == 90);
+    CHECK(climb_to_edge(0, 300, 15, 60, INT_MAX, [](int v) { return v <= 120; }) == 120);
+    CHECK(climb_to_edge(0, 300, 15, 60, INT_MAX, [](int v) { return v <= 15; }) == 15);
+}
+
+TEST_CASE("climb_to_edge never probes lo, and returns lo when nothing above holds") {
+    std::vector<int> probed;
+    const int r = climb_to_edge(0, 300, 15, 60, INT_MAX, [&](int v) { probed.push_back(v); return false; });
+    CHECK(r == 0);
+    CHECK(probed == std::vector<int>{60, 30, 15});
+}
+
+TEST_CASE("climb_to_edge never exceeds hi, even when hi is off the grid") {
+    int max_probed = 0;
+    const int r = climb_to_edge(0, 1000, 15, 60, INT_MAX, [&](int v) { max_probed = std::max(max_probed, v); return true; });
+    CHECK(r == 990);          // the highest grid point at or below +1000
+    CHECK(max_probed == 990);
+    CHECK(climb_to_edge(0, 300, 15, 60, INT_MAX, [](int) { return true; }) == 300);
+}
+
+TEST_CASE("climb_to_edge stays below the journal ceiling") {
+    int max_probed = 0;
+    const int r = climb_to_edge(0, 300, 15, 60, 120, [&](int v) { max_probed = std::max(max_probed, v); return true; });
+    CHECK(r == 105);
+    CHECK(max_probed == 105);
+    int calls = 0;
+    CHECK(climb_to_edge(0, 300, 15, 60, 0, [&](int) { ++calls; return true; }) == 0);
+    CHECK(calls == 0);
+}
+
+TEST_CASE("climb_to_edge never probes a value twice, and never above the first failure") {
+    // A marginal clock can pass one probe and fail the next. A value that
+    // failed is not given a second chance, and nothing above it is tried.
+    std::map<int, int> calls;
+    int first_failure = INT_MAX;
+    climb_to_edge(0, 600, 15, 60, INT_MAX, [&](int v) {
+        ++calls[v];
+        CHECK(v < first_failure);
+        const bool ok = v <= 260;
+        if (!ok) first_failure = std::min(first_failure, v);
+        return ok;
+    });
+    for (const auto& [v, n] : calls) CHECK(n == 1);
+}
+
+TEST_CASE("the core search probes upward from stock, never from the middle of the range") {
+    Run run;
+    const auto r = run.go(Preset::BestOfMyGpu);
+    REQUIRE(r.ok);
+    CHECK(r.core_max_stable == 150);
+    CHECK(run.card.max_core_seen == 180);   // one stride past the edge, not +225 or +300
+}

@@ -22,6 +22,24 @@ int highest_stable(int lo, int hi, int step, int ceiling, const std::function<bo
     return lo + good * step;
 }
 
+int climb_to_edge(int lo, int hi, int step, int stride, int ceiling, const std::function<bool(int)>& is_stable) {
+    const int top = std::min(hi, ceiling - 1);
+    const int n = top > lo ? (top - lo) / step : 0;     // candidates lo+step .. lo+n*step
+    const int per = std::max(1, stride / step);         // grid steps per stride
+    int good = 0, bad = n + 1;                          // indices; 0 = lo, assumed stable
+    while (good < n && bad == n + 1) {
+        const int next = std::min(good + per, n);
+        if (is_stable(lo + next * step)) good = next;
+        else bad = next;
+    }
+    while (bad - good > 1) {
+        const int mid = (good + bad) / 2;
+        if (is_stable(lo + mid * step)) good = mid;
+        else bad = mid;
+    }
+    return lo + good * step;
+}
+
 int lowest_passing(int lo, int hi, int step, const std::function<bool(int)>& passes) {
     const int n = hi > lo ? (hi - lo) / step : 0;       // candidates hi - n*step .. hi
     int good = n, bad = -1;                             // index n = hi, assumed passing
@@ -72,6 +90,8 @@ int confirm_edge(int edge, int lo, int step, int tries, const std::function<bool
 namespace {
 constexpr int kCoreStep = 15, kCoreMax = kCoreMaxMhz;
 constexpr int kMemStep = 50, kMemMax = kMemMaxMhz;
+constexpr int kCoreStride = 60;    // four core steps
+constexpr int kMemStride = 200;    // four memory steps
 constexpr int kPowerStep = 5;
 constexpr double kBaselineS = 30, kPowerProbeS = 20, kClockProbeS = 3, kSoakS = 300;
 constexpr int kSafetyTempC = 85;
@@ -211,8 +231,8 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
     auto holds = [](std::optional<Verdict> v) { return v == Verdict::Stable || v == Verdict::TooHot; };
 
     if (obj.core_oc) {
-        r.core_max_stable = highest_stable(0, kCoreMax, kCoreStep, journal.ceilings().core_mhz,
-                                           [&](int v) { return is_stable(clock_candidate(v, std::nullopt, v, 0, kClockProbeS)); });
+        r.core_max_stable = climb_to_edge(0, kCoreMax, kCoreStep, kCoreStride, journal.ceilings().core_mhz,
+                                          [&](int v) { return is_stable(clock_candidate(v, std::nullopt, v, 0, kClockProbeS)); });
         if (!stopped.empty()) return finish_fail(stopped);
         r.core_confirmed = confirm_edge(r.core_max_stable, 0, kCoreStep, kConfirmTries, [&](int v) {
             return holds(clock_candidate(v, std::nullopt, v, 0, kConfirmProbeS));
@@ -241,7 +261,7 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
                 return m;
             });
         } else {
-            r.mem_max_stable = highest_stable(0, kMemMax, kMemStep, ceiling, [&](int v) {
+            r.mem_max_stable = climb_to_edge(0, kMemMax, kMemStep, kMemStride, ceiling, [&](int v) {
                 return is_stable(clock_candidate(std::nullopt, v, r.core_mhz, v, kClockProbeS));
             });
         }

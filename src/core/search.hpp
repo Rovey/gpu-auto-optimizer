@@ -19,6 +19,15 @@ inline constexpr int kMemMaxMhz = 1500;
 // one fails too. lo itself is assumed stable (it is stock) and never probed.
 int highest_stable(int lo, int hi, int step, int ceiling, const std::function<bool(int)>& is_stable);
 
+// Like highest_stable, but for a range whose top may be far beyond the edge:
+// bisecting such a range would start with a probe hundreds of MHz too high.
+// Climbs lo+stride, lo+2*stride, ... until a probe fails or the top is
+// reached, then bisects between the last passing and the first failing value
+// on the step grid. The first failing probe is at most one stride above the
+// highest stable value. No value is probed twice, lo is never probed, and
+// nothing above hi or at or above ceiling is.
+int climb_to_edge(int lo, int hi, int step, int stride, int ceiling, const std::function<bool(int)>& is_stable);
+
 // Lowest value in hi, hi-step, ... (>= lo) for which passes holds, assuming
 // passing is monotonic upward. hi is the reference and is assumed to pass;
 // it is never probed.
