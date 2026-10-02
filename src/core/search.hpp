@@ -91,6 +91,12 @@ inline constexpr double kHealthProbeS = 5;
 inline constexpr double kHealthyScore = 0.9;
 inline constexpr int kHealthTries = 3;
 
+// After a reset event the search explores nothing new, and the long probes
+// keep their distance from where it happened: confirmation starts this many
+// grid steps below the last value that passed, and a confirm try or a soak
+// attempt that had a reset event is followed by one this many steps lower.
+inline constexpr int kResetBackoffSteps = 4;
+
 struct MemSample {
     bool stable = false;
     double gbps = 0;
@@ -104,9 +110,11 @@ struct MemSample {
 int best_bandwidth_offset(int lo, int hi, int step, int ceiling, const std::function<MemSample(int)>& sample);
 
 // "Search fast, confirm long": re-checks edge with a long probe; on failure
-// steps down by step and retries, at most `tries` probes, never probing lo
-// (stock). Returns the first value that holds, or lo.
-int confirm_edge(int edge, int lo, int step, int tries, const std::function<bool(int)>& holds);
+// steps down and retries, at most `tries` probes, never probing lo (stock) or
+// anything below it. Returns the first value that holds, or lo.
+// step_down: asked after each failed try how many steps to go down; empty = one.
+int confirm_edge(int edge, int lo, int step, int tries, const std::function<bool(int)>& holds,
+                 const std::function<int()>& step_down = {});
 
 // One stress run: seconds of load, aborting above max_temp_c.
 using Probe = std::function<StabilityResult(double seconds, int max_temp_c, double stall_below)>;
@@ -119,7 +127,8 @@ struct OptimizeIo {
     // failed. Empty: the memory search falls back to stability only.
     std::function<std::optional<double>()> bandwidth;
     // Waits without loading the card; returns false when the wait was cut short
-    // by a stop request. Empty: the search does not wait (tests).
+    // by a stop request. Empty: the search does not wait, and does not log
+    // that it did.
     std::function<bool(double seconds)> rest;
 };
 
@@ -136,13 +145,18 @@ struct OptimizeResult {
     int mem_confirmed = 0;
     StabilityResult baseline;
     StabilityResult soak;
-    // Reset events in this run, the recovery included. A STALLED or blind probe
-    // is counted although it only suggests a reset.
+    // Reset events in this run, each counted once: a baseline, power, candidate,
+    // soak or health probe that ended DEVICE LOST, STALLED or NO TELEMETRY (the
+    // last two only suggest a reset); and, when the card can be reconnected
+    // (gpu.recover), a candidate, power or soak write that failed and a
+    // bandwidth measurement that failed on a stable candidate above memory +0.
+    // With gpu.recover the run ends at the second one, so this is 0, 1 or 2.
     int driver_resets = 0;
 };
 
 // The whole tuning run (spec §3): baseline, power, memory, core, soak. Leaves
-// the result applied when ok; any !ok return leaves the card at stock.
+// the result applied when ok; any !ok return leaves the card at stock, or
+// says in stock_restored that it could not.
 OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& journal, const OptimizeIo& io);
 
 }

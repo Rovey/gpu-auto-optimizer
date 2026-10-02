@@ -81,9 +81,12 @@ int best_bandwidth_offset(int lo, int hi, int step, int ceiling, const std::func
     return lo;
 }
 
-int confirm_edge(int edge, int lo, int step, int tries, const std::function<bool(int)>& holds) {
-    for (int t = 0, v = edge; t < tries && v > lo; ++t, v -= step)
+int confirm_edge(int edge, int lo, int step, int tries, const std::function<bool(int)>& holds,
+                 const std::function<int()>& step_down) {
+    for (int t = 0, v = edge; t < tries && v > lo; ++t) {
         if (holds(v)) return v;
+        v -= step * (step_down ? step_down() : 1);
+    }
     return lo;
 }
 
@@ -132,15 +135,27 @@ std::string describe(const StabilityResult& s) {
                   verdict_name(s.verdict), s.score, s.peak_temp_c, s.avg_power_w);
     return buf;
 }
+
+// The verdicts that suggest the driver reset. Only DEVICE LOST proves it; a
+// card that stalled or went blind is handled the same, because it must not be
+// loaded again without the recovery. None of them says the candidate is
+// unstable.
+bool is_reset_verdict(Verdict v) {
+    return v == Verdict::DeviceLost || v == Verdict::Stalled || v == Verdict::NoTelemetry;
+}
 }
 
 OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& journal, const OptimizeIo& io) {
     OptimizeResult r;
     std::string stopped;   // non-empty once the run must end; later probes become no-ops
     auto log = [&](const std::string& m) { if (io.log) io.log(m); };
-    bool hw_suspect = false;         // the connections may be dead: a probe or a write ended in a way a driver reset explains
+    bool hw_suspect = false;         // the connections may be dead: a probe, a write or a measurement ended in a way a driver reset explains
     bool reconnect_futile = false;   // a reconnect failed, or did not help: the way out does not try another
-    int blind_probes = 0;            // consecutive probes without telemetry
+    // The reset budget. These three are only ever set with gpu.recover:
+    // without a way to reconnect, a reset verdict is counted and that is all.
+    bool explored_enough = false;    // a reset event happened: no new value is tried in this run
+    bool reset_in_step = false;      // the candidate or soak attempt under way had a reset event
+    std::string reset_seen;          // what the last reset event looked like: a verdict, or the write that failed
     bool power_ctl = obj.power && gpu.set_power_limit && gpu.power_limit_range_pct;   // false once skipped
 
     // The only caller of gpu.recover, which can take half a minute, fail,
@@ -160,7 +175,8 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
         stopped = gpu.recover && io.aborted && io.aborted() ? "aborted" : why;
     };
     // Every failing return goes through here, with no journal entry open
-    // (unless the journal itself could not close it).
+    // (unless the journal itself could not close it). It runs no load and
+    // does not wait: at most one reconnect and the reset to stock.
     auto finish_fail = [&](const std::string& why) {
         // After a driver reset the old connections are dead: reconnect first,
         // or the reset to stock fails on a card the driver already reset. A
@@ -179,9 +195,33 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
         return r;
     };
 
+    // One reset event: a probe that ended DEVICE LOST, STALLED or NO
+    // TELEMETRY, or (callers check gpu.recover) a write or a bandwidth
+    // measurement that failed. `seen` says which. The first one ends
+    // exploring. The second one ends the run, and nothing is started after
+    // it: every step below checks `stopped` before it touches the card, the
+    // journal or the clock. Without gpu.recover the event is counted, the
+    // connections are taken for dead as they always were, and nothing else
+    // changes.
+    auto reset_event = [&](const std::string& seen) {
+        ++r.driver_resets;
+        hw_suspect = true;
+        if (!gpu.recover) return;
+        reset_seen = seen;
+        reset_in_step = true;
+        explored_enough = true;
+        if (r.driver_resets >= 2) stopped = "the driver reset twice";
+    };
+    // Why the run ends after a reset event with no clock offset applied:
+    // there is nothing to back off to, and repeating the state would load
+    // what just reset the driver.
+    auto at_stock_clocks = [&] { return "the driver reset at stock clocks (" + reset_seen + ")"; };
+
     // Leaves the card alone after a driver reset. Without io.rest nothing
-    // waits, and the log does not claim it did. False: a stop request came.
+    // waits, and the log does not claim it did. False: a stop request came,
+    // before the rest (during the reconnect, say) or during it.
     auto rest = [&]() -> bool {
+        if (io.aborted && io.aborted()) return false;
         if (io.rest) {
             log("resting " + std::to_string(static_cast<int>(kRestAfterResetS)) + " s before the card is loaded again");
             if (!io.rest(kRestAfterResetS)) return false;
@@ -189,13 +229,14 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
         return !(io.aborted && io.aborted());
     };
 
-    // The recovery gate: when the last probe looked like a driver reset, it
-    // reconnects, writes stock, rests, and loads the card again only to prove
-    // at stock that it is back. Called at the start of every power step, clock
-    // candidate and soak attempt, before its journal entry is opened and
-    // before its write, so nothing in here ever leaves an entry behind. False:
-    // `stopped` is set and the run must end. Nothing in here starts another
-    // recovery: a reset verdict in the health probe ends the run.
+    // The recovery gate: after a reset event it reconnects, writes stock,
+    // rests, and loads the card again only to prove at stock that it is back.
+    // Called at the start of every power step, clock candidate and soak
+    // attempt, before its journal entry is opened and before its write, so
+    // nothing in here ever leaves an entry behind. False: `stopped` is set and
+    // the run must end. On a run that is already stopped it does nothing.
+    // Nothing in here starts another recovery: a reset verdict in the health
+    // probe ends the run.
     auto ensure_hw = [&]() -> bool {
         if (!stopped.empty()) return false;
         if (!hw_suspect) return true;
@@ -218,9 +259,10 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
         for (int t = 0; t < kHealthTries; ++t) {
             if (!rest()) { stopped = "aborted"; return false; }
             log("checking that the card is back: " + std::to_string(static_cast<int>(kHealthProbeS)) + " s at stock");
-            // Called directly, not through `probe`, which would come back
-            // here. No stall floor: the probe is judged on its whole run,
-            // because its first batch may include re-creating the device.
+            // Called directly, not through `probe`, which would count a reset
+            // verdict as an event of its own. No stall floor: the probe is
+            // judged on its whole run, because its first batch may include
+            // re-creating the device.
             StabilityResult s = io.probe(kHealthProbeS, kSafetyTempC, 0.0);
             if (s.verdict == Verdict::Stable && s.score < kStalledScore * r.baseline.score) s.verdict = Verdict::Stalled;
             log("health: " + describe(s));
@@ -228,7 +270,7 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
             // The health probe is a load and can reset the driver itself. That
             // is counted, and the card is not loaded again in this run. The
             // connections may be dead again: the way out reconnects once.
-            if (s.verdict == Verdict::DeviceLost || s.verdict == Verdict::NoTelemetry || s.verdict == Verdict::Stalled) {
+            if (is_reset_verdict(s.verdict)) {
                 ++r.driver_resets;
                 hw_suspect = true;
                 stop(s.verdict == Verdict::Stalled
@@ -236,7 +278,9 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
                          : std::string("the card was not usable when checked after a driver reset (") + verdict_name(s.verdict) + ")");
                 return false;
             }
-            if (s.verdict == Verdict::Stable && s.score >= kHealthyScore * r.baseline.score) return true;
+            // A baseline that scored nothing gives no bar to measure against:
+            // then no health probe counts as healthy.
+            if (s.verdict == Verdict::Stable && r.baseline.score > 0 && s.score >= kHealthyScore * r.baseline.score) return true;
             // Computing, but not back yet (slow, a wrong result, too hot).
         }
         stop("the card did not recover after a driver reset");
@@ -245,8 +289,8 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
 
     // Writes the full state (power, core, mem), so a TDR that reset the driver
     // (or a previous candidate) can never leave stale settings behind. Returns
-    // what failed, or nothing. Never reconnects and never retries: what to do
-    // about a failed write depends on whether a journal entry is open.
+    // what failed, or nothing. Never reconnects and never retries: what a
+    // failed write means is the caller's business.
     auto write_state = [&](int power, int core, int mem) -> std::string {
         if (power_ctl && !gpu.set_power_limit(power)) return "setting power " + std::to_string(power) + " % failed";
         if ((obj.core_oc || core != 0) && !(gpu.set_core_offset && gpu.set_core_offset(core)))
@@ -256,23 +300,28 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
         return {};
     };
     // Opens a journal entry for a clock candidate and applies it. Returns the
-    // id of the open entry, or nothing: then `stopped` is set and no entry is
-    // open. A failed write gets one reconnect and one more try (a driver reset
-    // the probe did not report looks exactly like this), but never inside the
-    // entry: it is closed as SET FAILED first, and the retry gets a new one.
+    // id of the open entry, or nothing: then no entry is open, and either
+    // `stopped` is set, or (`stopped` still empty) the write failed and was
+    // counted as a reset event, and the candidate did not pass. A driver reset
+    // the probe did not report looks exactly like a failed write, so it gets
+    // no second try: the entry is closed as SET FAILED, and the gate runs
+    // before whatever comes next. Without gpu.recover a failed write stops the
+    // run.
     auto begin_candidate = [&](std::optional<int> core_j, std::optional<int> mem_j, int core, int mem) -> std::optional<int> {
-        for (bool retried = false;; retried = true) {
-            const int id = journal.begin(core_j, mem_j);
-            if (id < 0) { stopped = "could not write the journal"; return std::nullopt; }
-            const std::string why = write_state(r.power_pct, core, mem);
-            if (why.empty()) return id;
-            const bool closed = journal.complete(id, "SET FAILED");
-            if (retried || !gpu.recover || !closed) { stop(why); return std::nullopt; }
-            log(why + "; reconnecting and trying once more");
-            if (!reconnect()) { stop(why); return std::nullopt; }
-        }
+        const int id = journal.begin(core_j, mem_j);
+        if (id < 0) { stopped = "could not write the journal"; return std::nullopt; }
+        const std::string why = write_state(r.power_pct, core, mem);
+        if (why.empty()) return id;
+        const bool closed = journal.complete(id, "SET FAILED");
+        if (!gpu.recover || !closed) { stop(why); return std::nullopt; }
+        log(why + "; treated as a driver reset");
+        reset_event(why);
+        return std::nullopt;
     };
-    // One probe, with the abort and blindness checks every step shares.
+    // One probe, with the checks every step shares: a stopped run, a stop
+    // request, a card that stopped computing, and the count of reset events.
+    // At the second reset event it sets `stopped` and still returns the
+    // result, so the caller closes its journal entry with the real verdict.
     auto probe = [&](double seconds, int max_temp) -> std::optional<StabilityResult> {
         if (!stopped.empty()) return std::nullopt;
         if (io.aborted && io.aborted()) { stopped = "aborted"; return std::nullopt; }
@@ -282,19 +331,10 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
         // r.baseline.score is 0 until the baseline itself has been judged.
         if (s.verdict == Verdict::Stable && r.baseline.score > 0 && s.score < kStalledScore * r.baseline.score)
             s.verdict = Verdict::Stalled;
-        const bool reset_verdict = s.verdict == Verdict::DeviceLost || s.verdict == Verdict::Stalled ||
-                                   s.verdict == Verdict::NoTelemetry;
-        if (reset_verdict) ++r.driver_resets;
-        // Telemetry goes blind when the driver resets. With a way to
-        // reconnect, one blind probe is a failed candidate; a second in a row
-        // means the sensor is gone, not the driver.
-        if (s.verdict == Verdict::NoTelemetry) {
-            if (!gpu.recover || ++blind_probes >= 2) { stopped = "lost telemetry"; return std::nullopt; }
-            log("no telemetry during this probe; counted as failed");
-        } else {
-            blind_probes = 0;
-        }
-        if (reset_verdict) hw_suspect = true;
+        if (is_reset_verdict(s.verdict)) reset_event(verdict_name(s.verdict));
+        // Telemetry goes blind when the driver resets. Without a way to
+        // reconnect there is nothing to do about it but end the run.
+        if (s.verdict == Verdict::NoTelemetry && !gpu.recover) { stopped = "lost telemetry"; return std::nullopt; }
         return s;
     };
     // What a journal entry is closed with. A candidate the user stopped is
@@ -330,6 +370,9 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
     if (!base) return finish_fail(stopped);
     r.baseline = *base;
     log("baseline: " + describe(*base));
+    // The baseline runs at stock clocks: a reset there is nothing the search
+    // can work around.
+    if (reset_in_step) return finish_fail(at_stock_clocks());
     if (base->verdict != Verdict::Stable) return finish_fail(std::string("stock is not stable (") + verdict_name(base->verdict) + ")");
 
     // Power.
@@ -343,20 +386,27 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
             const int grid_lo = 100 - (100 - min_pct) / kPowerStep * kPowerStep;
             power_floor = grid_lo;
             std::map<int, StabilityResult> seen;
+            // One power step, at stock clocks. A reset event here (a probe
+            // with a reset verdict, or a failed write) ends the run: `stopped`
+            // is set, and every later step is a no-op.
             auto run_power = [&](int pct) -> std::optional<StabilityResult> {
                 if (!stopped.empty()) return std::nullopt;
                 if (io.aborted && io.aborted()) { stopped = "aborted"; return std::nullopt; }
                 if (!ensure_hw()) return std::nullopt;
-                // The power step opens no journal entry, so a failed write is
-                // retried in place: one reconnect, one more full write.
-                std::string why = write_state(pct, 0, 0);
-                if (!why.empty() && gpu.recover) {
-                    log(why + "; reconnecting and trying once more");
-                    if (reconnect()) why = write_state(pct, 0, 0);
+                reset_in_step = false;
+                // The power step opens no journal entry. A failed write is not
+                // retried: with a way to reconnect it is a reset event.
+                const std::string why = write_state(pct, 0, 0);
+                if (!why.empty()) {
+                    if (!gpu.recover) { stop(why); return std::nullopt; }
+                    log(why + "; treated as a driver reset");
+                    reset_event(why);
+                    if (stopped.empty()) stopped = at_stock_clocks();
+                    return std::nullopt;
                 }
-                if (!why.empty()) { stop(why); return std::nullopt; }
                 const auto s = probe(kPowerProbeS, kSafetyTempC);
                 if (s) { seen[pct] = *s; log("power " + std::to_string(pct) + " %: " + describe(*s)); }
+                if (reset_in_step && stopped.empty()) stopped = at_stock_clocks();
                 return s;
             };
             const int cap = highest_stable(grid_lo, max_pct, kPowerStep, INT_MAX, [&](int pct) {
@@ -369,7 +419,8 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
                 // Reference = best stable score at or below the cap (baseline
                 // included). One probe scatters a few percent; using a single
                 // low reading as the reference let quiet cost 4 % on the 4070.
-                if (!seen.count(cap) && !run_power(cap)) return finish_fail(stopped);
+                if (!seen.count(cap)) run_power(cap);
+                if (!stopped.empty()) return finish_fail(stopped);
                 double ref_score = cap >= 100 ? r.baseline.score : 0;
                 for (const auto& [pct, s] : seen)
                     if (pct <= cap && s.verdict == Verdict::Stable) ref_score = std::max(ref_score, s.score);
@@ -387,14 +438,22 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
     // journal, then hardware, then the probe.
     // `extra` runs while the candidate is still applied and stable (e.g. a
     // bandwidth measurement), before the journal entry is closed. Returns the
-    // verdict, or nothing when the candidate did not run.
+    // verdict, or nothing when the candidate did not run: the run is stopped,
+    // or its write failed and was counted as a reset event. A reset event on
+    // a candidate with no clock offset (the +0 sample of the bandwidth scan)
+    // ends the run.
     auto clock_candidate = [&](std::optional<int> core_j, std::optional<int> mem_j, int core, int mem,
                                double seconds, const std::function<void()>& extra = {}) -> std::optional<Verdict> {
         if (!stopped.empty()) return std::nullopt;
         if (io.aborted && io.aborted()) { stopped = "aborted"; return std::nullopt; }
         if (!ensure_hw()) return std::nullopt;
+        reset_in_step = false;
+        const bool stock_clocks = core == 0 && mem == 0;
         const auto id = begin_candidate(core_j, mem_j, core, mem);
-        if (!id) return std::nullopt;
+        if (!id) {
+            if (reset_in_step && stock_clocks && stopped.empty()) stopped = at_stock_clocks();
+            return std::nullopt;
+        }
         const auto s = probe(seconds, obj.max_temp_c);
         if (s && s->verdict == Verdict::Stable && extra) extra();
         if (!journal.complete(*id, closed_as(s))) {
@@ -404,6 +463,7 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
         if (!s) return std::nullopt;
         log(std::string(seconds == kConfirmProbeS ? "confirm " : "") + "core +" + std::to_string(core) +
             " / mem +" + std::to_string(mem) + ": " + describe(*s));
+        if (reset_in_step && stock_clocks && stopped.empty()) stopped = at_stock_clocks();
         return s->verdict;
     };
     auto is_stable = [](std::optional<Verdict> v) { return v == Verdict::Stable; };
@@ -412,22 +472,57 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
     // lowers power), not a reason to throw the clock edge away.
     auto holds = [](std::optional<Verdict> v) { return v == Verdict::Stable || v == Verdict::TooHot; };
 
+    // One step of a climb or a scan. After a reset event nothing new is
+    // explored: the step reports "not stable" without touching the card, and
+    // that ends the climb at the last value that passed. reset_at receives the
+    // value whose candidate had the reset event.
+    auto explore = [&](int v, int& reset_at, const std::function<bool()>& candidate) -> bool {
+        if (explored_enough) return false;
+        const bool passed = candidate();
+        if (explored_enough) reset_at = v;
+        return passed;
+    };
+    // Where confirmation starts: at the edge, or kResetBackoffSteps below it
+    // when a reset event ended the climb. A value one step below a reset is
+    // no place for a 30 s probe.
+    auto confirm_from = [](int edge, int step, int reset_at) {
+        return reset_at < 0 ? edge : std::max(0, edge - kResetBackoffSteps * step);
+    };
+    // How far the next confirm try goes down after one that failed.
+    const std::function<int()> confirm_step_down = [&] { return reset_in_step ? kResetBackoffSteps : 1; };
+    auto offset_text = [](int mhz) { return "+" + std::to_string(mhz); };
+
     // Memory comes first, at core 0: the core climb is where a card is most
     // likely to give out, and it must not keep the memory from being tuned.
     if (obj.mem_oc) {
         const int ceiling = journal.ceilings().mem_mhz;
-        if (io.bandwidth) {
-            r.mem_max_stable = best_bandwidth_offset(0, bounds.mem_max_mhz, kMemStep, ceiling, [&](int v) {
+        int reset_at = -1;   // the memory offset at which a reset event ended the scan
+        bool by_bandwidth = static_cast<bool>(io.bandwidth);
+        if (by_bandwidth) {
+            bool unavailable = false;
+            const int peak = best_bandwidth_offset(0, bounds.mem_max_mhz, kMemStep, ceiling, [&](int v) {
                 MemSample m;
                 std::optional<double> gbps;
-                m.stable = is_stable(clock_candidate(std::nullopt, v, 0, v, kClockProbeS,
-                                                     [&] { gbps = io.bandwidth(); }));
-                // A failed measurement (device lost) makes the step unusable,
-                // and the driver may have been reset under it.
-                if (m.stable && !gbps) {
-                    m.stable = false;
-                    hw_suspect = true;
-                }
+                m.stable = explore(v, reset_at, [&] {
+                    if (!is_stable(clock_candidate(std::nullopt, v, 0, v, kClockProbeS, [&] { gbps = io.bandwidth(); })))
+                        return false;
+                    if (gbps) return true;
+                    // The candidate passed, the measurement failed: the step is unusable.
+                    if (!gpu.recover) {
+                        hw_suspect = true;   // the driver may have been reset under it; the next write decides
+                    } else if (v == 0) {
+                        // Nothing is overclocked yet, so this is not the card
+                        // giving out: the measurement does not work on this
+                        // machine. Not a reset event, and no recovery. If the
+                        // driver did reset, the next write fails and is counted.
+                        unavailable = true;
+                        log("bandwidth measurement not available; searching memory by stability only");
+                    } else {
+                        log("mem " + offset_text(v) + ": the bandwidth measurement failed; treated as a driver reset");
+                        reset_event("the bandwidth measurement failed");
+                    }
+                    return false;
+                });
                 if (m.stable) {
                     m.gbps = *gbps;
                     char buf[64];
@@ -436,44 +531,75 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
                 }
                 return m;
             });
-        } else {
+            // An unavailable measurement ended the scan at +0: its result
+            // says nothing, and the stability climb below takes over.
+            if (unavailable) by_bandwidth = false;
+            else r.mem_max_stable = peak;
+        }
+        if (!by_bandwidth) {
             r.mem_max_stable = climb_to_edge(0, bounds.mem_max_mhz, kMemStep, kMemStride, ceiling, [&](int v) {
-                return is_stable(clock_candidate(std::nullopt, v, 0, v, kClockProbeS));
+                return explore(v, reset_at, [&] { return is_stable(clock_candidate(std::nullopt, v, 0, v, kClockProbeS)); });
             });
         }
         if (!stopped.empty()) return finish_fail(stopped);
-        r.mem_confirmed = confirm_edge(r.mem_max_stable, 0, kMemStep, kConfirmTries, [&](int v) {
+        if (reset_at >= 0)
+            log("mem: the driver reset at " + offset_text(reset_at) + "; using " + offset_text(r.mem_max_stable) +
+                (by_bandwidth ? ", the best of the values that passed" : ", the last value that passed"));
+        r.mem_confirmed = confirm_edge(confirm_from(r.mem_max_stable, kMemStep, reset_at), 0, kMemStep, kConfirmTries, [&](int v) {
             return holds(clock_candidate(std::nullopt, v, 0, v, kConfirmProbeS));
-        });
+        }, confirm_step_down);
         if (!stopped.empty()) return finish_fail(stopped);
         r.mem_mhz = apply_margin(r.mem_confirmed, kMemStep, obj.perf_push);
-        log(std::string("mem: ") + (io.bandwidth ? "bandwidth peak +" : "highest stable +") +
+        log(std::string("mem: ") + (by_bandwidth ? "bandwidth peak +" : "highest stable +") +
             std::to_string(r.mem_max_stable) + ", confirmed +" + std::to_string(r.mem_confirmed) +
             ", applying +" + std::to_string(r.mem_mhz));
     }
     // The core comes second and runs with the chosen memory offset applied
-    // (0 when the profile does not tune memory).
-    if (obj.core_oc) {
-        r.core_max_stable = climb_to_edge(0, bounds.core_max_mhz, kCoreStep, kCoreStride, journal.ceilings().core_mhz,
-                                          [&](int v) { return is_stable(clock_candidate(v, std::nullopt, v, r.mem_mhz, kClockProbeS)); });
-        if (!stopped.empty()) return finish_fail(stopped);
-        r.core_confirmed = confirm_edge(r.core_max_stable, 0, kCoreStep, kConfirmTries, [&](int v) {
-            return holds(clock_candidate(v, std::nullopt, v, r.mem_mhz, kConfirmProbeS));
+    // (0 when the profile does not tune memory). After a reset event in the
+    // memory phase it stays at stock: its climb would be exploring.
+    if (obj.core_oc && explored_enough) {
+        log("core: not searched; the driver reset earlier in this run");
+    } else if (obj.core_oc) {
+        int reset_at = -1;   // the core offset at which a reset event ended the climb
+        r.core_max_stable = climb_to_edge(0, bounds.core_max_mhz, kCoreStep, kCoreStride, journal.ceilings().core_mhz, [&](int v) {
+            return explore(v, reset_at, [&] { return is_stable(clock_candidate(v, std::nullopt, v, r.mem_mhz, kClockProbeS)); });
         });
+        if (!stopped.empty()) return finish_fail(stopped);
+        if (reset_at >= 0)
+            log("core: the driver reset at " + offset_text(reset_at) + "; using " + offset_text(r.core_max_stable) +
+                ", the last value that passed");
+        r.core_confirmed = confirm_edge(confirm_from(r.core_max_stable, kCoreStep, reset_at), 0, kCoreStep, kConfirmTries, [&](int v) {
+            return holds(clock_candidate(v, std::nullopt, v, r.mem_mhz, kConfirmProbeS));
+        }, confirm_step_down);
         if (!stopped.empty()) return finish_fail(stopped);
         r.core_mhz = apply_margin(r.core_confirmed, kCoreStep, obj.perf_push);
         log("core: highest stable +" + std::to_string(r.core_max_stable) + ", confirmed +" +
             std::to_string(r.core_confirmed) + ", applying +" + std::to_string(r.core_mhz));
     }
 
-    // Soak. On failure: too hot -> one power step down (lower clocks barely
-    // cool the card); anything else -> both clocks one step down.
+    // Soak. On failure: a reset event -> both clocks kResetBackoffSteps down,
+    // or the end of the run when no clock offset was applied; too hot -> one
+    // power step down (lower clocks barely cool the card); anything else ->
+    // both clocks one step down.
+    auto lower_clocks = [&](int steps) {
+        if (obj.core_oc) r.core_mhz = std::max(0, r.core_mhz - steps * kCoreStep);
+        if (obj.mem_oc) r.mem_mhz = std::max(0, r.mem_mhz - steps * kMemStep);
+    };
     for (int attempt = 0; attempt <= kSoakRetries; ++attempt) {
         if (io.aborted && io.aborted()) return finish_fail("aborted");
         if (!ensure_hw()) return finish_fail(stopped);
+        reset_in_step = false;
+        const bool stock_clocks = r.core_mhz == 0 && r.mem_mhz == 0;
         const auto id = begin_candidate(obj.core_oc ? std::optional<int>(r.core_mhz) : std::nullopt,
                                         obj.mem_oc ? std::optional<int>(r.mem_mhz) : std::nullopt, r.core_mhz, r.mem_mhz);
-        if (!id) return finish_fail(stopped);
+        if (!id) {
+            if (!stopped.empty()) return finish_fail(stopped);
+            // The write failed and was counted as a reset event: this attempt
+            // is over, and the next one runs through the gate.
+            if (stock_clocks) return finish_fail(at_stock_clocks());
+            lower_clocks(kResetBackoffSteps);
+            continue;
+        }
         log("soak: " + std::to_string(static_cast<int>(kSoakS)) + " s at power " + std::to_string(r.power_pct) + " %, core +" + std::to_string(r.core_mhz) +
             ", mem +" + std::to_string(r.mem_mhz));
         const auto s = probe(kSoakS, obj.max_temp_c);
@@ -481,19 +607,27 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
             return finish_fail("could not write the journal");
         if (!s) return finish_fail(stopped);
         log("soak: " + describe(*s));
+        // The second reset event: the run ends here, before the clocks are
+        // stepped down and before the gate or another entry could start.
+        if (!stopped.empty()) return finish_fail(stopped);
         // The soak is the longest probe; Ctrl+C during it must still win.
         if (io.aborted && io.aborted()) return finish_fail("aborted");
         if (s->verdict == Verdict::Stable) {
             r.soak = *s;
             r.ok = true;
+            if (gpu.recover && r.driver_resets > 0) log("the driver reset during this run; the search stopped exploring there");
             return r;
+        }
+        if (reset_in_step) {
+            if (stock_clocks) return finish_fail(at_stock_clocks());
+            lower_clocks(kResetBackoffSteps);
+            continue;
         }
         if (s->verdict == Verdict::TooHot && power_ctl && r.power_pct - kPowerStep >= power_floor) {
             r.power_pct -= kPowerStep;
             continue;
         }
-        if (obj.core_oc) r.core_mhz = std::max(0, r.core_mhz - kCoreStep);
-        if (obj.mem_oc) r.mem_mhz = std::max(0, r.mem_mhz - kMemStep);
+        lower_clocks(1);
     }
     return finish_fail("soak failed " + std::to_string(kSoakRetries + 1) + " times");
 }
