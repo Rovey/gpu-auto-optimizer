@@ -74,11 +74,12 @@ flowchart LR
     C --> D[Memory offset<br/>bandwidth peak]
     D --> E[Confirm edges<br/>30 s probes]
     E --> F[Safety margin]
-    F --> G[Soak<br/>60 s]
+    F --> G[Soak<br/>300 s]
     G --> H[Save profile]
 ```
 
 - **Stress test.** A DirectX 11 compute load in which the GPU checks every value it computes against a known answer. Each probe ends in a verdict: `STABLE`, `WRONG RESULT`, `DEVICE LOST`, `TOO HOT` or `NO TELEMETRY`.
+- **The core search climbs from stock.** It raises the offset in 60 MHz strides until a probe fails, then narrows the edge down to 15 MHz. How far it may go comes from the range the driver reports for your card, so a card that can hold more is not stopped at a fixed limit.
 - **Memory stops at the bandwidth peak,** not at the first error. GDDR6 and GDDR6X retry failed transfers, so an overclocked memory bus loses speed long before it returns a wrong result. The search measures bandwidth at each step and keeps the lowest offset within 1 % of the best.
 - **Crash journal.** Before a candidate touches the hardware, a `begin` line is flushed to disk. If the machine freezes, the unmatched `begin` becomes a ceiling the next run stays below.
 - **Apply at logon.** A scheduled task starts the app in the tray at logon, which applies the saved profile. It refuses when the driver version or the card changed since tuning, and it stops after three logons in a row that crashed within two minutes.
@@ -120,6 +121,12 @@ The saved profile is tied to the driver version it was tuned on. After an update
 <summary><b>What if a setting crashes my PC?</b></summary>
 
 During a search, the crash journal makes sure that setting is never tried again, and the next run stays below it. At logon, three crashes in a row within two minutes of applying switch apply-at-logon off.
+</details>
+
+<details>
+<summary><b>The run failed a probe or reset the driver. Is that normal?</b></summary>
+
+Yes. The edge of a card is found by crossing it once. A failed probe ends in `WRONG RESULT` or `DEVICE LOST` and the search steps back. If the machine freezes instead, the crash journal makes sure the next run stays below that setting.
 </details>
 
 <details>

@@ -70,7 +70,8 @@ The applied offset is always at least one step below the confirmed edge. Profile
 | NVAPI and NVML directly, not MSI Afterburner | An earlier version drove Afterburner by editing its profile files; the edits never reached the hardware, and Afterburner offers no per-step read-back, which the whole search depends on. |
 | Instability = a wrong result or a lost device | A GPU computes wrong before it crashes, so a self-checking compute load catches instability earliest and cheapest. A TDR (`DXGI_ERROR_DEVICE_REMOVED`) is recoverable, unlike a freeze. The load's iterations per second double as the score. |
 | Memory stops at the bandwidth peak | GDDR6/GDDR6X retry failed transfers, so memory overclocks lose bandwidth long before they return wrong results. |
-| Edges are confirmed, then backed off | A 3 s probe can pass by luck; the edges get 30 s probes before the safety margin is applied, and the result must pass a 60 s soak. |
+| Edges are confirmed, then backed off | A 3 s probe can pass by luck; the edges get 30 s probes before the safety margin is applied, and the result must pass a 300 s soak. |
+| The search climbs to a per-card bound | A fixed +300 MHz cap decided the result on cards that hold more. The bound is the offset range the driver reports, accepted only when it is plausible (spans stock, contains the applied offset, below a sanity limit). Bisecting such a range would start hundreds of MHz too high, so the search climbs in strides and bisects only between the last pass and the first failure. |
 | No undervolting | Locking a voltage point hard-froze the reference RTX 4070, and reshaping the curve gave no measurable gain on a power-limited card. |
 | Fans through NVML, stop zone via the driver | NVIDIA's legacy NVAPI fan API is gone on RTX 20-series and newer; NVML's `nvmlDeviceSetFanSpeed_v2` is public and verified by reading the target back. Below the stop threshold the driver owns the fans, so no failure of this app can leave them stopped. |
 | Tray app plus logon task | Driver settings are volatile: a reboot or driver reset clears them. The logon task starts the tray app, whose watchdog keeps the tune applied; three crashing logons in a row switch it off. |
@@ -81,6 +82,7 @@ The applied offset is always at least one step below the confirmed edge. Profile
 - `src/core/` is pure logic. It reaches hardware only through `GpuControl` and callbacks, so CI tests it without a GPU.
 - Every hardware write is verified by reading it back; a mismatch is a failure. Any failed apply ends at stock.
 - The crash journal's `begin` line is flushed to disk before a clock candidate touches the hardware.
+- A stop request ends the running probe within one batch (about 250 ms); the candidate's journal entry is closed as `ABORTED` and the run ends at stock.
 - Everything the elevated logon task touches is admin-only: the copy in `%ProgramFiles%` and the state folder in `%ProgramData%`. A state folder someone else created first, or a link in its place, is refused. Both locations come from the registry, not from environment variables.
 - The CRT is linked statically and every non-system DLL (`d3d11`, `dxgi`, `d3dcompiler_47`, `dwmapi`) is delay-loaded from System32, so nothing placed next to the executable is loaded.
 
