@@ -200,6 +200,23 @@ OptimizeOutcome run_optimize(Preset preset, const OptimizeHooks& hooks, const st
         if (!gbps) log("bandwidth measurement failed: " + load->Error());
         return gbps;
     };
+    // The wait between a driver reset and the next load. The card is left
+    // alone: no load, no driver call, no fan tick, and no log line (the search
+    // says that it rests). Short slices, so a stop request ends the wait
+    // within a quarter of a second.
+    io.rest = [&hooks](double seconds) {
+        const auto stop_requested = [&hooks] { return hooks.aborted && hooks.aborted(); };
+        if (stop_requested()) return false;
+        if (!(seconds > 0)) return true;   // nothing to wait for
+        using namespace std::chrono;
+        const auto end = steady_clock::now() + duration_cast<steady_clock::duration>(duration<double>(seconds));
+        for (;;) {
+            const auto left_ms = duration_cast<milliseconds>(end - steady_clock::now()).count();
+            if (left_ms <= 0) return true;
+            Sleep(static_cast<DWORD>(left_ms < 250 ? left_ms : 250));
+            if (stop_requested()) return false;
+        }
+    };
     if (hooks.active_gpu) hooks.active_gpu(&gpu);
     // The last line of defence: a fault that escapes the per-call guards (in
     // the stress load's D3D calls, say) must not kill the process with a
@@ -257,6 +274,9 @@ OptimizeOutcome run_optimize(Preset preset, const OptimizeHooks& hooks, const st
                 (stock ? "card restored to stock" : "reset FAILED, run `gao --reset`"));
         }
         out.ran = true;
+        // optimize never returned, so out.result was never assigned: every
+        // field not set here keeps its default. driver_resets reads 0,
+        // whatever the search had counted before the fault.
         out.result.ok = false;
         out.result.stock_restored = stock;
         out.result.reason = "access violation during the search";
