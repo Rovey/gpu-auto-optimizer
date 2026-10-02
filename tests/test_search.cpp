@@ -95,6 +95,10 @@ struct FakeCard {
     int blind_probes = 0;            // this many 3 s probes report NO TELEMETRY
     int flaky_core_sets = 0;         // this many set_core_offset calls fail although nothing is wrong
     int begins_when_recover_failed = -1;   // journal `begin` lines at the moment recover() first failed
+    int recovers_with_entry_open = 0;      // recover() calls made while the last journal line was a `begin`
+    bool abort_in_recover = false;   // a stop request arrives while recover() runs
+    int lost_at_probe = -1;          // the N-th probe of the run ends DEVICE LOST and the driver resets
+    bool bw_loses_device = false;    // a bandwidth measurement fails and the driver resets
     int probes = 0, power_probes = 0;
     std::vector<std::string> journal;
     std::string last_set_begin_ok;   // "" if every set had its begin line first
@@ -133,6 +137,10 @@ struct FakeCard {
         if (with_recover)
             g.recover = [this] {
                 ++recover_calls;
+                // The reconnect can crash or hang: it must never run inside an
+                // open journal entry, or that candidate becomes a false ceiling.
+                if (!journal.empty() && journal.back().find("\"begin\"") != std::string::npos) ++recovers_with_entry_open;
+                if (abort_in_recover) aborted_now = true;
                 if (recover_fails) {
                     if (begins_when_recover_failed < 0) {
                         begins_when_recover_failed = 0;
@@ -145,6 +153,14 @@ struct FakeCard {
             };
         return g;
     }
+    // What a real TDR does: the driver comes back at stock and the old
+    // connections to it are dead.
+    void driver_reset() { core = 0; mem = 0; power = 100; stale = true; }
+    int count(const std::string& what) const {
+        int n = 0;
+        for (const auto& l : journal) n += l.find(what) != std::string::npos;
+        return n;
+    }
     Probe probe() {
         return [this](double seconds, int max_temp) {
             ++probes;
@@ -153,10 +169,8 @@ struct FakeCard {
             r.seconds = seconds;
             if (seconds == abort_in_probe_s) { r.verdict = Verdict::Aborted; return r; }
             if (seconds == 3 && blind_probes > 0) { --blind_probes; r.verdict = Verdict::NoTelemetry; return r; }
-            if (lost_core_from >= 0 && core >= lost_core_from) {
-                // What a real TDR does: the driver comes back at stock and the
-                // old connections to it are dead.
-                core = 0; mem = 0; power = 100; stale = true;
+            if (probes == lost_at_probe || (lost_core_from >= 0 && core >= lost_core_from)) {
+                driver_reset();
                 r.verdict = Verdict::DeviceLost;
                 return r;
             }
@@ -195,13 +209,36 @@ struct Run {
         io.log = [this](const std::string& m) { log.push_back(m); };
         if (card.bw_curve)
             io.bandwidth = [this]() -> std::optional<double> {
+                if (card.bw_loses_device) { card.driver_reset(); return std::nullopt; }
                 if (card.bw_fails) return std::nullopt;
                 return card.bw_curve(card.mem);
             };
         return optimize(gpu, objectives_for(preset), j, io);
     }
     OptimizeResult go(Preset preset) { return go(preset, card.gpu()); }
+    bool logged(const std::string& what) const {
+        for (const auto& m : log)
+            if (m.find(what) != std::string::npos) return true;
+        return false;
+    }
 };
+
+// What every run with a reconnect must leave behind: no reconnect was made
+// inside an open journal entry, and no entry is left open.
+void check_journal_rules(const Run& run) {
+    CHECK(run.card.recovers_with_entry_open == 0);
+    CHECK(run.card.count("\"begin\"") == run.card.count("\"complete\""));
+    Journal reread(run.card.journal, [](const std::string&) { return true; });
+    CHECK(reread.freezes().empty());
+}
+}
+
+// A reset the probe reported is handled before the next step starts, not by
+// the fallback that retries a write after it has failed.
+void check_reconnected_up_front(const Run& run) {
+    CHECK(run.logged("the driver was reset; reconnecting"));
+    CHECK_FALSE(run.logged("trying once more"));
+    CHECK(run.card.count("SET FAILED") == 0);
 }
 
 TEST_CASE("best preset converges to the card's edges and applies the margin") {
@@ -785,11 +822,13 @@ TEST_CASE("a driver reset at the edge is survived: the search reconnects and car
     const auto r = run.go(Preset::BestOfMyGpu);
     REQUIRE(r.ok);
     CHECK(r.core_max_stable == 120);
-    CHECK(run.card.recover_calls >= 1);
+    // One reconnect per lost candidate, before the next one: +180, +150 and
+    // +135 are lost; the confirm at +120 and everything after it pass.
+    CHECK(run.card.recover_calls == 3);
     CHECK_FALSE(run.card.stale);
     CHECK(run.card.core == r.core_mhz);   // the result is really applied
-    Journal reread(run.card.journal, [](const std::string&) { return true; });
-    CHECK(reread.freezes().empty());
+    check_reconnected_up_front(run);
+    check_journal_rules(run);
 }
 
 TEST_CASE("a stalled probe also triggers a reconnect") {
@@ -799,6 +838,7 @@ TEST_CASE("a stalled probe also triggers a reconnect") {
     const auto r = run.go(Preset::BestOfMyGpu);
     REQUIRE(r.ok);
     CHECK(run.card.recover_calls >= 1);
+    check_journal_rules(run);
 }
 
 TEST_CASE("without a reconnect a driver reset still ends the run cleanly") {
@@ -822,11 +862,9 @@ TEST_CASE("a driver that does not come back ends the run without opening another
     CHECK_FALSE(r.ok);
     CHECK(r.reason == "the driver did not come back after a reset");
     CHECK_FALSE(r.stock_restored);
-    int begins = 0;
-    for (const auto& l : run.card.journal) begins += l.find("\"begin\"") != std::string::npos;
-    CHECK(begins == run.card.begins_when_recover_failed);   // nothing was journaled after the failed reconnect
-    Journal reread(run.card.journal, [](const std::string&) { return true; });
-    CHECK(reread.freezes().empty());
+    CHECK(run.card.recover_calls == 1);   // a reconnect that failed is not tried again on the way out
+    CHECK(run.card.count("\"begin\"") == run.card.begins_when_recover_failed);   // nothing was journaled after the failed reconnect
+    check_journal_rules(run);
 }
 
 TEST_CASE("one probe without telemetry is a failed candidate; two in a row end the run") {
@@ -835,7 +873,12 @@ TEST_CASE("one probe without telemetry is a failed candidate; two in a row end t
     once.card.blind_probes = 1;
     const auto a = once.go(Preset::BestOfMyGpu);
     REQUIRE(a.ok);
-    CHECK(once.card.recover_calls >= 1);
+    // The blind probe is the first 3 s one, core +60: it counts as the first
+    // failure, so the search bisects below it (+30, +45 pass) and ends at +45.
+    CHECK(a.core_max_stable == 45);
+    CHECK(once.card.recover_calls == 1);
+    CHECK(once.logged("no telemetry during this probe; counted as failed"));
+    check_journal_rules(once);
 
     Run twice;
     twice.card.with_recover = true;
@@ -844,6 +887,7 @@ TEST_CASE("one probe without telemetry is a failed candidate; two in a row end t
     CHECK_FALSE(b.ok);
     CHECK(b.reason == "lost telemetry");
     CHECK(twice.card.core == 0);
+    check_journal_rules(twice);
 }
 
 TEST_CASE("without a reconnect a probe without telemetry ends the run at once") {
@@ -862,14 +906,226 @@ TEST_CASE("a write that fails once is retried after a reconnect") {
     REQUIRE(r.ok);
     CHECK(r.core_max_stable == 150);
     CHECK(run.card.recover_calls == 1);
+    // The failed write's entry is closed before the reconnect; the retry gets
+    // its own entry.
+    CHECK(run.card.count("SET FAILED") == 1);
+    check_journal_rules(run);
 }
 
 TEST_CASE("a write that keeps failing still stops the run at stock") {
+    // The reconnect works, the write after it fails again: a set failure.
     Run run;
     run.card.with_recover = true;
     run.card.fail_core_set_at = 150;
     const auto r = run.go(Preset::BestOfMyGpu);
     CHECK_FALSE(r.ok);
-    CHECK(r.reason.find("core") != std::string::npos);
+    CHECK(r.reason == "setting core +150 failed");
+    CHECK(r.stock_restored);
     CHECK(run.card.core == 0);
+    CHECK(run.card.power == 100);
+    CHECK(run.card.recover_calls == 1);          // one retry per candidate, none on the way out
+    CHECK(run.card.count("SET FAILED") == 2);    // the first write and the retry, each in its own entry
+    check_journal_rules(run);
+}
+
+TEST_CASE("a run stopped while the card is stale reconnects before it resets to stock") {
+    // Probe 8 is core +180, the first lost candidate; the stop request is
+    // seen before the next candidate, with the old connections still dead.
+    Run run;
+    run.card.with_recover = true;
+    run.card.lost_core_from = 135;
+    run.abort_after_probes = 8;
+    const auto r = run.go(Preset::BestOfMyGpu);
+    CHECK_FALSE(r.ok);
+    CHECK(r.reason == "aborted");
+    CHECK(run.card.probes == 8);
+    CHECK(r.stock_restored);
+    CHECK(run.card.core == 0);
+    CHECK(run.card.mem == 0);
+    CHECK(run.card.power == 100);
+    CHECK_FALSE(run.card.stale);
+    CHECK(run.card.recover_calls == 1);
+    check_journal_rules(run);
+}
+
+// The probes of a default best-preset run, in order: 1 baseline; 2-5 power
+// (85, 105, 115, 120 %); 6-10 core (+60, +120, +180, +150, +165); 11 core
+// confirm (+150); 12-18 memory (+200, +400, +600, +800, +1000, +900, +850);
+// 19 memory confirm (+800); 20 soak.
+TEST_CASE("the probe order the driver-reset tests rely on") {
+    Run run;
+    const auto r = run.go(Preset::BestOfMyGpu);
+    REQUIRE(r.ok);
+    CHECK(run.card.probes == 20);
+}
+
+TEST_CASE("a driver reset during the baseline ends the run at stock") {
+    Run run;
+    run.card.with_recover = true;
+    run.card.lost_at_probe = 1;   // the baseline
+    const auto r = run.go(Preset::BestOfMyGpu);
+    CHECK_FALSE(r.ok);
+    CHECK(r.reason == "stock is not stable (DEVICE LOST)");
+    CHECK(r.baseline.seconds == 30);
+    CHECK(run.card.probes == 1);
+    CHECK(r.stock_restored);
+    CHECK_FALSE(run.card.stale);
+    CHECK(run.card.recover_calls == 1);
+    CHECK(run.card.journal.empty());
+    check_journal_rules(run);
+}
+
+TEST_CASE("a driver reset during a power probe is survived") {
+    Run run;
+    run.card.with_recover = true;
+    run.card.lost_at_probe = 3;   // the power probe at 105 %
+    const auto r = run.go(Preset::BestOfMyGpu);
+    REQUIRE(r.ok);
+    CHECK(run.logged("power 105 %: DEVICE LOST"));
+    // 105 % counts as failed; 95 % and 100 % pass after the reconnect.
+    CHECK(r.power_pct == 100);
+    CHECK(r.core_mhz == 105);
+    CHECK(r.mem_mhz == 550);
+    CHECK(run.card.power == 100);
+    CHECK(run.card.core == 105);
+    CHECK(run.card.recover_calls == 1);
+    CHECK_FALSE(run.card.stale);
+    check_reconnected_up_front(run);
+    check_journal_rules(run);
+}
+
+TEST_CASE("a driver reset during a memory candidate is survived") {
+    Run run;
+    run.card.with_recover = true;
+    run.card.lost_at_probe = 13;   // memory +400
+    const auto r = run.go(Preset::BestOfMyGpu);
+    REQUIRE(r.ok);
+    CHECK(run.logged("core +105 / mem +400: DEVICE LOST"));
+    // +400 counts as the first failure; +300 and +350 pass after the reconnect.
+    CHECK(r.mem_max_stable == 350);
+    CHECK(r.mem_confirmed == 350);
+    CHECK(r.mem_mhz == 200);       // 70 % of 350, rounded down to a step
+    CHECK(run.card.mem == 200);
+    CHECK(run.card.core == 105);   // the full state was rewritten after the reset
+    CHECK(run.card.power == 115);
+    CHECK(run.card.recover_calls == 1);
+    CHECK_FALSE(run.card.stale);
+    check_reconnected_up_front(run);
+    check_journal_rules(run);
+}
+
+TEST_CASE("a driver reset during a confirm probe is survived") {
+    Run run;
+    run.card.with_recover = true;
+    run.card.lost_at_probe = 11;   // the 30 s confirm of core +150
+    const auto r = run.go(Preset::BestOfMyGpu);
+    REQUIRE(r.ok);
+    CHECK(run.logged("confirm core +150 / mem +0: DEVICE LOST"));
+    CHECK(r.core_max_stable == 150);
+    CHECK(r.core_confirmed == 135);   // the next confirm, after the reconnect, holds
+    CHECK(r.core_mhz == 90);
+    CHECK(run.card.core == 90);
+    CHECK(run.card.recover_calls == 1);
+    CHECK_FALSE(run.card.stale);
+    check_reconnected_up_front(run);
+    check_journal_rules(run);
+}
+
+TEST_CASE("a driver reset during the soak is survived: clocks step down and the next soak passes") {
+    Run run;
+    run.card.with_recover = true;
+    run.card.lost_at_probe = 20;   // the first soak
+    const auto r = run.go(Preset::BestOfMyGpu);
+    REQUIRE(r.ok);
+    CHECK(run.logged("soak: DEVICE LOST"));
+    CHECK(run.card.probes == 21);
+    CHECK(r.soak.seconds == 300);
+    CHECK(r.core_mhz == 90);
+    CHECK(r.mem_mhz == 500);
+    CHECK(run.card.core == 90);
+    CHECK(run.card.mem == 500);
+    CHECK(run.card.power == 115);
+    CHECK(run.card.recover_calls == 1);
+    CHECK_FALSE(run.card.stale);
+    check_reconnected_up_front(run);
+    check_journal_rules(run);
+}
+
+TEST_CASE("a bandwidth measurement that loses the device is followed by a reconnect") {
+    // The probe itself passed, so only the failed measurement can tell the
+    // run that the driver was reset.
+    Run run;
+    run.card.with_recover = true;
+    run.card.bw_curve = [](int m) { return 500 + m * 0.1; };
+    run.card.bw_loses_device = true;
+    const auto r = run.go(Preset::BestOfMyGpu);
+    REQUIRE(r.ok);
+    CHECK(r.mem_mhz == 0);
+    CHECK(run.card.core == r.core_mhz);
+    CHECK(run.card.recover_calls == 1);
+    CHECK(run.card.count("SET FAILED") == 0);   // reconnected before the soak's entry, not after a failed write in it
+    CHECK(run.logged("the driver was reset; reconnecting"));
+    check_journal_rules(run);
+}
+
+TEST_CASE("a stop request during a failing reconnect is reported as aborted") {
+    Run run;
+    run.card.with_recover = true;
+    run.card.recover_fails = true;
+    run.card.abort_in_recover = true;
+    run.card.lost_core_from = 135;
+    const auto r = run.go(Preset::BestOfMyGpu);
+    CHECK_FALSE(r.ok);
+    CHECK(r.reason == "aborted");
+    CHECK(run.card.recover_calls == 1);
+    check_journal_rules(run);
+}
+
+TEST_CASE("a stop request during the retry of a failed write is reported as aborted") {
+    Run run;
+    run.card.with_recover = true;
+    run.card.abort_in_recover = true;
+    run.card.fail_core_set_at = 150;
+    const auto r = run.go(Preset::BestOfMyGpu);
+    CHECK_FALSE(r.ok);
+    CHECK(r.reason == "aborted");
+    CHECK(r.stock_restored);
+    CHECK(run.card.core == 0);
+    check_journal_rules(run);
+}
+
+TEST_CASE("a stale connection at the start is reconnected before the first reset") {
+    Run run;
+    run.card.with_recover = true;
+    run.card.stale = true;
+    const auto r = run.go(Preset::BestOfMyGpu);
+    REQUIRE(r.ok);
+    CHECK(run.card.recover_calls == 1);
+    CHECK(r.core_max_stable == 150);
+    check_journal_rules(run);
+}
+
+TEST_CASE("a start that cannot reset to stock even after a reconnect says so") {
+    Run dead;   // the reconnect fails
+    dead.card.with_recover = true;
+    dead.card.recover_fails = true;
+    dead.card.stale = true;
+    const auto a = dead.go(Preset::BestOfMyGpu);
+    CHECK_FALSE(a.ok);
+    CHECK(a.reason == "could not reset to stock");
+    CHECK_FALSE(a.stock_restored);
+    CHECK(dead.logged("reset FAILED"));
+    CHECK(dead.card.recover_calls == 1);
+    CHECK(dead.card.probes == 0);
+
+    Run stuck;   // the reconnect works, the reset keeps failing
+    stuck.card.with_recover = true;
+    stuck.card.reset_fails_from = 0;
+    const auto b = stuck.go(Preset::BestOfMyGpu);
+    CHECK_FALSE(b.ok);
+    CHECK(b.reason == "could not reset to stock");
+    CHECK_FALSE(b.stock_restored);
+    CHECK(stuck.logged("reset FAILED"));
+    CHECK(stuck.card.recover_calls == 1);
+    CHECK(stuck.card.probes == 0);
 }
