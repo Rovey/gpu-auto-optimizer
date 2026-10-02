@@ -9,10 +9,35 @@
 
 namespace gao {
 
-// Search ranges. apply_profile refuses anything outside them, since a
-// saved profile can only legitimately come from this search.
-inline constexpr int kCoreMaxMhz = 300;
-inline constexpr int kMemMaxMhz = 1500;
+// Search limits used when the card reports no usable offset range.
+inline constexpr int kCoreFallbackMaxMhz = 300;
+inline constexpr int kMemFallbackMaxMhz = 1500;
+
+// A reported maximum above these is taken for a misread buffer, not a real
+// card. Wide on purpose: they exist to catch garbage (kHz read as MHz, a
+// shifted layout), not to cap a card. First guesses, checked against the
+// ranges read in docs/hardware-checks.md check 45.
+inline constexpr int kCoreRangeSanityMhz = 2000;
+inline constexpr int kMemRangeSanityMhz = 6000;
+
+// True when a reported range can be trusted as an upper bound: it spans
+// stock (min <= 0 < max), the offset applied right now lies inside it, and
+// its maximum is at most sanity_max_mhz.
+bool plausible_range(const OffsetRange& range, int applied_mhz, int sanity_max_mhz);
+
+// The highest offsets the search may try and apply_profile may apply.
+struct SearchBounds {
+    int core_max_mhz = kCoreFallbackMaxMhz;
+    int mem_max_mhz = kMemFallbackMaxMhz;
+    bool core_from_card = false;   // false: the fallback is in use
+    bool mem_from_card = false;
+};
+
+// The card's reported range where it is plausible, the fallback otherwise;
+// core and memory are judged independently. Needs both
+// gpu.clock_offset_range_mhz and gpu.read_applied; without either, or when
+// either read fails, both bounds are the fallback.
+SearchBounds search_bounds(const GpuControl& gpu);
 
 // Highest value in lo, lo+step, ... (<= hi, < ceiling) for which is_stable
 // holds, assuming stability is monotonic: once a value fails, every higher

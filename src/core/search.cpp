@@ -87,9 +87,31 @@ int confirm_edge(int edge, int lo, int step, int tries, const std::function<bool
     return lo;
 }
 
+bool plausible_range(const OffsetRange& range, int applied_mhz, int sanity_max_mhz) {
+    return range.min_mhz <= 0 && range.max_mhz > 0 && range.max_mhz <= sanity_max_mhz &&
+           applied_mhz >= range.min_mhz && applied_mhz <= range.max_mhz;
+}
+
+SearchBounds search_bounds(const GpuControl& gpu) {
+    SearchBounds b;
+    if (!gpu.clock_offset_range_mhz || !gpu.read_applied) return b;
+    const auto ranges = gpu.clock_offset_range_mhz();
+    const auto applied = gpu.read_applied();
+    if (!ranges || !applied) return b;
+    if (plausible_range(ranges->core, applied->core_mhz, kCoreRangeSanityMhz)) {
+        b.core_max_mhz = ranges->core.max_mhz;
+        b.core_from_card = true;
+    }
+    if (plausible_range(ranges->mem, applied->mem_mhz, kMemRangeSanityMhz)) {
+        b.mem_max_mhz = ranges->mem.max_mhz;
+        b.mem_from_card = true;
+    }
+    return b;
+}
+
 namespace {
-constexpr int kCoreStep = 15, kCoreMax = kCoreMaxMhz;
-constexpr int kMemStep = 50, kMemMax = kMemMaxMhz;
+constexpr int kCoreStep = 15;
+constexpr int kMemStep = 50;
 constexpr int kCoreStride = 60;    // four core steps
 constexpr int kMemStride = 200;    // four memory steps
 constexpr int kPowerStep = 5;
@@ -152,7 +174,13 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
     };
 
     if (!gpu.reset_to_stock || !gpu.reset_to_stock()) return finish_fail("could not reset to stock");
-    log("baseline: 30 s at stock");
+    const SearchBounds bounds = search_bounds(gpu);
+    auto range_text = [](const char* what, int max_mhz, bool from_card) {
+        return std::string(what) + " range: up to +" + std::to_string(max_mhz) + " MHz (" +
+               (from_card ? "reported by the card" : "built-in limit; the card reported no usable range") + ")";
+    };
+    if (obj.core_oc) log(range_text("core", bounds.core_max_mhz, bounds.core_from_card));
+    if (obj.mem_oc) log(range_text("mem", bounds.mem_max_mhz, bounds.mem_from_card));    log("baseline: 30 s at stock");
     const auto base = probe(kBaselineS, kSafetyTempC);
     if (!base) return finish_fail(stopped);
     r.baseline = *base;
@@ -231,7 +259,7 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
     auto holds = [](std::optional<Verdict> v) { return v == Verdict::Stable || v == Verdict::TooHot; };
 
     if (obj.core_oc) {
-        r.core_max_stable = climb_to_edge(0, kCoreMax, kCoreStep, kCoreStride, journal.ceilings().core_mhz,
+        r.core_max_stable = climb_to_edge(0, bounds.core_max_mhz, kCoreStep, kCoreStride, journal.ceilings().core_mhz,
                                           [&](int v) { return is_stable(clock_candidate(v, std::nullopt, v, 0, kClockProbeS)); });
         if (!stopped.empty()) return finish_fail(stopped);
         r.core_confirmed = confirm_edge(r.core_max_stable, 0, kCoreStep, kConfirmTries, [&](int v) {
@@ -245,7 +273,7 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
     if (obj.mem_oc) {
         const int ceiling = journal.ceilings().mem_mhz;
         if (io.bandwidth) {
-            r.mem_max_stable = best_bandwidth_offset(0, kMemMax, kMemStep, ceiling, [&](int v) {
+            r.mem_max_stable = best_bandwidth_offset(0, bounds.mem_max_mhz, kMemStep, ceiling, [&](int v) {
                 MemSample m;
                 std::optional<double> gbps;
                 m.stable = is_stable(clock_candidate(std::nullopt, v, r.core_mhz, v, kClockProbeS,
@@ -261,7 +289,7 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
                 return m;
             });
         } else {
-            r.mem_max_stable = climb_to_edge(0, kMemMax, kMemStep, kMemStride, ceiling, [&](int v) {
+            r.mem_max_stable = climb_to_edge(0, bounds.mem_max_mhz, kMemStep, kMemStride, ceiling, [&](int v) {
                 return is_stable(clock_candidate(std::nullopt, v, r.core_mhz, v, kClockProbeS));
             });
         }

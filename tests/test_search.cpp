@@ -89,6 +89,8 @@ struct FakeCard {
     int probes = 0, power_probes = 0;
     std::vector<std::string> journal;
     std::string last_set_begin_ok;   // "" if every set had its begin line first
+    std::optional<ClockOffsetRanges> ranges;   // what the card reports; empty = it reports nothing
+    bool ranges_read_fails = false;            // the callback exists but returns nothing
 
     GpuControl gpu(bool with_power = true, std::pair<int, int> range = {50, 120}) {
         GpuControl g;
@@ -108,6 +110,13 @@ struct FakeCard {
         if (with_power) {
             g.set_power_limit = [this](int p) { power = p; return true; };
             g.power_limit_range_pct = [range] { return range; };
+        }
+        if (ranges || ranges_read_fails) {
+            g.clock_offset_range_mhz = [this]() -> std::optional<ClockOffsetRanges> {
+                if (ranges_read_fails) return std::nullopt;
+                return ranges;
+            };
+            g.read_applied = [this] { return std::optional<AppliedState>(AppliedState{core, mem, power}); };
         }
         return g;
     }
@@ -602,4 +611,109 @@ TEST_CASE("the core search probes upward from stock, never from the middle of th
     REQUIRE(r.ok);
     CHECK(r.core_max_stable == 150);
     CHECK(run.card.max_core_seen == 180);   // one stride past the edge, not +225 or +300
+}
+
+TEST_CASE("plausible_range accepts a normal range and rejects each kind of nonsense") {
+    CHECK(plausible_range({-500, 1000}, 0, 2000));
+    CHECK(plausible_range({0, 1000}, 0, 2000));          // a card that allows no negative offset
+    CHECK(plausible_range({-500, 1000}, 210, 2000));     // a tune is applied
+    CHECK_FALSE(plausible_range({100, 1000}, 0, 2000));  // minimum above zero
+    CHECK_FALSE(plausible_range({-500, 0}, 0, 2000));    // maximum not above zero
+    CHECK_FALSE(plausible_range({0, 0}, 0, 2000));       // an empty buffer
+    CHECK_FALSE(plausible_range({-500, 1000}, 1200, 2000));   // the applied offset is outside it
+    CHECK_FALSE(plausible_range({-500, 1000}, -600, 2000));
+    CHECK_FALSE(plausible_range({-500000, 1000000}, 0, 2000));   // kHz read as MHz
+    CHECK(plausible_range({-500, 2000}, 0, 2000));       // the sanity limit itself is allowed
+    CHECK_FALSE(plausible_range({-500, 2001}, 0, 2000));
+}
+
+TEST_CASE("search_bounds falls back when the card reports nothing usable") {
+    GpuControl none;
+    CHECK(search_bounds(none).core_max_mhz == 300);
+    CHECK(search_bounds(none).mem_max_mhz == 1500);
+    CHECK_FALSE(search_bounds(none).core_from_card);
+
+    GpuControl no_read_back;   // a range, but no way to check the applied offset against it
+    no_read_back.clock_offset_range_mhz = [] { return std::optional<ClockOffsetRanges>(ClockOffsetRanges{{-500, 1000}, {-1000, 3000}}); };
+    CHECK(search_bounds(no_read_back).core_max_mhz == 300);
+
+    GpuControl read_fails = no_read_back;
+    read_fails.read_applied = []() -> std::optional<AppliedState> { return std::nullopt; };
+    CHECK(search_bounds(read_fails).core_max_mhz == 300);
+
+    GpuControl range_fails;
+    range_fails.clock_offset_range_mhz = []() -> std::optional<ClockOffsetRanges> { return std::nullopt; };
+    range_fails.read_applied = [] { return std::optional<AppliedState>(AppliedState{}); };
+    CHECK(search_bounds(range_fails).mem_max_mhz == 1500);
+}
+
+TEST_CASE("search_bounds takes core and memory from the card independently") {
+    GpuControl g;
+    g.read_applied = [] { return std::optional<AppliedState>(AppliedState{}); };
+    g.clock_offset_range_mhz = [] { return std::optional<ClockOffsetRanges>(ClockOffsetRanges{{-500, 1000}, {-1000, 3000}}); };
+    const SearchBounds both = search_bounds(g);
+    CHECK(both.core_max_mhz == 1000);
+    CHECK(both.mem_max_mhz == 3000);
+    CHECK(both.core_from_card);
+    CHECK(both.mem_from_card);
+
+    g.clock_offset_range_mhz = [] { return std::optional<ClockOffsetRanges>(ClockOffsetRanges{{-500, 1000}, {50, 9000}}); };
+    const SearchBounds core_only = search_bounds(g);
+    CHECK(core_only.core_max_mhz == 1000);
+    CHECK(core_only.mem_max_mhz == 1500);
+    CHECK_FALSE(core_only.mem_from_card);
+}
+
+TEST_CASE("a card that holds more than the old cap is searched to its own edge") {
+    Run run;
+    run.card.ranges = ClockOffsetRanges{{-500, 1000}, {-1000, 3000}};
+    run.card.core_edge = 450;
+    run.card.mem_edge = 2000;
+    const auto r = run.go(Preset::BestOfMyGpu);
+    REQUIRE(r.ok);
+    CHECK(r.core_max_stable == 450);
+    CHECK(r.core_confirmed == 450);
+    CHECK(r.core_mhz == 315);            // 70 % of 450
+    CHECK(r.mem_max_stable == 2000);
+    CHECK(r.mem_mhz == 1400);            // 70 % of 2000
+    CHECK(run.card.max_core_seen == 480);    // one stride past the edge
+    CHECK(run.card.max_mem_seen == 2200);
+    bool told = false;
+    for (const auto& m : run.log) told |= m.find("core range: up to +1000 MHz (reported by the card)") != std::string::npos;
+    CHECK(told);
+}
+
+TEST_CASE("a card stable to the top of its reported range stops at that range") {
+    Run run;
+    run.card.ranges = ClockOffsetRanges{{-500, 400}, {-1000, 1000}};
+    run.card.core_edge = 5000;
+    run.card.mem_edge = 5000;
+    const auto r = run.go(Preset::MaxPerformance);
+    REQUIRE(r.ok);
+    CHECK(r.core_max_stable == 390);     // the highest 15 MHz grid point at or below +400
+    CHECK(run.card.max_core_seen == 390);
+    CHECK(r.mem_max_stable == 1000);
+    CHECK(run.card.max_mem_seen == 1000);
+}
+
+TEST_CASE("an implausible reported range leaves the built-in limit in place and says so") {
+    Run run;
+    run.card.ranges = ClockOffsetRanges{{100, 1000}, {-1000, 3000}};   // core minimum above zero
+    run.card.core_edge = 450;
+    const auto r = run.go(Preset::BestOfMyGpu);
+    REQUIRE(r.ok);
+    CHECK(r.core_max_stable == 300);
+    CHECK(run.card.max_core_seen == 300);
+    bool told = false;
+    for (const auto& m : run.log) told |= m.find("core range: up to +300 MHz (built-in limit") != std::string::npos;
+    CHECK(told);
+}
+
+TEST_CASE("a failing range read leaves the built-in limits in place") {
+    Run run;
+    run.card.ranges_read_fails = true;
+    run.card.core_edge = 450;
+    const auto r = run.go(Preset::BestOfMyGpu);
+    REQUIRE(r.ok);
+    CHECK(r.core_max_stable == 300);
 }

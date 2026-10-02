@@ -12,8 +12,8 @@ BootDecision decide_boot(const Config& c, const std::string& driver, const std::
 }
 
 bool apply_profile(const GpuControl& gpu, const Profile& p, std::string* why) {
-    if (p.power_pct < 50 || p.power_pct > 150 || p.core_mhz < 0 || p.core_mhz > kCoreMaxMhz ||
-        p.mem_mhz < 0 || p.mem_mhz > kMemMaxMhz) {
+    if (p.power_pct < 50 || p.power_pct > 150 || p.core_mhz < 0 || p.core_mhz > kCoreFallbackMaxMhz ||
+        p.mem_mhz < 0 || p.mem_mhz > kMemFallbackMaxMhz) {
         if (why) *why = "profile values out of range; nothing applied";
         return false;
     }
