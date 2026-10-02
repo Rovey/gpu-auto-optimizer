@@ -16,6 +16,7 @@
 #include <ctime>
 #include <chrono>
 #include <filesystem>
+#include <memory>
 
 namespace gao::app {
 
@@ -125,8 +126,10 @@ OptimizeOutcome run_optimize(Preset preset, const OptimizeHooks& hooks, const st
     // search and the emergency handlers hold stay valid across a reconnect.
     GuardedGpu hw(kGpu);
     if (!hw.Init(&why)) return fail(why);
-    Stress load;
-    if (!load.Init()) return fail("stress init failed: " + load.Error());
+    // On the heap, so the path that follows an access violation during the
+    // search can leave it alone instead of destroying it (see there).
+    auto load = std::make_unique<Stress>();
+    if (!load->Init()) return fail("stress init failed: " + load->Error());
     const GpuControl& gpu = hw.control();
     // The profile's curve drives the fans for the whole run, so the clocks it
     // finds hold at the temperatures that curve produces.
@@ -134,8 +137,16 @@ OptimizeOutcome run_optimize(Preset preset, const OptimizeHooks& hooks, const st
     FanDriver fans(gpu, curve, objectives_for(preset).max_temp_c, fan_min_for(load_config(), hw.GpuUuid(), gpu.fan_min_pct));
     struct FanRelease {
         FanDriver& f;
-        ~FanRelease() { f.release(); }   // every exit: done, aborted, failed or thrown
-    } fan_release{fans};
+        const GpuControl& gpu;
+        ~FanRelease() {   // every exit: done, aborted, failed or thrown
+            f.release();
+            // A fan driver that failed handed the fans back at that moment and
+            // release() does not try again; if that hand-back never reached the
+            // driver (no connection), the fans may still be at a manual speed.
+            // One more attempt: hand back only, never a speed.
+            if (f.state().mode == FanMode::Failed && gpu.set_fan_auto) gpu.set_fan_auto();
+        }
+    } fan_release{fans, gpu};
     if (!gpu.set_fan_pct) log("fans: not controllable on this card; the driver keeps them");
 
     const auto path = journal_path();
@@ -167,13 +178,13 @@ OptimizeOutcome run_optimize(Preset preset, const OptimizeHooks& hooks, const st
             if (now.mode != before && now.mode == FanMode::Foreign) log("fans: another program set them; leaving them alone");
             return t;
         };
-        return run_stability([&] { return load.Batch(); }, read, seconds, max_temp, hooks.aborted);
+        return run_stability([&] { return load->Batch(); }, read, seconds, max_temp, hooks.aborted);
     };
     io.aborted = hooks.aborted;
     io.log = hooks.log;
     io.bandwidth = [&] {
-        const auto gbps = load.MeasureBandwidth();
-        if (!gbps) log("bandwidth measurement failed: " + load.Error());
+        const auto gbps = load->MeasureBandwidth();
+        if (!gbps) log("bandwidth measurement failed: " + load->Error());
         return gbps;
     };
     if (hooks.active_gpu) hooks.active_gpu(&gpu);
@@ -190,22 +201,52 @@ OptimizeOutcome run_optimize(Preset preset, const OptimizeHooks& hooks, const st
         if (gpu.reset_to_stock) gpu.reset_to_stock();
         throw;
     }
-    if (hooks.active_gpu) hooks.active_gpu(nullptr);
     if (crashed) {
-        // A fault inside a driver DLL. The machine did not freeze, so the
-        // candidate must not become a ceiling: close its entry -- but only
-        // once the card is dealt with, so a freeze in these last steps, with
-        // the candidate possibly still applied, still counts against it.
-        if (gpu.recover) gpu.recover();
-        const bool stock = gpu.reset_to_stock && gpu.reset_to_stock();
-        if (journal.open_id() >= 0) journal.complete(journal.open_id(), "CRASHED");
-        log(std::string("the run crashed inside the driver -- ") + (stock ? "card restored to stock" : "reset FAILED, run `gao --reset`"));
+        // An access violation somewhere in the search: in a driver DLL, in the
+        // stress load's D3D calls or in our own code. A candidate may still be
+        // applied and its journal entry open.
+        bool stock = false;
+        {
+            // The emergency handler stays registered until the card and the
+            // journal are dealt with: the steps below can take half a minute,
+            // and without it Ctrl+C would end the process and a closed window
+            // would reset nothing. Unregistered when this block ends, also by
+            // an exception, and always before `hw` is destroyed.
+            struct Unregister {
+                const OptimizeHooks& h;
+                ~Unregister() { if (h.active_gpu) h.active_gpu(nullptr); }
+            } unregister{hooks};
+            log("access violation during the search -- resetting the card to stock");
+            // The machine did not freeze, so the candidate must not become a
+            // ceiling. Closing the entry is a file append, no driver call, so
+            // it comes first: nothing that happens during the reset can leave
+            // it open.
+            if (journal.open_id() >= 0 && !journal.complete(journal.open_id(), "CRASHED"))
+                log("warning: the crash journal entry could not be closed; later runs will stay below this candidate");
+            // The connection is often still good (the fault may have been
+            // outside NVML and NVAPI), so reset first; reconnecting costs
+            // seconds with the candidate applied.
+            stock = gpu.reset_to_stock && gpu.reset_to_stock();
+            if (!stock && gpu.reset_to_stock && gpu.recover) {
+                log("the reset failed; reconnecting to the driver, up to 30 s");
+                stock = gpu.recover() && gpu.reset_to_stock();
+            }
+            log(std::string("the search ended in an access violation -- ") +
+                (stock ? "card restored to stock" : "reset FAILED, run `gao --reset`"));
+        }
+        // Leaked on purpose. The fault skipped the frames of the search, so a
+        // D3D call of the stress load may have been abandoned halfway; its
+        // destructor would release COM objects into that same user-mode
+        // driver and could fault outside any guard, or hang. The process is
+        // about to report the failure; the device goes with the process.
+        (void)load.release();
         out.ran = true;
         out.result.ok = false;
         out.result.stock_restored = stock;
-        out.result.reason = "crashed inside the driver";
+        out.result.reason = "access violation during the search";
         return out;
     }
+    if (hooks.active_gpu) hooks.active_gpu(nullptr);
     out.ran = true;
     if (!out.result.ok) return out;
 

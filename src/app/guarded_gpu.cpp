@@ -141,10 +141,7 @@ bool GuardedGpu::Init(std::string* why) {
         outer_.set_fan_pct = [this](int pct) {
             return Call(false, [this, pct] { return inner_.set_fan_pct && inner_.set_fan_pct(pct); });
         };
-    if (in.set_fan_auto)
-        outer_.set_fan_auto = [this] {
-            return Call(false, [this] { return inner_.set_fan_auto && inner_.set_fan_auto(); });
-        };
+    if (in.set_fan_auto) outer_.set_fan_auto = [this] { return FanAuto(); };
     if (in.read_fan)
         outer_.read_fan = [this] {
             return Call(std::optional<FanReading>(), [this] {
@@ -155,11 +152,43 @@ bool GuardedGpu::Init(std::string* why) {
     return true;
 }
 
-// After a driver reset: new libraries, until the card answers again. Up to
-// half a minute, during which the run cannot be aborted. The lock is free
-// during the waits, so an emergency handler on another thread is not held up
-// for the whole time; it then finds no connection and gets `false`, which is
-// right: the reset already put the card at stock.
+// set_fan_auto through the outer control. Like Call, but a hand-back that did
+// not happen is remembered: FanDriver treats the fans as returned to the driver
+// whatever this answers, and without a driver reset they would stay at the
+// manual speed last written. The lock is taken in this frame, outside the
+// guarded call, so a caught fault always releases it.
+bool GuardedGpu::FanAuto() {
+    const std::lock_guard<std::mutex> lock(mutex_);
+    bool ok = false;
+    if (live_ && !guarded([&] { ok = inner_.set_fan_auto && inner_.set_fan_auto(); })) {
+        ok = false;
+        live_ = false;
+        inner_ = {};   // as in Call: the faulted libraries are not called again
+    }
+    fan_auto_owed_ = !ok;
+    return ok;
+}
+
+// The owed hand-back, on a fresh connection; the caller holds the lock and
+// calls the inner control directly. Never writes a speed. False only when the
+// call faulted: then this connection is not usable either.
+bool GuardedGpu::DeliverFanAuto() {
+    if (!fan_auto_owed_ || !inner_.set_fan_auto) return true;
+    bool ok = false;
+    if (!guarded([&] { ok = inner_.set_fan_auto(); })) return false;
+    if (ok) fan_auto_owed_ = false;   // still owed otherwise; the next recover tries again
+    return true;
+}
+
+// New libraries, until the card answers again: after a driver reset, after a
+// fault, or when a write keeps failing. Up to half a minute, during which the
+// run cannot be aborted. The lock is free during the waits, so an emergency
+// handler on another thread is not held up for the whole time; it then finds
+// no connection and gets `false` without the driver having been reached. That
+// `false` says nothing about the card: after a driver reset it is at stock,
+// but when recover runs for another reason (a failed write, a fault outside
+// the driver) the card may still be off stock, and the caller must treat it
+// so.
 bool GuardedGpu::Recover() {
     {
         const std::lock_guard<std::mutex> lock(mutex_);
@@ -169,7 +198,7 @@ bool GuardedGpu::Recover() {
         Sleep(kRecoverWaitMs);   // before the first attempt too: the driver needs a moment
         const std::lock_guard<std::mutex> lock(mutex_);
         Telemetry t;
-        if (Connect(nullptr) && inner_.read && guarded([&] { t = inner_.read(); }) && t.ok) return true;
+        if (Connect(nullptr) && inner_.read && guarded([&] { t = inner_.read(); }) && t.ok && DeliverFanAuto()) return true;
         Disconnect();   // not back yet; never reuse a half-initialised library
     }
     return false;

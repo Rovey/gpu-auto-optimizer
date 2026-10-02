@@ -43,7 +43,10 @@ public:
     // lifetime. It has the callbacks the card supported at Init, plus recover.
     // A call that faults returns its failure value (false, an empty Telemetry,
     // nullopt, {0, 0}), and so does every call after it until recover
-    // succeeds: a library that just faulted is not called again.
+    // succeeds: a library that just faulted is not called again. Such a
+    // failure value means "not delivered", not "the card is at stock". A
+    // set_fan_auto that did not succeed is remembered and delivered by the
+    // next successful recover.
     const GpuControl& control() const { return outer_; }
     // From the current NVML instance, guarded; empty when it cannot be read.
     std::string GpuUuid();
@@ -53,6 +56,8 @@ private:
     bool Connect(std::string* why);
     void Disconnect();
     bool Recover();
+    bool FanAuto();
+    bool DeliverFanAuto();
     template <class R, class Fn> R Call(R fail, Fn fn);
 
     const unsigned gpu_;
@@ -64,6 +69,9 @@ private:
     bool live_ = false;              // both initialised and no call has faulted since
     GpuControl inner_;               // make_gpu_control over the current libraries; empty while !live_
     GpuControl outer_;
+    // A set_fan_auto that was refused (no connection) or did not succeed: the
+    // fans may still be at a manual speed. Recover delivers it.
+    bool fan_auto_owed_ = false;
 };
 
 }
