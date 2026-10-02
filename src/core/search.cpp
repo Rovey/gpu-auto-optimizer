@@ -180,7 +180,8 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
                (from_card ? "reported by the card" : "built-in limit; the card reported no usable range") + ")";
     };
     if (obj.core_oc) log(range_text("core", bounds.core_max_mhz, bounds.core_from_card));
-    if (obj.mem_oc) log(range_text("mem", bounds.mem_max_mhz, bounds.mem_from_card));    log("baseline: 30 s at stock");
+    if (obj.mem_oc) log(range_text("mem", bounds.mem_max_mhz, bounds.mem_from_card));
+    log("baseline: 30 s at stock");
     const auto base = probe(kBaselineS, kSafetyTempC);
     if (!base) return finish_fail(stopped);
     r.baseline = *base;
