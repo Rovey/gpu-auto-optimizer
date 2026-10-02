@@ -47,8 +47,7 @@ static int probe() {
                     gao::reading(t.core_mhz).c_str(), gao::reading(t.mem_mhz).c_str(), gao::reading(t.temp_c).c_str(),
                     gao::reading(t.fan_pct, "%").c_str(), gao::reading(t.power_w).c_str(), t.power_limit_w);
     }
-    // Shown as read. Nothing uses these until hardware check 45 has compared
-    // them with another tool on the same card.
+    // The search's outer bound (core/search.hpp: search_bounds).
     gao::Nvapi nvapi;
     if (!nvapi.Init()) {
         std::printf("offset ranges: unavailable (NVAPI init failed: %s)\n", nvapi.Error().c_str());
