@@ -100,6 +100,7 @@ flowchart LR
 | `gao --probe` | Live telemetry: clocks, temperature, fan, power, clock-offset ranges |
 | `gao --stress <seconds>` | Runs the stress test alone and prints its verdict; changes nothing |
 | `gao --bandwidth` | Measures the current memory bandwidth |
+| `gao --stress-recreate` | Runs the stress test, rebuilds its GPU device, runs it again; prints both scores and the rebuild time; changes nothing |
 
 Ctrl+C during `--optimize` restores stock.
 
