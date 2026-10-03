@@ -84,8 +84,8 @@ struct App {
     // ends its runs: resets that lie more than 30 s apart each start at the
     // telemetry tick again, resets closer together count as one run. Those 30 s
     // show that the device was created and not removed, not that it can draw.
-    // Showing the window while the device is lost lifts the wait for one
-    // attempt (show_window()).
+    // Showing the window always lifts the wait for one attempt (show_window()),
+    // whether or not the device is lost yet.
     int recoveries = 0;
     ULONGLONG recover_at = 0;      // no recover_device() before this tick count
     ULONGLONG recovered_at = 0;    // the tick count of the last recover_device()
@@ -359,11 +359,13 @@ void show_window() {
     SetForegroundWindow(g.hwnd);
     g.visible = true;
     g.input_frames = 3;
-    // The user is looking at a window that cannot be drawn: do not make them
-    // wait out the backoff. The next telemetry tick tries once, and that
-    // attempt sets the wait again, so repeated clicks give at most one attempt
-    // per tick.
-    if (g.device_lost) g.recover_at = 0;
+    // Always lift the wait, lost or not: a first frame that fails right after
+    // the window opens sets device_lost in render(), and the old wait must not
+    // keep it undrawn. The next telemetry tick then tries at once. Only
+    // on_telemetry() reads recover_at, and only while the device is lost, so
+    // this costs nothing otherwise; each attempt sets the wait again, so
+    // repeated clicks give at most one attempt per tick.
+    g.recover_at = 0;
 }
 
 void tray_menu(int x, int y) {
