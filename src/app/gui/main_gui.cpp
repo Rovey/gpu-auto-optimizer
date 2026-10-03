@@ -67,7 +67,11 @@ struct App {
     ComPtr<ID3D11DeviceContext> ctx;
     ComPtr<IDXGISwapChain> swapchain;
     ComPtr<ID3D11RenderTargetView> rtv;
-    bool device_lost = false;   // retried every second until a new device exists
+    // Invariant: !device_lost implies device, ctx and swapchain are non-null
+    // and the ImGui renderer backend is initialised (backend_exists()). Only
+    // recover_device() clears the flag; on_telemetry() calls it every second
+    // until a new device exists. render() only ever sets it.
+    bool device_lost = false;
 
     // Pointers: re-created after a driver reset (see hw_lost()).
     std::unique_ptr<gao::Nvml> nvml;
@@ -157,16 +161,92 @@ bool create_device() {
     return true;
 }
 
+void note(const std::string& text, bool warn);   // below, with the tray helpers
+
+// Whether an ImGui renderer backend is initialised. Never g.ctx: a device can
+// exist without a backend (a fault that left recover_device() between
+// create_device() and Init), and Shutdown without a backend dereferences null.
+bool backend_exists() { return ImGui::GetIO().BackendRendererUserData != nullptr; }
+
+// When the device fails a creation, the DX11 backend leaves a texture
+// half-made: its own struct in BackendUserData, but no view, so an invalid
+// TexID (its checks are asserts, compiled out in Release). The backend's next
+// teardown of that texture -- from ImGui_ImplDX11_NewFrame() when it has no
+// vertex shader, or from ImGui_ImplDX11_Shutdown() -- then releases the null
+// view and faults. That crashed v0.2.0 after a driver install.
+//
+// Resets those textures (all == false) or every texture (all == true) to
+// "the backend has nothing for this", and returns how many it reset. Through
+// public members only, as the backend's own destroy does it; SetStatus turns
+// Destroyed into WantCreate at once for a texture ImGui still wants, so the
+// backend creates it again on the next drawn frame. The backend's small
+// struct is leaked, with whatever it holds (a texture without a view, or with
+// all == true a complete texture): its layout is private to the backend.
+//
+// Called before every backend call that can tear a texture down: at the top of
+// render(), before the Shutdown in recover_device() and before the one at exit.
+int reset_textures(bool all) {
+    int count = 0;
+    for (ImTextureData* tex : ImGui::GetPlatformIO().Textures) {
+        const bool half_made = tex->BackendUserData != nullptr && tex->GetTexID() == ImTextureID_Invalid;
+        if (!all && !half_made) continue;
+        tex->SetTexID(ImTextureID_Invalid);
+        tex->BackendUserData = nullptr;
+        tex->SetStatus(ImTextureStatus_Destroyed);
+        ++count;
+    }
+    return count;
+}
+
+// After an access violation inside a renderer backend call: that backend is
+// never called again, not even to shut it down. Everything
+// ImGui_ImplDX11_Shutdown() resets outside its own data is reset here through
+// public members -- including the context's texture list, which belongs to the
+// ImGui context and not to one backend instance: a fresh Init alone would walk
+// the same textures again on its first frame. The backend's data and the COM
+// references it holds (device, context, factory, shaders, buffers, textures)
+// are leaked. Leaves no device and g.device_lost set; recover_device() builds
+// the next one. Does not call hw_lost(): that stays with on_telemetry().
+void abandon_backend() {
+    g.device_lost = true;
+    reset_textures(true);
+    ImGuiIO& io = ImGui::GetIO();
+    io.BackendRendererUserData = nullptr;
+    io.BackendRendererName = nullptr;
+    io.BackendFlags &= ~(ImGuiBackendFlags_RendererHasVtxOffset | ImGuiBackendFlags_RendererHasTextures);
+    ImGui::GetPlatformIO().ClearRendererHandlers();
+    g.rtv.Reset();
+    g.swapchain.Reset();
+    // The leaked references keep the old device alive, and a released
+    // flip-model swap chain is destroyed only after a flush: until then a new
+    // swap chain on the same window can be refused.
+    if (g.ctx) guarded([] { g.ctx->ClearState(); g.ctx->Flush(); });
+    g.ctx.Reset();
+    g.device.Reset();
+    note("The window's graphics device failed and was replaced.", true);
+}
+
 // After a TDR the UI device is gone. Rebuild it; if that fails too (it can,
-// right after a reset), try again on the next telemetry tick.
+// right after a reset), try again on the next telemetry tick. Leaves the
+// invariant true or g.device_lost set -- also when a fault in here ends in the
+// telemetry timer's guard instead of returning, hence the flag is set first.
 void recover_device() {
-    if (g.ctx) ImGui_ImplDX11_Shutdown();
+    g.device_lost = true;
+    if (backend_exists()) {
+        reset_textures(false);
+        if (!guarded([] { ImGui_ImplDX11_Shutdown(); })) abandon_backend();
+    }
     g.rtv.Reset();
     g.ctx.Reset();
     g.swapchain.Reset();
     g.device.Reset();
-    g.device_lost = !create_device();
-    if (!g.device_lost) ImGui_ImplDX11_Init(g.device.Get(), g.ctx.Get());
+    if (!create_device()) return;
+    // Init dereferences a null device when its DXGI queries fail.
+    if (!guarded([] { ImGui_ImplDX11_Init(g.device.Get(), g.ctx.Get()); })) {
+        abandon_backend();   // releases the device just created as well
+        return;
+    }
+    g.device_lost = false;
 }
 
 // ---------------------------------------------------------------- tray
@@ -365,8 +445,34 @@ void act_boot(bool on) {
     refresh_status(true);
 }
 
+// One frame. Called only while the invariant holds (!g.device_lost). Never
+// rebuilds the device: it marks it lost and returns, and on_telemetry()
+// rebuilds it on its next tick. The renderer backend calls run guarded;
+// draw_ui never does: it runs the action callbacks, which call NVML and NVAPI
+// and hold destructible objects, and a guard there would hide any UI bug as a
+// silent retry. Both guarded regions lie outside the ImGui frame.
 void render() {
-    ImGui_ImplDX11_NewFrame();
+    if (g.device->GetDeviceRemovedReason() != S_OK) {
+        g.device_lost = true;
+        return;
+    }
+    // A half-made texture means the previous frame's creations failed. Reset
+    // it before the backend can meet it, and replace the device: one whose
+    // creations fail while Present succeeds would otherwise give a blank
+    // window for good.
+    if (reset_textures(false) > 0) {
+        g.device_lost = true;
+        return;
+    }
+    if (!g.rtv) create_rtv();   // a WM_SIZE whose resize failed left none
+    if (!g.rtv) {
+        g.device_lost = true;
+        return;
+    }
+    if (!guarded([] { ImGui_ImplDX11_NewFrame(); })) {
+        abandon_backend();   // before any ImGui frame is opened
+        return;
+    }
     ImGui_ImplWin32_NewFrame();
     ImGui::NewFrame();
     gao::gui::UiActions act;
@@ -403,12 +509,22 @@ void render() {
     };
     gao::gui::draw_ui(g.ui, g.worker->snapshot(), act);
     ImGui::Render();
-    const float clear[4] = {0.08f, 0.08f, 0.10f, 1.0f};
-    g.ctx->OMSetRenderTargets(1, g.rtv.GetAddressOf(), nullptr);
-    g.ctx->ClearRenderTargetView(g.rtv.Get(), clear);
-    ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
-    const HRESULT hr = g.swapchain->Present(1, 0);
-    if (hr == DXGI_ERROR_DEVICE_REMOVED || hr == DXGI_ERROR_DEVICE_RESET) recover_device();
+    // A callback that pumps messages (the elevation prompt) lets the telemetry
+    // timer run inside draw_ui, and its recover_device() can fail.
+    if (g.device_lost) return;
+    HRESULT hr = E_FAIL;
+    const bool drawn = guarded([&hr] {
+        const float clear[4] = {0.08f, 0.08f, 0.10f, 1.0f};
+        g.ctx->OMSetRenderTargets(1, g.rtv.GetAddressOf(), nullptr);
+        g.ctx->ClearRenderTargetView(g.rtv.Get(), clear);
+        ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
+        hr = g.swapchain->Present(1, 0);
+    });
+    if (!drawn) {
+        abandon_backend();
+        return;
+    }
+    if (FAILED(hr)) g.device_lost = true;   // any failure, not only a removed device
 }
 
 // ---------------------------------------------------------------- hardware
@@ -459,7 +575,10 @@ void retry_hw() {
 
 void on_telemetry() {
     // A removed UI device is the first sign of a driver reset; the window is
-    // often hidden, so no Present() would report it.
+    // often hidden, so no Present() would report it. Read from the old device,
+    // before recover_device() replaces it. (After abandon_backend() there is
+    // no device to ask; stale NVML/NVAPI state is then left to the guards
+    // around the timers and to the watchdog.)
     const bool reset = g.device && g.device->GetDeviceRemovedReason() != S_OK;
     if (g.device_lost || reset) recover_device();
     if (reset && !g.hw_lost) hw_lost();
@@ -732,7 +851,8 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdline, int) {
     gao::gui::load_fonts(wn && wn < MAX_PATH ? (std::filesystem::path(windows) / L"Fonts").string() : std::string());
     gao::gui::apply_style(scale);
     ImGui_ImplWin32_Init(g.hwnd);
-    ImGui_ImplDX11_Init(g.device.Get(), g.ctx.Get());
+    // Init dereferences a null device when its DXGI queries fail.
+    if (!guarded([] { ImGui_ImplDX11_Init(g.device.Get(), g.ctx.Get()); })) return 1;
 
     g.worker = std::make_unique<gao::gui::OptimizeWorker>([] { PostMessageW(g.hwnd, WM_APP_WAKE, 0, 0); });
     init_hw();
@@ -786,7 +906,10 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdline, int) {
 
     tray_icon(NIM_DELETE);
     g.worker.reset();
-    if (g.ctx) ImGui_ImplDX11_Shutdown();
+    if (backend_exists()) {   // not after an abandon: there is nothing to shut down then
+        reset_textures(false);
+        if (!guarded([] { ImGui_ImplDX11_Shutdown(); })) abandon_backend();
+    }
     ImGui_ImplWin32_Shutdown();
     ImGui::DestroyContext();
     return 0;
