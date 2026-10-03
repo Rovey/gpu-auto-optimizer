@@ -219,6 +219,17 @@ OptimizeOutcome run_optimize(Preset preset, const OptimizeHooks& hooks, const st
             if (stop_requested()) return false;
         }
     };
+    // After a driver reset the load may hold a removed device without having
+    // noticed. A fresh one is built here, outside any probe, so the health
+    // probe times the card and not the load's start-up.
+    // Not guarded here: a fault inside D3D reaches the guard around the
+    // search, like every other call of the load, and the run ends through the
+    // crashed path, which never touches the load again.
+    io.prepare_load = [&] {
+        if (load->Recreate()) return true;
+        log("the stress load could not be rebuilt: " + load->Error());
+        return false;
+    };
     if (hooks.active_gpu) hooks.active_gpu(&gpu);
     // The last line of defence: a fault that escapes the per-call guards (in
     // the stress load's D3D calls, say) must not kill the process with a
