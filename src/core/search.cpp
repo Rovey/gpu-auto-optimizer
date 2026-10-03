@@ -241,7 +241,8 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
     };
 
     // The recovery gate: after a reset event it reconnects, writes stock,
-    // rests, and loads the card again only to prove at stock that it is back.
+    // rests, prepares the stress load (io.prepare_load, once per recovery),
+    // and loads the card again only to prove at stock that it is back.
     // Called at the start of every power step, clock candidate and soak
     // attempt, before its journal entry is opened and before its write, so
     // nothing in here ever leaves an entry behind. False: `stopped` is set and
@@ -267,13 +268,21 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
             return false;
         }
         hw_suspect = false;
+        bool load_ready = !io.prepare_load;   // nothing to prepare: ready
         for (int t = 0; t < kHealthTries; ++t) {
             if (!rest()) { stopped = "aborted"; return false; }
+            // Once per recovery: a failed preparation is tried again after the
+            // next rest and is no reset event; a prepared load stays prepared.
+            if (!load_ready) {
+                log("preparing the stress load");
+                load_ready = io.prepare_load();
+                if (io.aborted && io.aborted()) { stopped = "aborted"; return false; }
+                if (!load_ready) { log("the stress load is not ready yet"); continue; }
+            }
             log("checking that the card is back: " + std::to_string(static_cast<int>(kHealthProbeS)) + " s at stock");
             // Called directly, not through `probe`, which would count a reset
-            // verdict as an event of its own. No stall floor: the probe is
-            // judged on its whole run, because its first batch may include
-            // re-creating the device.
+            // verdict as an event of its own. No stall floor: the load was
+            // prepared just before, and five seconds are bounded already.
             StabilityResult s = io.probe(kHealthProbeS, kSafetyTempC, 0.0);
             if (s.verdict == Verdict::Stable && s.score < kStalledScore * r.baseline.score) s.verdict = Verdict::Stalled;
             log("health: " + describe(s));

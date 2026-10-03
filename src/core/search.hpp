@@ -131,6 +131,9 @@ struct OptimizeIo {
     // by a stop request. Empty: the search does not wait, and does not log
     // that it did.
     std::function<bool(double seconds)> rest;
+    // Makes the stress load ready for a probe after a driver reset (a fresh
+    // device), outside any timing. False: not ready yet. Empty: nothing to do.
+    std::function<bool()> prepare_load;
 };
 
 struct OptimizeResult {

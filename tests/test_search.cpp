@@ -108,6 +108,11 @@ struct FakeCard {
     std::vector<std::string> events; // "recover", "stock", "rest", "health", "begin" in the order they happen
     bool abort_during_rest = false;  // a stop request arrives while the search rests
     int rests = 0;
+    bool with_prepare = false;       // the run offers OptimizeIo::prepare_load
+    int prepare_fails = 0;           // this many preparations return false
+    int prepares = 0;
+    int prepares_with_entry_open = 0;   // preparations made while the last journal line was a `begin`
+    bool abort_after_prepare = false;   // a stop request arrives while the load is being prepared
     int probes = 0, power_probes = 0;
     std::vector<std::string> journal;
     std::string last_set_begin_ok;   // "" if every set had its begin line first
@@ -289,8 +294,17 @@ struct Run {
                 if (card.abort_during_rest) { card.aborted_now = true; return false; }
                 return true;
             };
+        if (card.with_prepare)
+            io.prepare_load = [this] {
+                ++card.prepares;
+                card.events.push_back("prepare");
+                if (card.entry_open()) ++card.prepares_with_entry_open;
+                if (card.abort_after_prepare) card.aborted_now = true;
+                if (card.prepare_fails > 0) { --card.prepare_fails; return false; }
+                return true;
+            };
         if (card.bw_curve)
-            io.bandwidth = [this]() -> std::optional<double> {
+            io.bandwidth =[this]() -> std::optional<double> {
                 ++card.bw_measurements;
                 if (card.bw_loses_device) { card.driver_reset(); return std::nullopt; }
                 if (card.bw_fails_at_zero && card.mem == 0) return std::nullopt;
@@ -1414,6 +1428,116 @@ TEST_CASE("an abort while resting ends as aborted") {
     CHECK(events_after_lost(run.card) == Events{"recover", "stock", "rest", "stock"});
     CHECK(r.stock_restored);
     check_journal_rules(run);
+}
+
+namespace {
+Run lost_at_135_with_prepare() {
+    Run run = lost_at_135();
+    run.card.with_prepare = true;
+    return run;
+}
+}
+
+TEST_CASE("the load is prepared after the rest and before the health probe") {
+    Run run = lost_at_135_with_prepare();
+    const auto r = run.go(Preset::BestOfMyGpu);
+    REQUIRE(r.ok);
+    CHECK(first_events_after_lost(run.card, 6) == Events{"recover", "stock", "rest", "prepare", "health", "begin"});
+    CHECK(run.card.prepares == 1);
+    CHECK(run.card.prepares_with_entry_open == 0);
+    CHECK(r.driver_resets == 1);
+    CHECK(run.logged("preparing the stress load"));
+    check_journal_rules(run);
+}
+
+TEST_CASE("the load is prepared at no other time") {
+    Run run;
+    run.card.with_recover = true;
+    run.card.with_prepare = true;
+    const auto r = run.go(Preset::BestOfMyGpu);
+    REQUIRE(r.ok);
+    CHECK(run.card.prepares == 0);
+}
+
+TEST_CASE("a slow health probe does not rebuild the load") {
+    Run run = lost_at_135_with_prepare();
+    run.card.sick_health_probes = 1;
+    const auto r = run.go(Preset::BestOfMyGpu);
+    REQUIRE(r.ok);
+    CHECK(first_events_after_lost(run.card, 8) ==
+          Events{"recover", "stock", "rest", "prepare", "health", "rest", "health", "begin"});
+    CHECK(run.card.prepares == 1);
+}
+
+TEST_CASE("a preparation that fails once costs a rest, not a probe") {
+    Run run = lost_at_135_with_prepare();
+    run.card.prepare_fails = 1;
+    const auto r = run.go(Preset::BestOfMyGpu);
+    REQUIRE(r.ok);
+    CHECK(first_events_after_lost(run.card, 8) ==
+          Events{"recover", "stock", "rest", "prepare", "rest", "prepare", "health", "begin"});
+    CHECK(count_events(run.card, "health") == 1);
+    CHECK(r.driver_resets == 1);
+    CHECK(run.logged("the stress load is not ready yet"));
+    check_journal_rules(run);
+}
+
+TEST_CASE("a load that cannot be prepared ends the run without a health probe") {
+    Run run = lost_at_135_with_prepare();
+    run.card.prepare_fails = 99;
+    const auto r = run.go(Preset::BestOfMyGpu);
+    CHECK_FALSE(r.ok);
+    CHECK(r.reason == "the card did not recover after a driver reset");
+    CHECK(events_after_lost(run.card) ==
+          Events{"recover", "stock", "rest", "prepare", "rest", "prepare", "rest", "prepare", "stock"});
+    CHECK_FALSE(run.logged("checking that the card is back"));
+    CHECK(r.stock_restored);
+    CHECK(run.card.core == 0);
+    CHECK(r.driver_resets == 1);
+    Journal reread(run.card.journal, [](const std::string&) { return true; });
+    CHECK(reread.freezes().empty());
+}
+
+TEST_CASE("a stop request during the preparation ends the run as aborted") {
+    Run run = lost_at_135_with_prepare();
+    run.card.abort_after_prepare = true;
+    const auto r = run.go(Preset::BestOfMyGpu);
+    CHECK_FALSE(r.ok);
+    CHECK(r.reason == "aborted");
+    CHECK(events_after_lost(run.card) == Events{"recover", "stock", "rest", "prepare", "stock"});
+    CHECK(r.stock_restored);
+    CHECK(run.card.core == 0);
+}
+
+TEST_CASE("the stale-start rest does not prepare the load") {
+    Run run;
+    run.card.with_recover = true;
+    run.card.with_prepare = true;
+    run.card.stale = true;
+    const auto r = run.go(Preset::BestOfMyGpu);
+    REQUIRE(r.ok);
+    CHECK(run.card.prepares == 0);
+    REQUIRE(run.card.events.size() >= 3);
+    CHECK(Events(run.card.events.begin(), run.card.events.begin() + 3) == Events{"recover", "stock", "rest"});
+}
+
+TEST_CASE("without a preparation callback the gate is unchanged") {
+    Run run = lost_at_135();
+    const auto r = run.go(Preset::BestOfMyGpu);
+    REQUIRE(r.ok);
+    CHECK(first_events_after_lost(run.card, 4) == Events{"recover", "stock", "rest", "health"});
+    CHECK(run.card.prepares == 0);
+}
+
+TEST_CASE("without a rest callback failed preparations follow each other") {
+    Run run = lost_at_135_with_prepare();
+    run.no_rest = true;
+    run.card.prepare_fails = 99;
+    const auto r = run.go(Preset::BestOfMyGpu);
+    CHECK_FALSE(r.ok);
+    CHECK(r.reason == "the card did not recover after a driver reset");
+    CHECK(run.card.prepares == 3);
+    CHECK(run.card.rests == 0);
 }
 
 TEST_CASE("the health probe is not journaled") {
