@@ -75,13 +75,20 @@ struct App {
     unsigned device_generation = 0;   // counts recover_device() and abandon_backend() runs
     // A recovery that keeps failing must not rebuild the device every second
     // for ever: each attempt can leak a device and write a log line. `recoveries`
-    // counts recover_device() runs (up to 3) since the last frame that reached
-    // the screen with all its creations done. The first two run at the telemetry
-    // tick, the third 5 s after the second, every later one 30 s after the one
-    // before. The wait runs from the previous attempt, so a hidden window, which
-    // presents nothing, still recovers at once from resets that lie apart.
+    // counts recover_device() runs (up to 3) in the current run of failures. The
+    // first two run at the telemetry tick, the third 5 s after the second, every
+    // later one 30 s after the one before. The run ends (end_failure_run()) at a
+    // frame that reached the screen with all its creations done, or when
+    // on_telemetry() finds the device not lost 30 s after the last
+    // recover_device(). A hidden window presents nothing, so only the second
+    // ends its runs: resets that lie more than 30 s apart each start at the
+    // telemetry tick again, resets closer together count as one run. Those 30 s
+    // show that the device was created and not removed, not that it can draw.
+    // Showing the window while the device is lost lifts the wait for one
+    // attempt (show_window()).
     int recoveries = 0;
     ULONGLONG recover_at = 0;      // no recover_device() before this tick count
+    ULONGLONG recovered_at = 0;    // the tick count of the last recover_device()
     bool abandon_noted = false;    // the abandon note, once per such run of failures
     // The removed state of the window's device is the sign of a driver reset.
     // A device is asked until it says so once (removed_seen), and what it said
@@ -252,6 +259,8 @@ void check_removed() {
 // are leaked. Leaves no device and g.device_lost set; recover_device() builds
 // the next one. Does not call hw_lost(): that stays with on_telemetry(), which
 // learns through check_removed() whether the device went with a driver reset.
+// The note is not written on the way out (the exit path is reached only with
+// g.exit_requested set): nothing is rebuilt then.
 void abandon_backend() {
     g.device_lost = true;
     ++g.device_generation;
@@ -263,8 +272,17 @@ void abandon_backend() {
     ImGui::GetPlatformIO().ClearRendererHandlers();
     check_removed();
     release_device();
-    if (!g.abandon_noted) note("The window's graphics device failed; rebuilding it.", true);
+    if (g.abandon_noted || g.exit_requested) return;
+    note("The window's graphics device failed; rebuilding it.", true);
     g.abandon_noted = true;
+}
+
+// A run of failed recoveries is over: the next loss starts at the telemetry
+// tick again, and the next abandon is noted again.
+void end_failure_run() {
+    g.recoveries = 0;
+    g.recover_at = 0;
+    g.abandon_noted = false;
 }
 
 // After a TDR the UI device is gone. Rebuild it; if that fails too (it can,
@@ -276,7 +294,8 @@ void recover_device() {
     g.device_lost = true;
     ++g.device_generation;
     if (g.recoveries < 3) ++g.recoveries;
-    g.recover_at = GetTickCount64() + (g.recoveries < 2 ? 0 : g.recoveries == 2 ? 5000 : 30000);
+    g.recovered_at = GetTickCount64();
+    g.recover_at = g.recovered_at + (g.recoveries < 2 ? 0 : g.recoveries == 2 ? 5000 : 30000);
     if (backend_exists()) {
         reset_textures(false);
         if (!guarded([] { ImGui_ImplDX11_Shutdown(); })) abandon_backend();
@@ -340,6 +359,11 @@ void show_window() {
     SetForegroundWindow(g.hwnd);
     g.visible = true;
     g.input_frames = 3;
+    // The user is looking at a window that cannot be drawn: do not make them
+    // wait out the backoff. The next telemetry tick tries once, and that
+    // attempt sets the wait again, so repeated clicks give at most one attempt
+    // per tick.
+    if (g.device_lost) g.recover_at = 0;
 }
 
 void tray_menu(int x, int y) {
@@ -581,9 +605,7 @@ void render() {
         g.device_lost = true;
         return;
     }
-    g.recoveries = 0;
-    g.recover_at = 0;
-    g.abandon_noted = false;
+    end_failure_run();
 }
 
 // ---------------------------------------------------------------- hardware
@@ -637,12 +659,21 @@ void on_telemetry() {
     // often hidden, so no Present() would report it. Read from the old device,
     // before recover_device() replaces it; abandon_backend() has read it from
     // a device it released since the last tick. A removed device is lost at
-    // once, also while the backoff holds its replacement back.
+    // once, also while the backoff holds its replacement back. (While a failed
+    // creation is backed off there is no device to ask: a second driver reset
+    // in that gap is not seen here and hw_lost() is not called for it; stale
+    // NVML/NVAPI state is then left to the guards around the timers and to the
+    // watchdog.)
     check_removed();
     const bool reset = g.driver_reset;
     g.driver_reset = false;
     if (reset) g.device_lost = true;
     if (g.device_lost && GetTickCount64() >= g.recover_at) recover_device();
+    // A device that is still there 30 s after it was built ends the run of
+    // failures. Only recover_device() clears g.device_lost, so not lost now
+    // means not lost since. This is the only end a hidden window has; a
+    // visible one whose device fails at its first frame never gets here.
+    if (!g.device_lost && g.recoveries > 0 && GetTickCount64() - g.recovered_at >= 30000) end_failure_run();
     if (reset && !g.hw_lost) hw_lost();
     retry_hw();
     if (g.nvml_ok) {
