@@ -11,6 +11,7 @@
 #include "hw/nvml.hpp"
 #include "hw/stress.hpp"
 #include <atomic>
+#include <chrono>
 #include <filesystem>
 #include <string>
 #include <charconv>
@@ -310,6 +311,42 @@ static int bandwidth() {
     return 0;
 }
 
+// Measures what the optimize run assumes after a driver reset: how long the
+// stress load takes to rebuild its device, and what the first batch on it
+// costs. Changes no settings and needs no elevation, but it does load the card
+// (two 3 s runs). Exit 0 when both runs are STABLE and the rebuild succeeded,
+// 1 otherwise -- not --stress's 2 / 3 codes.
+static int stress_recreate() {
+    gao::Nvml nvml;
+    if (!nvml.Init()) { std::printf("NVML init failed: %s\n", nvml.Error().c_str()); return 1; }
+    gao::Stress load;
+    if (!load.Init()) { std::printf("stress init failed: %s\n", load.Error().c_str()); return 1; }
+    std::printf("stress-recreate: %s\n", load.AdapterName().c_str());
+
+    const auto run = [&](const char* label) {
+        const gao::StabilityResult r = gao::run_stability([&] { return load.Batch(); },
+                                                          [&] { return nvml.Read(kGpu); }, 3, 85);
+        std::printf("%s: %s  score=%.0f it/s\n", label, gao::verdict_name(r.verdict), r.score);
+        return r.verdict == gao::Verdict::Stable;
+    };
+    const bool first_ok = run("before");
+
+    const auto t0 = std::chrono::steady_clock::now();
+    const bool recreated = load.Recreate();
+    const double recreate_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    if (!recreated) {
+        std::printf("recreate: failed after %.1f ms: %s\n", recreate_ms, load.Error().c_str());
+        return 1;
+    }
+    std::printf("recreate: ok, %.1f ms\n", recreate_ms);
+
+    const gao::StressBatch b = load.Batch();
+    std::printf("first batch: %.1f ms, %lld iterations\n", b.elapsed_ms, b.iterations);
+
+    const bool second_ok = run("after");
+    return first_ok && second_ok ? 0 : 1;
+}
+
 int main(int argc, char** argv) {
     // Before anything loads a DLL: System32 only (the delay-loaded
     // d3dcompiler_47.dll included), never the exe's own folder.
@@ -359,6 +396,7 @@ int main(int argc, char** argv) {
         return stress(seconds, max_temp, selftest);
     }
     if (argc > 1 && std::strcmp(argv[1], "--bandwidth") == 0) return bandwidth();
+    if (argc > 1 && std::strcmp(argv[1], "--stress-recreate") == 0) return stress_recreate();
     if (argc > 1 && std::strcmp(argv[1], "--apply") == 0) return apply();
     if (argc > 2 && std::strcmp(argv[1], "--boot") == 0) {
         if (std::strcmp(argv[2], "on") == 0) return boot(true);
@@ -392,6 +430,8 @@ int main(int argc, char** argv) {
     }
     std::printf("usage: gao [--version | --probe | --set-core <mhz> | --set-mem <mhz> | --reset\n"
                 "            | --stress <sec> [--max-temp <c>] | --bandwidth\n"
+                "            | --stress-recreate (loads the card for two 3 s runs around a device rebuild;\n"
+                "              changes no setting; exit 0 = both STABLE and rebuilt, 1 = anything else, never --stress's 2 / 3)\n"
                 "            | --optimize [best|quiet|cool|max [--fan-curve silent|normal|cool|aggressive]]\n"
                 "            | --apply | --boot on|off | --fan auto | --status]\n");
     return argc > 1 ? 1 : 0;
