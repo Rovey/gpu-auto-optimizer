@@ -72,6 +72,7 @@ struct App {
     // recover_device() clears the flag; on_telemetry() calls it every second
     // until a new device exists. render() only ever sets it.
     bool device_lost = false;
+    unsigned device_generation = 0;   // counts recover_device() and abandon_backend() runs
 
     // Pointers: re-created after a driver reset (see hw_lost()).
     std::unique_ptr<gao::Nvml> nvml;
@@ -198,6 +199,20 @@ int reset_textures(bool all) {
     return count;
 }
 
+// Releases the window's device, in an order that lets the next one be created.
+// Something leaked can keep the old device alive: the backend's references
+// after an abandon, or a texture without a view that reset_textures() left
+// behind. A released flip-model swap chain is destroyed only after a flush on
+// its device's context, and until then a new swap chain on the same window can
+// be refused: so the swap chain goes first, then the flush, then the context.
+void release_device() {
+    g.rtv.Reset();
+    g.swapchain.Reset();
+    if (g.ctx) guarded([] { g.ctx->ClearState(); g.ctx->Flush(); });
+    g.ctx.Reset();
+    g.device.Reset();
+}
+
 // After an access violation inside a renderer backend call: that backend is
 // never called again, not even to shut it down. Everything
 // ImGui_ImplDX11_Shutdown() resets outside its own data is reset here through
@@ -209,20 +224,14 @@ int reset_textures(bool all) {
 // the next one. Does not call hw_lost(): that stays with on_telemetry().
 void abandon_backend() {
     g.device_lost = true;
+    ++g.device_generation;
     reset_textures(true);
     ImGuiIO& io = ImGui::GetIO();
     io.BackendRendererUserData = nullptr;
     io.BackendRendererName = nullptr;
     io.BackendFlags &= ~(ImGuiBackendFlags_RendererHasVtxOffset | ImGuiBackendFlags_RendererHasTextures);
     ImGui::GetPlatformIO().ClearRendererHandlers();
-    g.rtv.Reset();
-    g.swapchain.Reset();
-    // The leaked references keep the old device alive, and a released
-    // flip-model swap chain is destroyed only after a flush: until then a new
-    // swap chain on the same window can be refused.
-    if (g.ctx) guarded([] { g.ctx->ClearState(); g.ctx->Flush(); });
-    g.ctx.Reset();
-    g.device.Reset();
+    release_device();
     note("The window's graphics device failed and was replaced.", true);
 }
 
@@ -232,14 +241,12 @@ void abandon_backend() {
 // telemetry timer's guard instead of returning, hence the flag is set first.
 void recover_device() {
     g.device_lost = true;
+    ++g.device_generation;
     if (backend_exists()) {
         reset_textures(false);
         if (!guarded([] { ImGui_ImplDX11_Shutdown(); })) abandon_backend();
     }
-    g.rtv.Reset();
-    g.ctx.Reset();
-    g.swapchain.Reset();
-    g.device.Reset();
+    release_device();
     if (!create_device()) return;
     // Init dereferences a null device when its DXGI queries fail.
     if (!guarded([] { ImGui_ImplDX11_Init(g.device.Get(), g.ctx.Get()); })) {
@@ -473,6 +480,7 @@ void render() {
         abandon_backend();   // before any ImGui frame is opened
         return;
     }
+    const unsigned generation = g.device_generation;
     ImGui_ImplWin32_NewFrame();
     ImGui::NewFrame();
     gao::gui::UiActions act;
@@ -510,8 +518,11 @@ void render() {
     gao::gui::draw_ui(g.ui, g.worker->snapshot(), act);
     ImGui::Render();
     // A callback that pumps messages (the elevation prompt) lets the telemetry
-    // timer run inside draw_ui, and its recover_device() can fail.
-    if (g.device_lost) return;
+    // timer run inside draw_ui. If its recover_device() failed there is no
+    // device; if it succeeded, the new backend has not had its
+    // ImGui_ImplDX11_NewFrame() and has no shaders or buffers yet. Either way
+    // this frame is not drawn; the next one starts properly.
+    if (g.device_lost || g.device_generation != generation) return;
     HRESULT hr = E_FAIL;
     const bool drawn = guarded([&hr] {
         const float clear[4] = {0.08f, 0.08f, 0.10f, 1.0f};
@@ -883,7 +894,10 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdline, int) {
     // ~10 Hz during a run and ~4 Hz otherwise. The tool measures the GPU; its
     // own window must not load it.
     for (;;) {
-        const DWORD timeout = !g.visible ? INFINITE : g.input_frames > 0 ? 0 : g.worker->running() ? 100 : 250;
+        // While the device is lost nothing is drawn either: wait for a message
+        // (the telemetry timer rebuilds the device) instead of polling.
+        const DWORD timeout =
+            !g.visible || g.device_lost ? INFINITE : g.input_frames > 0 ? 0 : g.worker->running() ? 100 : 250;
         MsgWaitForMultipleObjectsEx(0, nullptr, timeout, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
         MSG msg;
         bool quit = false;
