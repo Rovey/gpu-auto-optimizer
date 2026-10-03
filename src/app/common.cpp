@@ -254,8 +254,10 @@ OptimizeOutcome run_optimize(Preset preset, const OptimizeHooks& hooks, const st
         // fault skipped the frames of the search, so a D3D call of the stress
         // load may have been abandoned halfway; its destructor would release
         // COM objects into that same user-mode driver and could fault outside
-        // any guard, or hang. The process is about to report the failure; the
-        // device goes with the process.
+        // any guard, or hang. `gao` is about to report the failure and exit,
+        // and the device goes with the process. The window application lives
+        // on: there the leaked load, with its device and buffers, stays until
+        // the application exits.
         (void)load.release();
         bool stock = false;
         {

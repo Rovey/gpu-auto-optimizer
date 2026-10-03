@@ -304,7 +304,7 @@ struct Run {
                 return true;
             };
         if (card.bw_curve)
-            io.bandwidth =[this]() -> std::optional<double> {
+            io.bandwidth = [this]() -> std::optional<double> {
                 ++card.bw_measurements;
                 if (card.bw_loses_device) { card.driver_reset(); return std::nullopt; }
                 if (card.bw_fails_at_zero && card.mem == 0) return std::nullopt;

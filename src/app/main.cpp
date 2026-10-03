@@ -314,7 +314,8 @@ static int bandwidth() {
 // Measures what the optimize run assumes after a driver reset: how long the
 // stress load takes to rebuild its device, and what the first batch on it
 // costs. Changes no settings and needs no elevation, but it does load the card
-// (two 3 s runs). Exit 0 when both runs are STABLE and the rebuild succeeded,
+// (two 3 s runs). Exit 0 when both runs are STABLE, the rebuild succeeded and
+// the first batch after it computed without a lost device or a wrong value,
 // 1 otherwise -- not --stress's 2 / 3 codes.
 static int stress_recreate() {
     gao::Nvml nvml;
@@ -341,10 +342,14 @@ static int stress_recreate() {
     std::printf("recreate: ok, %.1f ms\n", recreate_ms);
 
     const gao::StressBatch b = load.Batch();
-    std::printf("first batch: %.1f ms, %lld iterations\n", b.elapsed_ms, b.iterations);
+    // A batch that lost the device or computed wrong has no time worth printing.
+    const bool batch_ok = !b.device_lost && b.wrong_values == 0;
+    if (b.device_lost) std::printf("first batch: DEVICE LOST\n");
+    else if (b.wrong_values != 0) std::printf("first batch: %d wrong values\n", b.wrong_values);
+    else std::printf("first batch: %.1f ms, %lld iterations\n", b.elapsed_ms, b.iterations);
 
     const bool second_ok = run("after");
-    return first_ok && second_ok ? 0 : 1;
+    return first_ok && batch_ok && second_ok ? 0 : 1;
 }
 
 int main(int argc, char** argv) {
@@ -431,7 +436,8 @@ int main(int argc, char** argv) {
     std::printf("usage: gao [--version | --probe | --set-core <mhz> | --set-mem <mhz> | --reset\n"
                 "            | --stress <sec> [--max-temp <c>] | --bandwidth\n"
                 "            | --stress-recreate (loads the card for two 3 s runs around a device rebuild;\n"
-                "              changes no setting; exit 0 = both STABLE and rebuilt, 1 = anything else, never --stress's 2 / 3)\n"
+                "              changes no setting; exit 0 = both STABLE, rebuilt and a clean first batch, 1 = anything else,\n"
+                "              never --stress's 2 / 3)\n"
                 "            | --optimize [best|quiet|cool|max [--fan-curve silent|normal|cool|aggressive]]\n"
                 "            | --apply | --boot on|off | --fan auto | --status]\n");
     return argc > 1 ? 1 : 0;

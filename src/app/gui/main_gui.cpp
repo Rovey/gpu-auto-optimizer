@@ -69,10 +69,25 @@ struct App {
     ComPtr<ID3D11RenderTargetView> rtv;
     // Invariant: !device_lost implies device, ctx and swapchain are non-null
     // and the ImGui renderer backend is initialised (backend_exists()). Only
-    // recover_device() clears the flag; on_telemetry() calls it every second
-    // until a new device exists. render() only ever sets it.
+    // recover_device() clears the flag; on_telemetry() calls it, spaced out
+    // as described below, until a new device exists. render() only ever sets it.
     bool device_lost = false;
     unsigned device_generation = 0;   // counts recover_device() and abandon_backend() runs
+    // A recovery that keeps failing must not rebuild the device every second
+    // for ever: each attempt can leak a device and write a log line. `recoveries`
+    // counts recover_device() runs (up to 3) since the last frame that reached
+    // the screen with all its creations done. The first two run at the telemetry
+    // tick, the third 5 s after the second, every later one 30 s after the one
+    // before. The wait runs from the previous attempt, so a hidden window, which
+    // presents nothing, still recovers at once from resets that lie apart.
+    int recoveries = 0;
+    ULONGLONG recover_at = 0;      // no recover_device() before this tick count
+    bool abandon_noted = false;    // the abandon note, once per such run of failures
+    // The removed state of the window's device is the sign of a driver reset.
+    // A device is asked until it says so once (removed_seen), and what it said
+    // waits in driver_reset for on_telemetry(), which calls hw_lost().
+    bool removed_seen = false;
+    bool driver_reset = false;
 
     // Pointers: re-created after a driver reset (see hw_lost()).
     std::unique_ptr<gao::Nvml> nvml;
@@ -211,6 +226,20 @@ void release_device() {
     if (g.ctx) guarded([] { g.ctx->ClearState(); g.ctx->Flush(); });
     g.ctx.Reset();
     g.device.Reset();
+    g.removed_seen = false;   // the next device has not been asked yet
+}
+
+// Asks the window's device whether it was removed, and remembers a yes for
+// on_telemetry(). Called while the device still exists: every telemetry tick,
+// and by abandon_backend() before it releases the device, after which there
+// is nothing left to ask. Guarded: the caller may be outside the timer's guard.
+void check_removed() {
+    if (!g.device || g.removed_seen) return;
+    bool removed = false;
+    guarded([&removed] { removed = g.device->GetDeviceRemovedReason() != S_OK; });
+    if (!removed) return;
+    g.removed_seen = true;
+    g.driver_reset = true;
 }
 
 // After an access violation inside a renderer backend call: that backend is
@@ -221,7 +250,8 @@ void release_device() {
 // the same textures again on its first frame. The backend's data and the COM
 // references it holds (device, context, factory, shaders, buffers, textures)
 // are leaked. Leaves no device and g.device_lost set; recover_device() builds
-// the next one. Does not call hw_lost(): that stays with on_telemetry().
+// the next one. Does not call hw_lost(): that stays with on_telemetry(), which
+// learns through check_removed() whether the device went with a driver reset.
 void abandon_backend() {
     g.device_lost = true;
     ++g.device_generation;
@@ -231,17 +261,22 @@ void abandon_backend() {
     io.BackendRendererName = nullptr;
     io.BackendFlags &= ~(ImGuiBackendFlags_RendererHasVtxOffset | ImGuiBackendFlags_RendererHasTextures);
     ImGui::GetPlatformIO().ClearRendererHandlers();
+    check_removed();
     release_device();
-    note("The window's graphics device failed and was replaced.", true);
+    if (!g.abandon_noted) note("The window's graphics device failed; rebuilding it.", true);
+    g.abandon_noted = true;
 }
 
 // After a TDR the UI device is gone. Rebuild it; if that fails too (it can,
-// right after a reset), try again on the next telemetry tick. Leaves the
-// invariant true or g.device_lost set -- also when a fault in here ends in the
-// telemetry timer's guard instead of returning, hence the flag is set first.
+// right after a reset), on_telemetry() tries again, at the times the backoff
+// allows. Leaves the invariant true or g.device_lost set -- also when a fault
+// in here ends in the telemetry timer's guard instead of returning, hence the
+// flag and the backoff are set first.
 void recover_device() {
     g.device_lost = true;
     ++g.device_generation;
+    if (g.recoveries < 3) ++g.recoveries;
+    g.recover_at = GetTickCount64() + (g.recoveries < 2 ? 0 : g.recoveries == 2 ? 5000 : 30000);
     if (backend_exists()) {
         reset_textures(false);
         if (!guarded([] { ImGui_ImplDX11_Shutdown(); })) abandon_backend();
@@ -535,7 +570,20 @@ void render() {
         abandon_backend();
         return;
     }
-    if (FAILED(hr)) g.device_lost = true;   // any failure, not only a removed device
+    if (FAILED(hr)) {   // any failure, not only a removed device
+        g.device_lost = true;
+        return;
+    }
+    // The frame reached the screen. That alone does not show a working device:
+    // one whose creations fail can still present. Only a frame that also left
+    // no texture half-made ends the run of failed recoveries and its backoff.
+    if (reset_textures(false) > 0) {
+        g.device_lost = true;
+        return;
+    }
+    g.recoveries = 0;
+    g.recover_at = 0;
+    g.abandon_noted = false;
 }
 
 // ---------------------------------------------------------------- hardware
@@ -587,11 +635,14 @@ void retry_hw() {
 void on_telemetry() {
     // A removed UI device is the first sign of a driver reset; the window is
     // often hidden, so no Present() would report it. Read from the old device,
-    // before recover_device() replaces it. (After abandon_backend() there is
-    // no device to ask; stale NVML/NVAPI state is then left to the guards
-    // around the timers and to the watchdog.)
-    const bool reset = g.device && g.device->GetDeviceRemovedReason() != S_OK;
-    if (g.device_lost || reset) recover_device();
+    // before recover_device() replaces it; abandon_backend() has read it from
+    // a device it released since the last tick. A removed device is lost at
+    // once, also while the backoff holds its replacement back.
+    check_removed();
+    const bool reset = g.driver_reset;
+    g.driver_reset = false;
+    if (reset) g.device_lost = true;
+    if (g.device_lost && GetTickCount64() >= g.recover_at) recover_device();
     if (reset && !g.hw_lost) hw_lost();
     retry_hw();
     if (g.nvml_ok) {
@@ -895,7 +946,8 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdline, int) {
     // own window must not load it.
     for (;;) {
         // While the device is lost nothing is drawn either: wait for a message
-        // (the telemetry timer rebuilds the device) instead of polling.
+        // (the telemetry timer rebuilds the device, when the backoff lets it)
+        // instead of polling.
         const DWORD timeout =
             !g.visible || g.device_lost ? INFINITE : g.input_frames > 0 ? 0 : g.worker->running() ? 100 : 250;
         MsgWaitForMultipleObjectsEx(0, nullptr, timeout, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
