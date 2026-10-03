@@ -28,8 +28,15 @@ public:
     ~Stress();
     bool Init(StressSelftest selftest = StressSelftest::None);
     // One batch of dispatches. Batches start at one dispatch and double until
-    // they take ~250 ms. After a lost device, the next call recreates it.
+    // they take ~250 ms. After a lost device, the next call recreates it; that
+    // re-creation is not timed.
     StressBatch Batch();
+    // Drops the current device, whatever its state, and builds a new one:
+    // device, shader, buffers. False when that fails (Error() says why); the
+    // load then has no device and the next Batch() tries again. For use after
+    // a driver reset, when the device may have been removed without the load
+    // noticing. Keeps the batch size.
+    bool Recreate();
     // Device-memory bandwidth in GB/s (read + write) from a 256 MB buffer copy,
     // timed with GPU timestamps; median of 3 runs. nullopt when the device was
     // lost or the timing was unusable.

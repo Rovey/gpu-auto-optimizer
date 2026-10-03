@@ -162,6 +162,8 @@ bool Stress::Init(StressSelftest selftest) {
     return CreateDevice();
 }
 
+bool Stress::Recreate() { return CreateDevice(); }
+
 bool Stress::CreateDevice() {
     Impl& d = *impl_;
     d.device.Reset(); d.ctx.Reset(); d.cs.Reset();
@@ -238,14 +240,16 @@ bool Stress::CreateDevice() {
 
 StressBatch Stress::Batch() {
     StressBatch out;
+    Impl& d = *impl_;
+    // Building the device is not part of the batch: the time reported is the
+    // time the card computed.
+    if (!d.device && !CreateDevice()) { out.device_lost = true; return out; }   // elapsed_ms stays 0
     const auto start = std::chrono::steady_clock::now();
     auto finish = [&] {
         out.elapsed_ms = std::chrono::duration<double, std::milli>(
             std::chrono::steady_clock::now() - start).count();
         return out;
     };
-    Impl& d = *impl_;
-    if (!d.device && !CreateDevice()) { out.device_lost = true; return finish(); }
 
     const UINT zero[4] = {0, 0, 0, 0};
     d.ctx->ClearUnorderedAccessViewUint(d.errors_uav.Get(), zero);
