@@ -127,6 +127,10 @@ struct OptimizeIo {
     // GB/s at the currently applied settings; nullopt when the measurement
     // failed. Empty: the memory search falls back to stability only.
     std::function<std::optional<double>()> bandwidth;
+    // Asked after `bandwidth` returned nothing: true when the load measured
+    // but its readings did not agree (other programs using the card, say).
+    // That is no sign of a driver reset. Empty: every failure may be one.
+    std::function<bool()> bandwidth_unsettled;
     // Waits without loading the card; returns false when the wait was cut short
     // by a stop request. Empty: the search does not wait, and does not log
     // that it did.
@@ -153,7 +157,8 @@ struct OptimizeResult {
     // soak or health probe that ended DEVICE LOST, STALLED or NO TELEMETRY (the
     // last two only suggest a reset); and, when the card can be reconnected
     // (gpu.recover), a candidate, power or soak write that failed and a
-    // bandwidth measurement that failed on a stable candidate above memory +0.
+    // bandwidth measurement that failed on a stable candidate above memory +0
+    // (not one whose readings only did not settle: io.bandwidth_unsettled).
     // With gpu.recover the run ends at the second one, so this is 0, 1 or 2.
     int driver_resets = 0;
 };

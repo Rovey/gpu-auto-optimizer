@@ -535,7 +535,12 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
                         return false;
                     if (gbps) return true;
                     // The candidate passed, the measurement failed: the step is unusable.
-                    if (!gpu.recover) {
+                    if (v > 0 && io.bandwidth_unsettled && io.bandwidth_unsettled()) {
+                        // The load computed and the readings disagreed: noise,
+                        // not the card giving out. The scan ends with the best
+                        // of what was measured; the core is still searched.
+                        log("mem " + offset_text(v) + ": the bandwidth readings did not settle; the memory scan ends here");
+                    } else if (!gpu.recover) {
                         hw_suspect = true;   // the driver may have been reset under it; the next write decides
                     } else if (v == 0) {
                         // Nothing is overclocked yet, so this is not the card

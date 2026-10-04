@@ -41,6 +41,10 @@ public:
     // timed with GPU timestamps; median of 3 runs. nullopt when the device was
     // lost or the timing was unusable.
     std::optional<double> MeasureBandwidth();
+    // Why the last MeasureBandwidth() returned nothing: true when it measured
+    // but the runs never agreed (other programs using the card, say); false
+    // when the device was lost or a timing query failed.
+    bool BandwidthUnsettled() const { return bw_unsettled_; }
     const std::string& Error() const { return error_; }
     const std::string& AdapterName() const { return adapter_name_; }
 
@@ -49,6 +53,7 @@ private:
     std::unique_ptr<Impl> impl_;   // keeps D3D headers out of every includer
     StressSelftest selftest_ = StressSelftest::None;
     std::string error_;
+    bool bw_unsettled_ = false;
     std::string adapter_name_;
     int dispatches_ = 1;
     bool CreateDevice();

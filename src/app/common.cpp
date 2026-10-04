@@ -202,6 +202,7 @@ OptimizeOutcome run_optimize(Preset preset, const OptimizeHooks& hooks, const st
         if (!gbps) log("bandwidth measurement failed: " + load->Error());
         return gbps;
     };
+    io.bandwidth_unsettled = [&] { return load->BandwidthUnsettled(); };
     // The wait between a driver reset and the next load. The card is left
     // alone: no load, no driver call, no fan tick, and no log line (the search
     // says that it rests). Short slices, so a stop request ends the wait

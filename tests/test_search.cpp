@@ -131,6 +131,8 @@ struct FakeCard {
     bool lost_on_first_soak = false;      // the first 300 s probe ends DEVICE LOST
     bool fail_set_on_first_soak = false;  // the first write of the soak state fails once
     int bw_fails_once_at_mem = -1;   // the bandwidth measurement at this offset fails once and the driver resets
+    int bw_unsettled_at_mem = -1;    // the bandwidth readings at this offset do not agree; the driver is fine
+    bool bw_unsettled = false;       // what the last failed measurement was
     int lost_mem_from = -1;          // at or above this memory offset a 3 s probe ends DEVICE LOST
     int recover_fails_from_call = -1;     // recover() fails from this call on (1 = the first)
     std::vector<std::string> probe_order; // every probe as "seconds:power:core:mem", in the order they ran
@@ -306,6 +308,8 @@ struct Run {
         if (card.bw_curve)
             io.bandwidth = [this]() -> std::optional<double> {
                 ++card.bw_measurements;
+                card.bw_unsettled = card.mem == card.bw_unsettled_at_mem;
+                if (card.bw_unsettled) return std::nullopt;
                 if (card.bw_loses_device) { card.driver_reset(); return std::nullopt; }
                 if (card.bw_fails_at_zero && card.mem == 0) return std::nullopt;
                 if (card.mem == card.bw_fails_once_at_mem) {
@@ -316,6 +320,7 @@ struct Run {
                 if (card.bw_fails) return std::nullopt;
                 return card.bw_curve(card.mem);
             };
+        if (card.bw_curve) io.bandwidth_unsettled = [this] { return card.bw_unsettled; };
         return optimize(gpu, objectives_for(preset), j, io);
     }
     OptimizeResult go(Preset preset) { return go(preset, card.gpu()); }
@@ -2123,6 +2128,28 @@ TEST_CASE("a failed bandwidth measurement ends the memory scan and leaves the co
     CHECK(run.card.count("SET FAILED") == 0);   // reconnected before the next entry, not after a failed write in it
     CHECK(run.logged("the driver was reset; reconnecting"));
     CHECK_FALSE(run.card.stale);
+    check_journal_rules(run);
+}
+
+TEST_CASE("bandwidth readings that do not settle end the memory scan and are no reset") {
+    Run run = recovering();
+    run.card.bw_curve = [](int m) { return 500 + m * 0.3; };
+    run.card.bw_unsettled_at_mem = 300;
+    const auto r = run.go(Preset::BestOfMyGpu);
+    REQUIRE(r.ok);
+    CHECK(r.driver_resets == 0);
+    CHECK(run.card.recover_calls == 0);
+    CHECK_FALSE(run.logged("treated as a driver reset"));
+    CHECK(run.logged("mem +300: the bandwidth readings did not settle; the memory scan ends here"));
+    // The scan ends at +300 with the best of the measured values, +250, and
+    // the confirm probe runs there, not four steps below.
+    CHECK(run.card.max_mem_seen == 300);
+    CHECK(r.mem_max_stable == 250);
+    CHECK(r.mem_confirmed == 250);
+    // The core is searched as in a run without any event.
+    CHECK(run.card.max_core_seen > 0);
+    CHECK(r.core_mhz > 0);
+    CHECK_FALSE(run.logged("core: not searched"));
     check_journal_rules(run);
 }
 

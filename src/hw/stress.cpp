@@ -286,6 +286,7 @@ StressBatch Stress::Batch() {
 
 std::optional<double> Stress::MeasureBandwidth() {
     Impl& d = *impl_;
+    bw_unsettled_ = false;
     if (!d.device && !CreateDevice()) return std::nullopt;
     // Created lazily (the stress path never needs 512 MB of buffers) and all
     // or nothing: q_end is created last, and any failure drops what was made,
@@ -375,6 +376,7 @@ std::optional<double> Stress::MeasureBandwidth() {
         if (last.back() <= last.front() * (1 + kBwSettle)) return last[kBwRuns / 2];
     }
     error_ = "bandwidth did not settle within " + std::to_string(kBwMaxRuns) + " runs";
+    bw_unsettled_ = true;
     return std::nullopt;
 }
 
