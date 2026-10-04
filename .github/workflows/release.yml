@@ -45,7 +45,7 @@ jobs:
           NAME: ${{ github.ref_type == 'tag' && github.ref_name || 'dev' }}
         run: |
           $stage = New-Item -ItemType Directory "dist/GpuAutoOptimizer"
-          Copy-Item build/Release/GpuAutoOptimizer.exe, build/Release/gao.exe, README.md, LICENSE $stage
+          Copy-Item build/Release/GpuAutoOptimizer.exe, build/Release/gao.exe, README.md, LICENSE, THIRD-PARTY-NOTICES.md $stage
           $zip = "dist/GpuAutoOptimizer-$env:NAME-win-x64.zip"
           Compress-Archive -Path "$stage/*" -DestinationPath $zip
           Get-FileHash $zip -Algorithm SHA256 | ForEach-Object { "$($_.Hash.ToLower())  $(Split-Path $zip -Leaf)" } |

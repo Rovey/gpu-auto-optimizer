@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" width="120" height="120" role="img" aria-labelledby="t">
+  <title id="t">GPU Auto Optimizer</title>
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#16233d"/>
+      <stop offset="1" stop-color="#0b111d"/>
+    </linearGradient>
+    <linearGradient id="sweep" gradientUnits="userSpaceOnUse" x1="30" y1="83" x2="92" y2="50">
+      <stop offset="0" stop-color="#3b82f6"/>
+      <stop offset="1" stop-color="#7ddc3c"/>
+    </linearGradient>
+  </defs>
+  <rect x="2" y="2" width="116" height="116" rx="27" fill="url(#tile)" stroke="#2a3b59" stroke-width="2"/>
+  <!-- Gauge: 240 degrees, centred on (60, 66), radius 34 -->
+  <path d="M 30.56 83 A 34 34 0 1 1 89.44 83" fill="none" stroke="#2a3b59" stroke-width="9" stroke-linecap="round"/>
+  <path d="M 30.56 83 A 34 34 0 1 1 91.34 52.83" fill="none" stroke="url(#sweep)" stroke-width="9" stroke-linecap="round"/>
+  <!-- Needle and hub -->
+  <path d="M 60 66 L 82.12 56.71" stroke="#ffffff" stroke-width="4.5" stroke-linecap="round"/>
+  <circle cx="60" cy="66" r="6.5" fill="#ffffff"/>
+  <circle cx="60" cy="66" r="2.5" fill="#0b111d"/>
+  <!-- Baseline: a card edge with three contacts -->
+  <rect x="38" y="93" width="44" height="5" rx="2.5" fill="#2a3b59"/>
+  <rect x="44" y="93" width="6" height="5" rx="1.5" fill="#5b6f8f"/>
+  <rect x="57" y="93" width="6" height="5" rx="1.5" fill="#5b6f8f"/>
+  <rect x="70" y="93" width="6" height="5" rx="1.5" fill="#5b6f8f"/>
+</svg>
