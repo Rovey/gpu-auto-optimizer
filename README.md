@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="docs/images/logo.png" width="200" alt="GPU Auto Optimizer logo: a graphics card with a speedometer">
+<img src="docs/images/mark.svg" width="112" alt="GPU Auto Optimizer logo: a speedometer whose needle sits in the upper range">
 
 # GPU Auto Optimizer
 
@@ -188,4 +188,4 @@ This produces `build\Release\GpuAutoOptimizer.exe` and `build\Release\gao.exe`. 
 
 ## License
 
-[MIT](LICENSE) © Rovey
+[MIT](LICENSE) © Rovey. The executables contain Dear ImGui and JSON for Modern C++, both under the MIT License; their notices are in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) and in every release zip.
