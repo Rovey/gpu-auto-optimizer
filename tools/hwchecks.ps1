@@ -95,7 +95,28 @@ function Has($o, $name) { $o.PSObject.Properties.Name -contains $name }
 function Begins($from) { @(New-Entries $from) | Where-Object { (Has $_ 'state') -and $_.state -eq 'begin' } }
 function Core-Begins($from) { @(Begins $from) | Where-Object { (Has $_ 'core') -and -not (Has $_ 'mem') } }
 function Mem-Begins($from) { @(Begins $from) | Where-Object { (Has $_ 'mem') -and -not (Has $_ 'core') } }
-function Soak-Begins($from) { @(Begins $from) | Where-Object { (Has $_ 'mem') -and (Has $_ 'core') } }
+# The soak's entry. With a memory offset it names both clocks. With memory +0
+# it names only the core, like a core candidate (seen on the RTX 4070): then it
+# is the first entry after a core confirm probe that held, and a confirm probe
+# is a core entry that is not above the core entry before it.
+function Soak-Begins($from) {
+    $e = @(New-Entries $from) | Where-Object { Has $_ 'state' }
+    $both = @($e | Where-Object { $_.state -eq 'begin' -and (Has $_ 'mem') -and (Has $_ 'core') })
+    if ($both.Count) { return $both }
+    $prevCore = -1; $confirming = $false; $held = $false
+    foreach ($x in $e) {
+        if ($x.state -eq 'begin') {
+            if ($held) { return @($x) }
+            if ((Has $x 'core') -and -not (Has $x 'mem')) {
+                if ($prevCore -ge 0 -and $x.core -le $prevCore) { $confirming = $true }
+                $prevCore = $x.core
+            }
+        } elseif ($x.state -eq 'complete') {
+            $held = $confirming -and ($x.verdict -eq 'STABLE' -or $x.verdict -eq 'TOO HOT')
+        }
+    }
+    return @()
+}
 # @($null).Count is 1 in PowerShell: an empty pipeline must count as zero.
 function Count-Of($items) { if ($null -eq $items) { 0 } else { @($items).Count } }
 function Open-Begins($from) {
