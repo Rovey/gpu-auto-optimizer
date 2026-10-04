@@ -30,6 +30,28 @@ GPU Auto Optimizer tunes the **power limit** and the **core and memory clock off
 - **Plays fair:** if MSI Afterburner or another tool changes the settings, it steps aside instead of fighting over them.
 - **Native and small:** two C++ programs, under 2 MB together, with no installer, no runtime and no driver or service.
 
+## One click, +4.5 % performance, with a safety margin
+
+<div align="center">
+
+<img src="docs/images/result.svg" width="860" alt="Measured on the reference RTX 4070: the stress-test score rises from 5736 to 5996 iterations per second, 4.5 % more, after one run of Best of my GPU. Core clock offset +135 MHz, memory clock offset +1600 MHz, power limit 105 %.">
+
+</div>
+
+One run of **Best of my GPU** on the reference card, an RTX 4070, with nothing else to set:
+
+| | Stock | After one click |
+|---|---|---|
+| Stress-test score | 5736 it/s | **5996 it/s (+4.5 %)** |
+| Core clock under load | 2766 MHz | 2899 MHz (offset +135 MHz) |
+| Memory clock under load | 10355 MHz | 12100 MHz (offset +1600 MHz) |
+| Power under load | 187 W | 204 W (power limit 105 %) |
+
+The search raised each clock until the card computed a wrong value (core +225 MHz, memory +2550 MHz), confirmed the last values that held (+210 and +2300 MHz) and applied them minus a safety margin. The result then had to pass a five-minute soak before it was saved. The whole run took 11.7 minutes.
+
+> [!NOTE]
+> The score is the app's own stress test, a DirectX 11 compute load. Games gain a different amount, and every card has its own limits. The log of this run is in [docs/hardware-checks.md](docs/hardware-checks.md) (check 52, fourth run).
+
 ## Quick start
 
 1. Download `GpuAutoOptimizer-<version>-win-x64.zip` from the [latest release](https://github.com/Rovey/gpu-auto-optimizer/releases/latest) and unzip it anywhere.
