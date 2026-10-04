@@ -21,7 +21,7 @@ BEGIN
             VALUE "FileVersion", GAO_VERSION_STRING
             VALUE "ProductName", "GPU Auto Optimizer"
             VALUE "ProductVersion", GAO_VERSION_STRING
-            VALUE "LegalCopyright", "Copyright (c) 2026 Roy Ernst. MIT License."
+            VALUE "LegalCopyright", "Copyright (c) 2026 Rovey. MIT License."
         END
     END
     BLOCK "VarFileInfo"
