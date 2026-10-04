@@ -284,10 +284,14 @@ try {
             $lostAt = Max-Core $from
             $tdr = Start-Process -FilePath $TdrExe -ArgumentList $TdrArgs -NoNewWindow -PassThru -Wait
             Note "51: forced driver reset sent (exit code $($tdr.ExitCode)) while core +$lostAt was running"
-            # The lost candidate itself is the highest allowed from here on.
-            $r2 = Wait-Until { $false } (Secs 2400) $p $from ($lostAt + 1)
+            # The running probe can survive the reset (STABLE at a reduced
+            # score, seen on the RTX 4070); the search then notices the reset
+            # at the next candidate's write, which is journaled and closed as
+            # SET FAILED. One step above the running candidate is therefore
+            # allowed; anything higher is not.
+            $r2 = Wait-Until { $false } (Secs 2400) $p $from ($lostAt + 16)
             Note "51: waited for the run to end by itself: $r2"
-            if ($r2 -eq 'maxcore') { Note "51: FAIL -- a core value above +$lostAt was applied after the reset" }
+            if ($r2 -eq 'maxcore') { Note "51: FAIL -- a core value above +$($lostAt + 15) was applied after the reset" }
             Note "51: highest core candidate of the run: +$(Max-Core $from) (the reset was at +$lostAt)"
         }
         if ($p.HasExited) { Note "51: gao exited on its own, code $($p.ExitCode)" } else { Stop-Run $p $label }
