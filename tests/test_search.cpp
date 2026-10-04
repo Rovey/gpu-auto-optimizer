@@ -1950,24 +1950,28 @@ TEST_CASE("one blind probe ends the climb at the last value that passed") {
     check_journal_rules(run);
 }
 
-TEST_CASE("a blind probe in the memory climb ends exploring; a second blind probe is never taken") {
+TEST_CASE("a blind probe ends the clock search it is in: the memory search, then the core search") {
     Run run = recovering();
-    run.card.blind_probes = 2;   // the first two 3 s probes would be blind
+    run.card.blind_probes = 2;   // the first two 3 s probes are blind
     const auto r = run.go(Preset::BestOfMyGpu);
     REQUIRE(r.ok);
-    CHECK(r.driver_resets == 1);
-    // The blind probe is the first 3 s one, memory +50. It is not a measured
-    // failure and nothing is bisected below it: the memory stays at stock and
-    // the core is not searched, so no second 3 s probe runs.
+    CHECK(r.driver_resets == 2);
+    // The first blind probe is the first 3 s one, memory +50. It is not a
+    // measured failure and nothing is bisected below it: the memory stays at
+    // stock. The core has a search of its own, and its first probe, +15, is
+    // the second blind one: the core stays at stock too, and no third 3 s
+    // probe runs.
     CHECK(run.logged("core +0 / mem +50: NO TELEMETRY"));
-    CHECK(run.card.blind_probes == 1);
+    CHECK(run.logged("core +15 / mem +0: NO TELEMETRY"));
+    CHECK(run.card.blind_probes == 0);
     CHECK(mem_begins(run.card) == std::vector<int>{50});
+    CHECK(core_begins(run.card) == std::vector<int>{15});
     CHECK(r.mem_max_stable == 0);
     CHECK(r.mem_mhz == 0);
+    CHECK(r.core_mhz == 0);
     CHECK(run.card.max_mem_seen == 50);
-    CHECK(run.card.max_core_seen == 0);
-    CHECK(run.logged("core: not searched; the driver reset earlier in this run"));
-    CHECK(run.card.recover_calls == 1);
+    CHECK(run.card.max_core_seen == 15);
+    CHECK(run.card.recover_calls == 2);
     CHECK_FALSE(run.logged("lost telemetry"));
     check_journal_rules(run);
 }
@@ -2101,7 +2105,7 @@ TEST_CASE("a failed write of the soak state is a soak reset") {
     check_journal_rules(run);
 }
 
-TEST_CASE("a failed bandwidth measurement ends the memory scan and leaves the core unsearched") {
+TEST_CASE("a failed bandwidth measurement ends the memory scan; the core is still searched") {
     Run run = recovering();
     run.card.bw_curve = [](int m) { return 500 + m * 0.3; };
     run.card.bw_fails_once_at_mem = 300;
@@ -2110,10 +2114,11 @@ TEST_CASE("a failed bandwidth measurement ends the memory scan and leaves the co
     CHECK(r.driver_resets == 1);
     // The scan samples +0 .. +300; the confirm probe runs four steps below
     // +250, the best of the values that were measured. The +0 sample names no
-    // clock in the journal, and neither does the soak, which runs at stock.
+    // clock in the journal.
     CHECK(mem_begins(run.card) == climb(50, 300, 50, {50}));
-    CHECK(clockless_begins(run.card) == 2);
-    CHECK(run.card.count("\"begin\"") == 9);   // +0, +50 .. +300, the confirm probe, the soak
+    CHECK(clockless_begins(run.card) == 1);
+    // +0, +50 .. +300, the memory confirm probe, core +15 .. +165, the core confirm probe, the soak
+    CHECK(run.card.count("\"begin\"") == 21);
     CHECK(run.logged("core +0 / mem +0: STABLE"));
     CHECK(run.logged("mem +0: bandwidth 500.0 GB/s"));
     CHECK(run.card.max_mem_seen == 300);
@@ -2121,9 +2126,9 @@ TEST_CASE("a failed bandwidth measurement ends the memory scan and leaves the co
     CHECK(r.mem_max_stable == 250);
     CHECK(r.mem_confirmed == 50);
     CHECK(r.mem_mhz == 0);
-    CHECK(run.card.max_core_seen == 0);
-    CHECK(r.core_mhz == 0);
-    CHECK(run.logged("core: not searched; the driver reset earlier in this run"));
+    CHECK(run.card.max_core_seen == 165);
+    CHECK(r.core_mhz == 105);
+    CHECK_FALSE(run.logged("core: not searched"));
     CHECK(run.card.recover_calls == 1);
     CHECK(run.card.count("SET FAILED") == 0);   // reconnected before the next entry, not after a failed write in it
     CHECK(run.logged("the driver was reset; reconnecting"));
@@ -2153,7 +2158,7 @@ TEST_CASE("bandwidth readings that do not settle end the memory scan and are no 
     check_journal_rules(run);
 }
 
-TEST_CASE("a reset in the memory scan leaves the core unsearched") {
+TEST_CASE("a reset in the memory scan ends that search only; the core is still searched") {
     Run run = recovering();
     run.card.lost_mem_from = 300;
     const auto r = run.go(Preset::BestOfMyGpu);
@@ -2166,12 +2171,18 @@ TEST_CASE("a reset in the memory scan leaves the core unsearched") {
     CHECK(r.mem_max_stable == 250);
     CHECK(r.mem_confirmed == 50);
     CHECK(r.mem_mhz == 0);
-    CHECK(run.card.max_core_seen == 0);
-    CHECK(core_begins(run.card).empty());
-    CHECK(r.core_mhz == 0);
-    CHECK(run.logged("core: not searched; the driver reset earlier in this run"));
+    // Each clock has its own search: the core climbs to its edge as in a run
+    // without a reset (+165 is the first value that fails), and is confirmed
+    // at the edge, not four steps below it.
+    CHECK_FALSE(run.logged("core: not searched"));
+    // The last core entry is the soak's: with memory at +0 it names only the core.
+    CHECK(core_begins(run.card) == climb(15, 165, 15, {150, 105}));
+    CHECK(run.card.max_core_seen == 165);
+    CHECK(r.core_max_stable == 150);
+    CHECK(r.core_confirmed == 150);
+    CHECK(r.core_mhz == 105);
     CHECK(run.card.mem == 0);
-    CHECK(run.card.core == 0);
+    CHECK(run.card.core == 105);
     CHECK(run.card.power == 115);  // the full state was rewritten after the reset
     CHECK(run.card.recover_calls == 1);
     CHECK_FALSE(run.card.stale);
@@ -2230,10 +2241,11 @@ TEST_CASE("a measurement that fails at +0 because the device was lost is caught 
     CHECK(run.logged("bandwidth measurement not available; searching memory by stability only"));
     CHECK(run.card.bw_measurements == 1);
     // Journal: +0 opened (without a clock) and closed, +50 opened and closed
-    // as SET FAILED. The only entry after them is the soak, at stock.
+    // as SET FAILED. After them: the core search (+15 .. +165, the confirm
+    // probe) and the soak.
     CHECK(mem_begins(run.card) == std::vector<int>{50});
-    CHECK(clockless_begins(run.card) == 2);
-    CHECK(run.card.count("\"begin\"") == 3);
+    CHECK(clockless_begins(run.card) == 1);
+    CHECK(run.card.count("\"begin\"") == 15);
     CHECK(run.logged("core +0 / mem +0: STABLE"));
     REQUIRE(run.card.journal.size() >= 4);
     CHECK(run.card.journal[0].find("\"begin\"") != std::string::npos);
@@ -2244,8 +2256,9 @@ TEST_CASE("a measurement that fails at +0 because the device was lost is caught 
     CHECK(run.logged("failed; treated as a driver reset"));
     CHECK(first_events_after_lost(run.card, 5) == Events{"recover", "stock", "rest", "health", "begin"});
     CHECK(r.mem_mhz == 0);
-    CHECK(run.card.max_core_seen == 0);
-    CHECK(run.logged("core: not searched; the driver reset earlier in this run"));
+    CHECK(run.card.max_core_seen == 165);
+    CHECK_FALSE(run.logged("core: not searched"));
+    CHECK(r.core_mhz == 105);
     CHECK(run.card.core == r.core_mhz);
     CHECK(run.card.recover_calls == 1);
     check_journal_rules(run);
@@ -2273,32 +2286,71 @@ TEST_CASE("a reset verdict on the +0 memory sample ends the run") {
     check_journal_rules(run);
 }
 
-TEST_CASE("a first reset in the memory confirm probe leaves the core unsearched") {
+TEST_CASE("a reset in the memory search and one in the core climb: both clocks back off, the run goes on") {
+    Run run = recovering();
+    run.card.lost_mem_from = 300;
+    run.card.lost_core_from = 135;
+    const auto r = run.go(Preset::BestOfMyGpu);
+    REQUIRE(r.ok);
+    CHECK(r.driver_resets == 2);
+    CHECK(run.card.recover_calls == 2);
+    CHECK(run.logged("mem: the driver reset at +300; using +250, the last value that passed"));
+    CHECK(run.logged("core: the driver reset at +135; using +120, the last value that passed"));
+    // The core climb ends at +135 and its confirm probe starts four steps
+    // below +120; nothing above the lost value is tried. The last core entry
+    // is the soak's, at +30.
+    CHECK(core_begins(run.card) == climb(15, 135, 15, {60, 30}));
+    CHECK(run.card.max_core_seen == 135);
+    CHECK(r.core_max_stable == 120);
+    CHECK(r.core_confirmed == 60);
+    CHECK(r.mem_confirmed == 50);
+    CHECK_FALSE(run.card.stale);
+    check_journal_rules(run);
+}
+
+TEST_CASE("a third reset ends the run and starts nothing") {
+    Run run = recovering();
+    run.card.lost_mem_from = 300;          // the first event, in the memory climb
+    run.card.lost_core_from = 135;         // the second, in the core climb
+    run.card.lost_on_first_soak = true;    // the third
+    const auto r = run.go(Preset::BestOfMyGpu);
+    REQUIRE_FALSE(r.ok);
+    CHECK(r.reason == "the driver reset three times");
+    CHECK(r.driver_resets == 3);
+    CHECK(run.card.core == 0);
+    CHECK(run.card.mem == 0);
+    check_journal_rules(run);
+}
+
+TEST_CASE("a first reset in the memory confirm probe: the core is still searched") {
     Run run = recovering();
     run.card.lost_on_first_mem_confirm = true;
     const auto r = run.go(Preset::BestOfMyGpu);
     REQUIRE(r.ok);
     CHECK(r.driver_resets == 1);
     CHECK(run.logged("confirm core +0 / mem +800: DEVICE LOST"));
-    // The next confirm try is four steps down. The last entry is the soak's:
-    // it runs at core +0 / memory +400 and journals only the memory.
-    CHECK(mem_begins(run.card) == climb(50, 850, 50, {800, 600, 400}));
-    CHECK(core_begins(run.card).empty());
+    // The next confirm try is four steps down. The core then has a search of
+    // its own, with memory +400 applied, and the soak names both clocks.
+    CHECK(mem_begins(run.card) == climb(50, 850, 50, {800, 600}));
+    CHECK(core_begins(run.card) == climb(15, 165, 15, {150}));
     CHECK(r.mem_max_stable == 800);
     CHECK(r.mem_confirmed == 600);
     CHECK(r.mem_mhz == 400);
     CHECK(run.card.mem == 400);
-    CHECK(run.card.max_core_seen == 0);
-    CHECK(run.logged("core: not searched; the driver reset earlier in this run"));
+    CHECK(run.card.max_core_seen == 165);
+    CHECK(r.core_mhz == 105);
+    CHECK_FALSE(run.logged("core: not searched"));
+    CHECK(run.logged("soak: 300 s at power 115 %, core +105, mem +400"));
     CHECK(run.card.recover_calls == 1);
     check_journal_rules(run);
 }
 
 TEST_CASE("a soak entry carries only the clocks that are above stock") {
-    // The same run: the core is not searched, so the soak runs at core +0 /
+    // A card whose core holds nothing above stock: the soak runs at core +0 /
     // memory +400.
     Run run = recovering();
     run.card.lost_on_first_mem_confirm = true;
+    run.card.core_edge = 0;
     const auto r = run.go(Preset::BestOfMyGpu);
     REQUIRE(r.ok);
     CHECK(r.core_mhz == 0);

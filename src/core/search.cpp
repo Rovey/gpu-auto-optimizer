@@ -154,9 +154,10 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
     auto log = [&](const std::string& m) { if (io.log) io.log(m); };
     bool hw_suspect = false;         // the connections may be dead: a probe, a write or a measurement ended in a way a driver reset explains
     bool reconnect_futile = false;   // a reconnect failed, or did not help: the way out does not try another
-    // The reset budget. These three are only ever set with gpu.recover:
-    // without a way to reconnect, a reset verdict is counted and that is all.
-    bool explored_enough = false;    // a reset event happened: no new value is tried in this run
+    // The reset budget. These are only ever set with gpu.recover: without a
+    // way to reconnect, a reset verdict is counted and that is all.
+    bool explored_enough = false;    // a reset event happened: the search under way tries no new value
+    int resets_allowed = 1;          // one more reset event than this ends the run
     bool reset_in_step = false;      // the candidate or soak attempt under way had a reset event
     std::string reset_seen;          // what the last reset event looked like: a verdict, or the write that failed
     bool power_ctl = obj.power && gpu.set_power_limit && gpu.power_limit_range_pct;   // false once skipped
@@ -208,10 +209,12 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
 
     // One reset event: a probe that ended DEVICE LOST, STALLED or NO
     // TELEMETRY, or (callers check gpu.recover) a write or a bandwidth
-    // measurement that failed. `seen` says which. The first one ends
-    // exploring. The second one ends the run, and nothing is started after
-    // it: every step below checks `stopped` before it touches the card, the
-    // journal or the clock. Without gpu.recover the event is counted, the
+    // measurement that failed. `seen` says which. One ends the exploring of
+    // the clock search under way. One more than the run allows ends the run,
+    // and nothing is started after it: every step below checks `stopped`
+    // before it touches the card, the journal or the clock. A run allows one,
+    // and two when the first came in the memory search and the core is
+    // searched after it. Without gpu.recover the event is counted, the
     // connections are taken for dead as they always were, and nothing else
     // changes.
     auto reset_event = [&](const std::string& seen) {
@@ -221,7 +224,8 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
         reset_seen = seen;
         reset_in_step = true;
         explored_enough = true;
-        if (r.driver_resets >= 2) stopped = "the driver reset twice";
+        if (r.driver_resets > resets_allowed)
+            stopped = r.driver_resets == 2 ? "the driver reset twice" : "the driver reset three times";
     };
     // Why the run ends after a reset event with no clock offset applied:
     // there is nothing to back off to, and repeating the state would load
@@ -587,11 +591,16 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
             ", applying +" + std::to_string(r.mem_mhz));
     }
     // The core comes second and runs with the chosen memory offset applied
-    // (0 when the profile does not tune memory). After a reset event in the
-    // memory phase it stays at stock: its climb would be exploring.
-    if (obj.core_oc && explored_enough) {
-        log("core: not searched; the driver reset earlier in this run");
-    } else if (obj.core_oc) {
+    // (0 when the profile does not tune memory). Each clock has its own
+    // search: a reset event in the memory phase ended that search, not this
+    // one, or a card whose memory gives out with a reset would never get a
+    // core offset. The core may explore, and the run takes one more reset
+    // event before it ends.
+    if (obj.core_oc) {
+        if (explored_enough) {
+            explored_enough = false;
+            ++resets_allowed;
+        }
         int reset_at = -1;   // the core offset at which a reset event ended the climb
         r.core_max_stable = climb_to_edge(0, bounds.core_max_mhz, kCoreStep, kCoreStride, journal.ceilings().core_mhz, [&](int v) {
             return explore(v, reset_at, [&] { return is_stable(clock_candidate(v, std::nullopt, v, r.mem_mhz, kClockProbeS)); });

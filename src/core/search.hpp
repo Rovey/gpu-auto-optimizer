@@ -159,7 +159,9 @@ struct OptimizeResult {
     // (gpu.recover), a candidate, power or soak write that failed and a
     // bandwidth measurement that failed on a stable candidate above memory +0
     // (not one whose readings only did not settle: io.bandwidth_unsettled).
-    // With gpu.recover the run ends at the second one, so this is 0, 1 or 2.
+    // With gpu.recover the run ends at the second one, or at the third when
+    // the first came in the memory search and the core was searched after
+    // it, so this is 0 to 3.
     int driver_resets = 0;
 };
 
