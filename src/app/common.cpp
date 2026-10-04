@@ -242,6 +242,9 @@ OptimizeOutcome run_optimize(Preset preset, const OptimizeHooks& hooks, const st
     } catch (...) {   // never leave a candidate applied, whatever went wrong
         if (hooks.active_gpu) hooks.active_gpu(nullptr);
         if (gpu.reset_to_stock) gpu.reset_to_stock();
+        // The machine did not freeze: an entry left open would become a
+        // ceiling the next run stays below.
+        if (journal.open_id() >= 0) journal.complete(journal.open_id(), "CRASHED");
         throw;
     }
     if (crashed) {
