@@ -113,4 +113,67 @@ TEST_CASE("every verdict has a name") {
     CHECK(std::string(verdict_name(Verdict::DeviceLost)) == "DEVICE LOST");
     CHECK(std::string(verdict_name(Verdict::TooHot)) == "TOO HOT");
     CHECK(std::string(verdict_name(Verdict::NoTelemetry)) == "NO TELEMETRY");
+    CHECK(std::string(verdict_name(Verdict::Aborted)) == "ABORTED");
+    CHECK(std::string(verdict_name(Verdict::Stalled)) == "STALLED");
+}
+
+TEST_CASE("a stop request ends the run after the batch it arrives in") {
+    int calls = 0;
+    const auto r = run_stability([&] { ++calls; return good(); }, [] { return tel(60); }, 300.0, 85,
+                                 [&] { return calls >= 3; });
+    CHECK(r.verdict == Verdict::Aborted);
+    CHECK(calls == 3);
+    CHECK(r.seconds == doctest::Approx(0.75));
+}
+
+TEST_CASE("a failure in the same batch wins over a stop request") {
+    const auto wrong = run_stability([] { return StressBatch{100, 1, false, 250}; }, [] { return tel(60); },
+                                     300.0, 85, [] { return true; });
+    CHECK(wrong.verdict == Verdict::WrongResult);
+    const auto hot = run_stability([] { return good(); }, [] { return tel(90); }, 300.0, 85, [] { return true; });
+    CHECK(hot.verdict == Verdict::TooHot);
+}
+
+TEST_CASE("a stop callback that never fires changes nothing") {
+    int calls = 0;
+    const auto r = run_stability([&] { ++calls; return good(); }, [] { return tel(60); }, 3.0, 85,
+                                 [] { return false; });
+    CHECK(r.verdict == Verdict::Stable);
+    CHECK(calls == 12);
+}
+
+TEST_CASE("a card that stops computing ends the run as STALLED within seconds") {
+    int calls = 0;
+    // Twelve good batches (400 it/s), then batches that take their time and compute nothing.
+    const auto r = run_stability([&] { ++calls; return calls <= 12 ? good() : StressBatch{0, 0, false, 250}; },
+                                 [] { return tel(60); }, 300.0, 85, {}, 100.0);
+    CHECK(r.verdict == Verdict::Stalled);
+    CHECK(calls == 22);   // the tenth dead batch leaves 200 iterations in the last three seconds: 67 it/s
+}
+
+TEST_CASE("slow warm-up batches do not trip the stall floor") {
+    int calls = 0;
+    // Ten 10 ms batches of one iteration (100 it/s, below the floor), then full batches.
+    const auto r = run_stability([&] { ++calls; return calls <= 10 ? good(1, 10) : good(100, 250); },
+                                 [] { return tel(60); }, 3.0, 85, {}, 300.0);
+    CHECK(r.verdict == Verdict::Stable);
+}
+
+TEST_CASE("one delayed batch is not a stall") {
+    int calls = 0;
+    // A single batch that takes 2 s and computes little, in an otherwise healthy run.
+    const auto r = run_stability([&] { ++calls; return calls == 20 ? StressBatch{10, 0, false, 2000} : good(); },
+                                 [] { return tel(60); }, 20.0, 85, {}, 100.0);
+    CHECK(r.verdict == Verdict::Stable);
+}
+
+TEST_CASE("a real failure in the same batch wins over a stall") {
+    const auto r = run_stability([] { return StressBatch{0, 1, false, 4000}; }, [] { return tel(60); },
+                                 300.0, 85, {}, 100.0);
+    CHECK(r.verdict == Verdict::WrongResult);
+}
+
+TEST_CASE("without a floor a run that computes nothing is not stalled") {
+    const auto r = run_stability([] { return StressBatch{0, 0, false, 250}; }, [] { return tel(60); }, 4.0, 85);
+    CHECK(r.verdict == Verdict::Stable);
 }

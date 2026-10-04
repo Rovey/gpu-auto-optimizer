@@ -53,7 +53,7 @@ void tell_tray(TrayNotice notice);
 unsigned tray_notice_message();
 
 struct OptimizeHooks {
-    std::function<bool()> aborted;                        // polled between probes
+    std::function<bool()> aborted;                        // polled between probes and after every stress batch
     std::function<void(const std::string&)> log;          // one line per event
     // The GPU being tuned while a run is active (nullptr before and after), so
     // an emergency handler can reset it.

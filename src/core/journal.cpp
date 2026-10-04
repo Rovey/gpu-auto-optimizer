@@ -10,11 +10,18 @@ struct Pending {
     std::optional<int> core, mem;
 };
 
+// True when a clock of the entry is above stock: only then is there a
+// setting a later run can stay below.
+bool caps_anything(const Pending& p) {
+    return (p.core && *p.core > 0) || (p.mem && *p.mem > 0);
+}
+
 std::string describe(const Pending& p) {
+    if (!caps_anything(p)) return "stock clocks";
     std::string s;
     if (p.core) s += "core +" + std::to_string(*p.core);
     if (p.mem) s += (s.empty() ? "" : " / ") + std::string("mem +") + std::to_string(*p.mem);
-    return s.empty() ? "settings" : s;
+    return s;
 }
 
 // Bounds for hand-edited or damaged files: a value outside them makes the
@@ -56,9 +63,12 @@ Journal::Journal(const std::vector<std::string>& existing_lines, Append append)
         else if (*state == "complete") pending.erase(*id);
     }
     for (const auto& [id, p] : pending) {
-        if (p.core) ceilings_.core_mhz = std::min(ceilings_.core_mhz, *p.core);
-        if (p.mem) ceilings_.mem_mhz = std::min(ceilings_.mem_mhz, *p.mem);
+        // An offset of 0 never lowers a ceiling: a ceiling of 0 would mean
+        // "never search this clock", which no freeze at stock can justify.
+        if (p.core && *p.core > 0) ceilings_.core_mhz = std::min(ceilings_.core_mhz, *p.core);
+        if (p.mem && *p.mem > 0) ceilings_.mem_mhz = std::min(ceilings_.mem_mhz, *p.mem);
         freezes_.push_back(describe(p));
+        freeze_entries_.push_back({freezes_.back(), caps_anything(p)});
     }
     next_id_ = max_id + 1;
 }
@@ -68,12 +78,15 @@ int Journal::begin(std::optional<int> core, std::optional<int> mem) {
     if (core) j["core"] = *core;
     if (mem) j["mem"] = *mem;
     if (!write(j.dump())) return -1;
+    open_id_ = next_id_;
     return next_id_++;
 }
 
 bool Journal::complete(int id, const std::string& verdict) {
     const nlohmann::json j = {{"id", id}, {"state", "complete"}, {"verdict", verdict}};
-    return write(j.dump());
+    if (!write(j.dump())) return false;
+    if (id == open_id_) open_id_ = -1;
+    return true;
 }
 
 bool Journal::write(const std::string& line) {

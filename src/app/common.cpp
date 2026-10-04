@@ -1,4 +1,5 @@
 #include "app/common.hpp"
+#include "app/guarded_gpu.hpp"
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
@@ -12,9 +13,11 @@
 #include "hw/nvapi.hpp"
 #include "hw/nvml.hpp"
 #include "hw/stress.hpp"
+#include <algorithm>
 #include <ctime>
 #include <chrono>
 #include <filesystem>
+#include <memory>
 
 namespace gao::app {
 
@@ -118,21 +121,45 @@ OptimizeOutcome run_optimize(Preset preset, const OptimizeHooks& hooks, const st
     if (!lock.owned()) return fail("another optimize is already running (in the app or on the command line)");
     std::string why;
     if (!prepare_state(&why)) return fail(why);
-    Nvml nvml;
-    if (!nvml.Init()) return fail("NVML init failed: " + nvml.Error());
-    Nvapi nvapi;
-    if (!nvapi.Init()) return fail("NVAPI init failed: " + nvapi.Error());
-    Stress load;
-    if (!load.Init()) return fail("stress init failed: " + load.Error());
-    const GpuControl gpu = make_gpu_control(nvml, nvapi, kGpu);
+    // Every driver call of the run goes through `hw`: guarded against a fault
+    // inside the driver DLLs, and reconnected by gpu.recover after a driver
+    // reset. `gpu` is never reassigned, so the references the fan driver, the
+    // search and the emergency handlers hold stay valid across a reconnect.
+    GuardedGpu hw(kGpu);
+    if (!hw.Init(&why)) return fail(why);
+    // On the heap, so the path that follows an access violation during the
+    // search can leave it alone instead of destroying it (see there).
+    auto load = std::make_unique<Stress>();
+    if (!load->Init()) return fail("stress init failed: " + load->Error());
+    const GpuControl& gpu = hw.control();
     // The profile's curve drives the fans for the whole run, so the clocks it
     // finds hold at the temperatures that curve produces.
     const FanCurve curve = fan_curve.value_or(default_curve(preset));
-    FanDriver fans(gpu, curve, objectives_for(preset).max_temp_c, fan_min_for(load_config(), nvml.GpuUuid(kGpu), gpu.fan_min_pct));
+    FanDriver fans(gpu, curve, objectives_for(preset).max_temp_c, fan_min_for(load_config(), hw.GpuUuid(), gpu.fan_min_pct));
     struct FanRelease {
         FanDriver& f;
-        ~FanRelease() { f.release(); }   // every exit: done, aborted, failed or thrown
-    } fan_release{fans};
+        const GuardedGpu& hw;
+        const GpuControl& gpu;
+        const OptimizeHooks& hooks;
+        ~FanRelease() {   // every exit: done, aborted, failed or thrown
+            f.release();
+            // A hand-back that did not reach the driver, from a fan driver
+            // that failed earlier or from the release() above, is remembered
+            // by `hw`; the fans may still be at a manual speed. One more
+            // attempt, and only then: a hand-back that was delivered is not
+            // repeated, it would take the fans from another program that set
+            // them since. Hand back only, never a speed.
+            if (hw.FanAutoOwed() && gpu.set_fan_auto) gpu.set_fan_auto();
+            if (!hw.FanAutoOwed()) return;
+            // No reconnect at exit, so nothing will deliver it any more. A
+            // destructor must not throw; the line is lost if it cannot be built.
+            try {
+                if (hooks.log)
+                    hooks.log("fans: could not be handed back to the driver; they may still be at a manual speed -- run `gao --fan auto`");
+            } catch (...) {
+            }
+        }
+    } fan_release{fans, hw, gpu, hooks};
     if (!gpu.set_fan_pct) log("fans: not controllable on this card; the driver keeps them");
 
     const auto path = journal_path();
@@ -144,12 +171,19 @@ OptimizeOutcome run_optimize(Preset preset, const OptimizeHooks& hooks, const st
     // ignores lines without an id, so this one never becomes a ceiling.
     if (!append_line_durable(path, "{\"session\":\"" + now_text() + "\"}"))
         return fail("cannot write the crash journal " + path.string() + "; not tuning without it");
-    for (const auto& f : journal.freezes())
-        log("warning: a previous run froze the machine at " + f + "; staying below it from now on");
+    for (const auto& f : journal.freeze_entries())
+        log("warning: a previous run froze the machine at " + f.description +
+            (f.caps_anything ? "; staying below it from now on" : "; there is no setting to stay below"));
     if (!gpu.set_power_limit) log("power limit: not adjustable on this card, skipped");
 
+    // A run lasts minutes with a candidate applied and a journal entry open;
+    // idle sleep must not interrupt it. The display may still turn off.
+    struct KeepAwake {
+        KeepAwake() { SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED); }
+        ~KeepAwake() { SetThreadExecutionState(ES_CONTINUOUS); }   // every exit
+    } keep_awake;
     OptimizeIo io;
-    io.probe = [&](double seconds, int max_temp) {
+    io.probe = [&](double seconds, int max_temp, double stall_below) {
         auto read = [&] {
             const Telemetry t = gpu.read();
             const FanMode before = fans.state().mode;
@@ -158,28 +192,120 @@ OptimizeOutcome run_optimize(Preset preset, const OptimizeHooks& hooks, const st
             if (now.mode != before && now.mode == FanMode::Foreign) log("fans: another program set them; leaving them alone");
             return t;
         };
-        return run_stability([&] { return load.Batch(); }, read, seconds, max_temp);
+        return run_stability([&] { return load->Batch(); }, read, seconds, max_temp, hooks.aborted,
+                             stall_below);
     };
     io.aborted = hooks.aborted;
     io.log = hooks.log;
     io.bandwidth = [&] {
-        const auto gbps = load.MeasureBandwidth();
-        if (!gbps) log("bandwidth measurement failed: " + load.Error());
+        const auto gbps = load->MeasureBandwidth();
+        if (!gbps) log("bandwidth measurement failed: " + load->Error());
         return gbps;
     };
+    io.bandwidth_unsettled = [&] { return load->BandwidthUnsettled(); };
+    // The wait between a driver reset and the next load. The card is left
+    // alone: no load, no driver call, no fan tick, and no log line (the search
+    // says that it rests). Short slices, so a stop request ends the wait
+    // within a quarter of a second.
+    io.rest = [&hooks](double seconds) {
+        const auto stop_requested = [&hooks] { return hooks.aborted && hooks.aborted(); };
+        if (stop_requested()) return false;
+        if (!(seconds > 0)) return true;   // nothing to wait for
+        using namespace std::chrono;
+        const auto end = steady_clock::now() + duration_cast<steady_clock::duration>(duration<double>(std::min(seconds, 3600.0)));
+        for (;;) {
+            const auto left_ms = duration_cast<milliseconds>(end - steady_clock::now()).count();
+            if (left_ms <= 0) return true;
+            Sleep(static_cast<DWORD>(left_ms < 250 ? left_ms : 250));
+            if (stop_requested()) return false;
+        }
+    };
+    // After a driver reset the load may hold a removed device without having
+    // noticed. A fresh one is built here, outside any probe, so the health
+    // probe times the card and not the load's start-up.
+    // Not guarded here: a fault inside D3D reaches the guard around the
+    // search, like every other call of the load, and the run ends through the
+    // crashed path, which never touches the load again.
+    io.prepare_load = [&] {
+        if (load->Recreate()) return true;
+        log("the stress load could not be rebuilt: " + load->Error());
+        return false;
+    };
     if (hooks.active_gpu) hooks.active_gpu(&gpu);
+    // The last line of defence: a fault that escapes the per-call guards (in
+    // the stress load's D3D calls, say) must not kill the process with a
+    // journal entry open. The frames of the search are skipped, not unwound;
+    // everything that must run on the way out lives in this frame. A C++
+    // exception passes through the guard to the catch below.
+    bool crashed = false;
     try {
-        out.result = optimize(gpu, objectives_for(preset), journal, io);
+        crashed = !guarded([&] { out.result = optimize(gpu, objectives_for(preset), journal, io); });
     } catch (...) {   // never leave a candidate applied, whatever went wrong
         if (hooks.active_gpu) hooks.active_gpu(nullptr);
         if (gpu.reset_to_stock) gpu.reset_to_stock();
+        // The machine did not freeze: an entry left open would become a
+        // ceiling the next run stays below.
+        if (journal.open_id() >= 0) journal.complete(journal.open_id(), "CRASHED");
         throw;
+    }
+    if (crashed) {
+        // An access violation somewhere in the search: in a driver DLL, in the
+        // stress load's D3D calls or in our own code. A candidate may still be
+        // applied and its journal entry open.
+        //
+        // Leaked on purpose, and before anything that can throw, so that no
+        // exception from the steps below destroys it on the way out. The
+        // fault skipped the frames of the search, so a D3D call of the stress
+        // load may have been abandoned halfway; its destructor would release
+        // COM objects into that same user-mode driver and could fault outside
+        // any guard, or hang. `gao` is about to report the failure and exit,
+        // and the device goes with the process. The window application lives
+        // on: there the leaked load, with its device and buffers, stays until
+        // the application exits.
+        (void)load.release();
+        bool stock = false;
+        {
+            // The emergency handler stays registered until the card and the
+            // journal are dealt with: the steps below can take half a minute,
+            // and without it Ctrl+C would end the process and a closed window
+            // would reset nothing. Unregistered when this block ends, also by
+            // an exception, and always before `hw` is destroyed.
+            struct Unregister {
+                const OptimizeHooks& h;
+                ~Unregister() { if (h.active_gpu) h.active_gpu(nullptr); }
+            } unregister{hooks};
+            log("access violation during the search -- resetting the card to stock");
+            // The machine did not freeze, so the candidate must not become a
+            // ceiling. Closing the entry is a file append, no driver call, so
+            // it comes first: nothing that happens during the reset can leave
+            // it open.
+            if (journal.open_id() >= 0 && !journal.complete(journal.open_id(), "CRASHED"))
+                log("warning: the crash journal entry could not be closed; later runs will stay below this candidate");
+            // The connection is often still good (the fault may have been
+            // outside NVML and NVAPI), so reset first; reconnecting costs
+            // seconds with the candidate applied.
+            stock = gpu.reset_to_stock && gpu.reset_to_stock();
+            if (!stock && gpu.reset_to_stock && gpu.recover) {
+                log("the reset failed; reconnecting to the driver, up to 30 s");
+                stock = gpu.recover() && gpu.reset_to_stock();
+            }
+            log(std::string("the search ended in an access violation -- ") +
+                (stock ? "card restored to stock" : "reset FAILED, run `gao --reset`"));
+        }
+        out.ran = true;
+        // optimize never returned, so out.result was never assigned: every
+        // field not set here keeps its default. driver_resets reads 0,
+        // whatever the search had counted before the fault.
+        out.result.ok = false;
+        out.result.stock_restored = stock;
+        out.result.reason = "access violation during the search";
+        return out;
     }
     if (hooks.active_gpu) hooks.active_gpu(nullptr);
     out.ran = true;
     if (!out.result.ok) return out;
 
-    const std::string driver = nvml.DriverVersion(), gpu_id = nvml.GpuUuid(kGpu);
+    const std::string driver = hw.DriverVersion(), gpu_id = hw.GpuUuid();
     if (driver.empty() || gpu_id.empty()) {
         out.save_note = "NVML did not report the driver version or GPU id, so the profile could never be re-applied";
         return out;

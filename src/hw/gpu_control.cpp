@@ -29,6 +29,9 @@ GpuControl make_gpu_control(Nvml& nvml, Nvapi& nvapi, unsigned gpu) {
         if (!pct) return std::nullopt;
         return AppliedState{offsets->first, offsets->second, *pct};
     };
+    // The offset ranges the driver reports, verified against another tool in
+    // hardware check 45. core/search still runs them through plausible_range.
+    c.clock_offset_range_mhz = [&nvapi, gpu] { return nvapi.ReadOffsetRangesMhz(gpu); };
     // Fans: only when NVML reports some and a manual range. Empty otherwise,
     // so core code can tell the card has no fan control.
     if (nvml.FanCount(gpu) > 0) {

@@ -655,7 +655,7 @@ void choose(UiState& s, const UiActions& act) {
     if (go) s.elevated ? act.optimize(s.preset) : act.restart_elevated();
     ImGui::SameLine(0, em() * 1.5f);
     ImGui::BeginGroup();
-    ImGui::TextUnformatted((ic(kIconClock) + "  About 10 minutes of full GPU load.").c_str());
+    ImGui::TextUnformatted((ic(kIconClock) + "  About 15 minutes of full GPU load.").c_str());
     dim("Abort restores stock at any time. A setting that crashes the machine is never tried again.");
     ImGui::EndGroup();
     end_card();
@@ -669,7 +669,7 @@ void run_screen(UiState& s, const OptimizeWorker::Snapshot& run, const UiActions
         align_right(button_width(abort) + em());
         if (ImGui::Button(abort.c_str(), ImVec2(button_width(abort) + em(), 0))) act.abort();
     }
-    dim("Aborting finishes the current probe, then restores stock.");
+    dim("Aborting stops the running probe and restores stock.");
     ImGui::Spacing();
     telemetry_tiles(s);
     ImGui::Spacing();
