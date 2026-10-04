@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" width="120" height="120" role="img" aria-labelledby="t">
+  <title id="t">GPU Auto Optimizer, simplified for 16 to 24 pixels</title>
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#16233d"/>
+      <stop offset="1" stop-color="#0b111d"/>
+    </linearGradient>
+    <linearGradient id="sweep" gradientUnits="userSpaceOnUse" x1="29" y1="82" x2="93" y2="50">
+      <stop offset="0" stop-color="#3b82f6"/>
+      <stop offset="1" stop-color="#7ddc3c"/>
+    </linearGradient>
+  </defs>
+  <rect x="3" y="3" width="114" height="114" rx="26" fill="url(#tile)" stroke="#3a5078" stroke-width="5"/>
+  <!-- Gauge: 240 degrees, centred on (60, 64), radius 36; no baseline, heavier strokes -->
+  <path d="M 28.82 82 A 36 36 0 1 1 91.18 82" fill="none" stroke="#2f4263" stroke-width="15" stroke-linecap="round"/>
+  <path d="M 28.82 82 A 36 36 0 1 1 93.19 50.05" fill="none" stroke="url(#sweep)" stroke-width="15" stroke-linecap="round"/>
+  <path d="M 60 64 L 80.28 55.47" stroke="#ffffff" stroke-width="9" stroke-linecap="round"/>
+  <circle cx="60" cy="64" r="9" fill="#ffffff"/>
+</svg>
