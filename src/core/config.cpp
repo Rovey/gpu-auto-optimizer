@@ -48,6 +48,7 @@ std::string to_json(const Config& c) {
     }
     if (c.fan_curve) j["fan_curve"] = curve_json(*c.fan_curve);
     j["fan_control"] = c.fan_control;
+    j["update_check"] = c.update_check;
     if (c.fan_min_pct > 0) {
         j["fan_min_pct"] = c.fan_min_pct;
         j["fan_min_gpu"] = c.fan_min_gpu;
@@ -69,6 +70,7 @@ Config from_json(const std::string& text) {
 
     if (const auto it = j.find("fan_curve"); it != j.end()) c.fan_curve = curve_from(*it);
     if (const auto it = j.find("fan_control"); it != j.end() && it->is_boolean()) c.fan_control = it->get<bool>();
+    if (const auto it = j.find("update_check"); it != j.end() && it->is_boolean()) c.update_check = it->get<bool>();
     const auto fmin = j.find("fan_min_pct"), fgpu = j.find("fan_min_gpu");
     if (fmin != j.end() && fgpu != j.end() && fmin->is_number_integer() && fgpu->is_string() && fmin->get<long long>() > 0 &&
         fmin->get<long long>() <= 100) {

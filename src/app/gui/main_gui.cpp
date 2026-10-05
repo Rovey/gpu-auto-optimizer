@@ -17,6 +17,7 @@
 #include "app/gui/worker.hpp"
 #include "core/boot.hpp"
 #include "core/fan_curve.hpp"
+#include "core/version.hpp"
 #include "core/watchdog.hpp"
 #include "hw/app_files.hpp"
 #include "hw/boot_task.hpp"
@@ -34,7 +35,9 @@
 #include <cwchar>
 #include <filesystem>
 #include <memory>
+#include <mutex>
 #include <string>
+#include <thread>
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND, UINT, WPARAM, LPARAM);
 
@@ -49,9 +52,14 @@ constexpr wchar_t kInstanceMutex[] = L"Local\\GpuAutoOptimizer.Instance";
 constexpr UINT WM_APP_TRAY = WM_APP + 1;   // tray icon callback
 constexpr UINT WM_APP_WAKE = WM_APP + 2;   // the optimize worker has news
 constexpr UINT WM_APP_SHOW = WM_APP + 3;   // a second launch asks us to come forward
+constexpr UINT WM_APP_UPDATE = WM_APP + 4; // an update thread left news in g_update_news
+// The running version, as a window property a second launch can read
+// without opening this (elevated) process. Builds before 0.3.1 have none.
+constexpr wchar_t kVersionProp[] = L"GpuAutoOptimizer.Version";
 constexpr UINT_PTR kTimerTelemetry = 1;    // 1 s
 constexpr UINT_PTR kTimerWatchdog = 2;     // 30 s
 constexpr UINT_PTR kTimerStrike = 3;       // one-shot, 2 min after a logon apply
+constexpr UINT_PTR kTimerUpdate = 4;       // 24 h: look for a new release again
 enum MenuId : UINT { kMenuOpen = 1, kMenuReapply, kMenuRevert, kMenuExit };
 
 struct App {
@@ -112,6 +120,8 @@ struct App {
     bool strike_pending = false;   // a logon apply whose 2-minute grace has not passed yet
     std::unique_ptr<gao::FanDriver> fan;   // while the curve drives the fans
     bool told_about_tray = false;  // the "still running in the tray" balloon, once per session
+    std::optional<gao::ReleaseInfo> update;   // the newer release on offer, if any
+    bool restart = false;          // an update was installed: start the new copy on the way out
 
     // Crash dumps are written by a thread created up front (a crashing thread
     // may have no stack or heap left to do it itself).
@@ -121,6 +131,18 @@ struct App {
 };
 
 App g;
+
+// A check or a download must never stall the window, so both run on a thread
+// of their own. The thread leaves what it found here and posts WM_APP_UPDATE.
+struct UpdateNews {
+    bool checked = false;                     // a check finished; `release` is its answer
+    std::optional<gao::ReleaseInfo> release;
+    bool installed = false;                   // an install finished; `ok` and `message` are its outcome
+    bool ok = false;
+    std::string message;
+};
+std::mutex g_update_mutex;
+UpdateNews g_update_news;
 
 // ---------------------------------------------------------------- crash dump
 
@@ -425,6 +447,7 @@ void refresh_status(bool with_task) {
     const gao::Config cfg = gao::app::load_config();
     g.ui.profile = cfg.profile;
     g.ui.strikes = cfg.boot_strikes;
+    g.ui.update_check = cfg.update_check;
     if (g.nvml_ok) {
         g.ui.driver = g.nvml->DriverVersion();
         const std::string gpu_id = g.nvml->GpuUuid(kGpu);
@@ -469,6 +492,65 @@ void act_restart_elevated() {
         g.instance_mutex = CreateMutexW(nullptr, TRUE, kInstanceMutex);
         note("Elevation was cancelled.");
     }
+}
+
+void start_update_check() {
+    if (!g.ui.update_check) return;
+    std::thread([hwnd = g.hwnd] {
+        auto check = gao::app::check_for_update();   // a failed check is not news: it is tried again tomorrow
+        {
+            const std::lock_guard lock(g_update_mutex);
+            g_update_news.checked = true;
+            g_update_news.release = std::move(check.release);
+        }
+        PostMessageW(hwnd, WM_APP_UPDATE, 0, 0);
+    }).detach();
+}
+
+void act_install_update() {
+    if (!g.update || g.ui.update_busy) return;
+    if (g.worker->running() || gao::app::tuning_in_progress()) {
+        note("An optimize run is in progress; update when it has finished.", true);
+        return;
+    }
+    g.ui.update_busy = true;
+    g.ui.update_error.clear();
+    std::thread([hwnd = g.hwnd, release = *g.update] {
+        std::string message;
+        const bool ok = gao::app::install_update(release, &message);
+        {
+            const std::lock_guard lock(g_update_mutex);
+            g_update_news.installed = true;
+            g_update_news.ok = ok;
+            g_update_news.message = message;
+        }
+        PostMessageW(hwnd, WM_APP_UPDATE, 0, 0);
+    }).detach();
+}
+
+// On the window's thread: what an update thread left behind.
+void on_update_news() {
+    UpdateNews news;
+    {
+        const std::lock_guard lock(g_update_mutex);
+        news = std::move(g_update_news);
+        g_update_news = {};
+    }
+    if (news.checked) {
+        g.update = std::move(news.release);
+        g.ui.update_version = g.update ? g.update->version : std::string();
+    }
+    if (news.installed) {
+        g.ui.update_busy = false;
+        if (news.ok) {   // the files are replaced: leave, and start the new copy on the way out
+            g.restart = true;
+            g.exit_requested = true;
+        } else {
+            g.ui.update_error = news.message;
+            note("The update failed: " + news.message, true);
+        }
+    }
+    g.input_frames = std::max(g.input_frames, 2);
 }
 
 bool refuse_while_tuning() {
@@ -570,6 +652,18 @@ void render() {
         cfg.fan_curve.reset();
         if (!gao::app::save_config(cfg)) note("Could not save the fan curve.", true);
         refresh_status(false);
+    };
+    act.install_update = act_install_update;
+    act.set_update_check = [](bool on) {
+        gao::Config cfg = gao::app::load_config();
+        cfg.update_check = on;
+        if (!gao::app::save_config(cfg)) {
+            note(g.ui.elevated ? "Could not save the setting." : "Saving this setting needs administrator rights.", true);
+            return;
+        }
+        refresh_status(false);
+        if (on) start_update_check();
+        else { g.update.reset(); g.ui.update_version.clear(); }
     };
     act.detect_gpu = [] {   // e.g. after a driver update: re-create NVML and NVAPI now
         if (refuse_while_tuning()) return;
@@ -828,12 +922,16 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (wp == kTimerTelemetry) { if (!guarded([] { on_telemetry(); })) hw_lost(); }
             else if (wp == kTimerWatchdog) { if (!guarded([] { on_watchdog(); })) hw_lost(); }
             else if (wp == kTimerStrike) { clear_strike(); refresh_status(false); }
+            else if (wp == kTimerUpdate) start_update_check();
             return 0;
         case WM_APP_WAKE:
             g.input_frames = std::max(g.input_frames, 1);
             return 0;
         case WM_APP_SHOW:
             show_window();
+            return 0;
+        case WM_APP_UPDATE:
+            on_update_news();
             return 0;
         case WM_APP_TRAY:
             switch (LOWORD(lp)) {
@@ -886,11 +984,56 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 // One instance only: two watchdogs would fight. A second launch brings the
 // first forward. An elevated first instance owns the mutex with a DACL a
 // normal user cannot open: access denied also means "already running".
-bool claim_single_instance(bool tray_mode) {
+// The copy in the tray is older than this one. It usually runs elevated (the
+// logon task starts it), so only an elevated process can make it leave: ask,
+// and on a yes start this program again with --replace and administrator
+// rights. True when that copy was started; this one then just exits.
+bool offer_replace(unsigned theirs) {
+    std::wstring text = L"An older version of GPU Auto Optimizer is running in the tray";
+    if (theirs) text += L" (" + std::to_wstring(theirs >> 16) + L"." + std::to_wstring((theirs >> 8) & 255) + L"." +
+                        std::to_wstring(theirs & 255) + L")";
+    text += L".\n\nReplace it with version " + gao::widen(std::string(gao::kVersion)) +
+            L"? Windows asks for administrator rights, because the running app has them.";
+    if (MessageBoxW(nullptr, text.c_str(), L"GPU Auto Optimizer", MB_YESNO | MB_ICONQUESTION | MB_SETFOREGROUND) != IDYES) return false;
+    wchar_t self[MAX_PATH];
+    const DWORD n = GetModuleFileNameW(nullptr, self, MAX_PATH);
+    if (n == 0 || n >= MAX_PATH) return false;
+    SHELLEXECUTEINFOW sei{sizeof(sei)};
+    sei.lpVerb = L"runas";
+    sei.lpFile = self;
+    sei.lpParameters = L"--replace";
+    sei.nShow = SW_SHOWNORMAL;
+    return ShellExecuteExW(&sei) != FALSE;
+}
+
+// --replace: the copy that runs in the tray makes way for this one. It is
+// asked to exit the way its own tray menu does; every released version has
+// that command, hands the fans back on it and, in the middle of an optimize
+// run, stops the run and restores stock first. Only a copy that does not go
+// while no run is under way is ended.
+void end_other_instance() {
+    const HWND other = FindWindowW(kWindowClass, nullptr);
+    if (!other) return;
+    DWORD pid = 0;
+    GetWindowThreadProcessId(other, &pid);
+    const HANDLE process = OpenProcess(SYNCHRONIZE | PROCESS_TERMINATE, FALSE, pid);
+    PostMessageW(other, WM_COMMAND, kMenuExit, 0);
+    if (!process) { Sleep(3000); return; }
+    if (WaitForSingleObject(process, 20000) != WAIT_OBJECT_0 && !gao::app::tuning_in_progress()) {
+        TerminateProcess(process, 0);
+        WaitForSingleObject(process, 5000);
+    }
+    CloseHandle(process);
+}
+
+bool claim_single_instance(bool tray_mode, bool may_offer) {
     g.instance_mutex = CreateMutexW(nullptr, TRUE, kInstanceMutex);
     const DWORD err = GetLastError();
     if (g.instance_mutex && err != ERROR_ALREADY_EXISTS) return true;
     if (HWND other = FindWindowW(kWindowClass, nullptr); other && !tray_mode) {
+        // 0: a build from before 0.3.1, which did not say its version.
+        const auto theirs = static_cast<unsigned>(reinterpret_cast<UINT_PTR>(GetPropW(other, kVersionProp)));
+        if (may_offer && theirs < gao::kVersionNumber && offer_replace(theirs)) return false;
         DWORD pid = 0;
         GetWindowThreadProcessId(other, &pid);
         AllowSetForegroundWindow(pid);   // or its SetForegroundWindow is refused
@@ -904,7 +1047,18 @@ bool claim_single_instance(bool tray_mode) {
 int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdline, int) {
     SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32);
     const bool tray_mode = cmdline && std::wcsstr(cmdline, L"--tray");
-    if (!claim_single_instance(tray_mode)) return 0;
+    // --replace: take over from an older copy in the tray. --resume: this is
+    // the new copy after an update. Both carry on where the copy before them
+    // was: a tune that is applied stays watched.
+    const bool replace = cmdline && std::wcsstr(cmdline, L"--replace");
+    const bool resume = replace || (cmdline && std::wcsstr(cmdline, L"--resume"));
+    if (replace) end_other_instance();
+    if (!claim_single_instance(tray_mode, !replace)) {
+        if (replace)
+            MessageBoxW(nullptr, L"The running app is still busy (an optimize run?). Try again when it has finished.",
+                        L"GPU Auto Optimizer", MB_OK | MB_ICONINFORMATION | MB_SETFOREGROUND);
+        return 0;
+    }
 
     g.dump_request = CreateEventW(nullptr, FALSE, FALSE, nullptr);
     g.dump_done = CreateEventW(nullptr, FALSE, FALSE, nullptr);
@@ -922,6 +1076,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdline, int) {
     g.hwnd = CreateWindowW(kWindowClass, L"GPU Auto Optimizer", WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, 1180, 860,
                            nullptr, nullptr, inst, nullptr);
     if (!g.hwnd || !create_device()) return 1;
+    SetPropW(g.hwnd, kVersionProp, reinterpret_cast<HANDLE>(static_cast<UINT_PTR>(gao::kVersionNumber)));
     const float scale = GetDpiForWindow(g.hwnd) / 96.0f;   // the monitor the window actually opened on
     SetWindowPos(g.hwnd, nullptr, 0, 0, static_cast<int>(1180 * scale), static_cast<int>(860 * scale),
                  SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
@@ -969,8 +1124,22 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdline, int) {
         }
         refresh_status(false);
     }
+    // The copy before this one kept the tune applied; so does this one.
+    if (resume && g.ui.elevated && g.ui.profile && g.ui.profile_driver_ok && g.ui.profile_gpu_ok && g.ui.applied &&
+        g.ui.applied->core_mhz == g.ui.profile->core_mhz && g.ui.applied->mem_mhz == g.ui.profile->mem_mhz &&
+        g.ui.applied->power_pct == g.ui.profile->power_pct)
+        g.watch = true;
+    // Apply-at-logon runs the copy in Program Files: keep it this version.
+    if (g.ui.elevated) {
+        if (const std::string updated = gao::app::update_logon_copy(); !updated.empty()) {
+            note(updated);
+            refresh_status(true);
+        }
+    }
     SetTimer(g.hwnd, kTimerTelemetry, 1000, nullptr);
     SetTimer(g.hwnd, kTimerWatchdog, 30 * 1000, nullptr);
+    SetTimer(g.hwnd, kTimerUpdate, 24 * 60 * 60 * 1000, nullptr);
+    start_update_check();
     on_telemetry();
     if (!tray_mode) show_window();
 
@@ -992,7 +1161,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdline, int) {
             DispatchMessageW(&msg);
         }
         if (quit) break;
-        if (g.exit_requested && !g.worker->running()) {
+        if (g.exit_requested && !g.worker->running() && !g.ui.update_busy) {   // never leave in the middle of replacing the files
             clear_strike();
             fan_release();
             DestroyWindow(g.hwnd);
@@ -1011,5 +1180,21 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdline, int) {
     }
     ImGui_ImplWin32_Shutdown();
     ImGui::DestroyContext();
+    if (g.restart) {   // an update replaced the executables: start the new copy
+        wchar_t self[MAX_PATH];
+        const DWORD n = GetModuleFileNameW(nullptr, self, MAX_PATH);
+        if (n != 0 && n < MAX_PATH) {
+            // Released first, or the new copy would take this one for a
+            // running instance and only bring it forward.
+            if (g.instance_mutex) CloseHandle(g.instance_mutex);
+            std::wstring command = L"\"" + std::wstring(self) + L"\" --resume";
+            STARTUPINFOW si{sizeof(si)};
+            PROCESS_INFORMATION pi{};
+            if (CreateProcessW(self, command.data(), nullptr, nullptr, FALSE, 0, nullptr, nullptr, &si, &pi)) {
+                CloseHandle(pi.hProcess);
+                CloseHandle(pi.hThread);
+            }
+        }
+    }
     return 0;
 }

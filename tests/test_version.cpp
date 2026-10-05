@@ -4,5 +4,5 @@
 
 TEST_CASE("version string is the product name and a semver") {
     CHECK(gao::kProductName == std::string("gpu-auto-optimizer"));
-    CHECK(gao::kVersion == std::string("0.3.0"));
+    CHECK(gao::kVersion == std::string("0.3.1"));
 }

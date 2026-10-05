@@ -52,6 +52,11 @@ struct UiState {
     int fan_max_temp_c = 75;
     FanState fan_state;
     std::optional<FanPreset> optimize_fan;   // fan curve for the next run; empty: the profile's own
+
+    std::string update_version;   // a newer release that can be installed ("0.3.2"); empty: none known
+    bool update_busy = false;     // it is being downloaded and installed
+    std::string update_error;     // why the last attempt failed
+    bool update_check = true;     // look for a new release when the app starts
 };
 
 struct UiActions {
@@ -65,6 +70,8 @@ struct UiActions {
     std::function<void(const FanCurve&)> set_fan_curve;   // saves it as the active curve
     std::function<void(bool)> set_fan_control;
     std::function<void()> reset_fan_curve;                // back to the tested/default curve
+    std::function<void()> install_update;                 // download the new release, replace the app, restart
+    std::function<void(bool)> set_update_check;
 };
 
 // Fonts (Segoe UI with Segoe Fluent Icons merged in) and the colour scheme.

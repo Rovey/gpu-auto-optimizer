@@ -149,3 +149,12 @@ TEST_CASE("a learned fan minimum belongs to the card it was learned on") {
     CHECK(fan_min_for(back, "GPU-8a1b", 55) == 55);    // never below NVML's own
     CHECK(from_json(R"({"fan_min_pct":500,"fan_min_gpu":"x"})").fan_min_pct == 0);   // out of range: ignored
 }
+
+TEST_CASE("the update check is on unless the file says otherwise") {
+    CHECK(Config{}.update_check);
+    CHECK(from_json("{}").update_check);                         // a file from before the setting existed
+    CHECK(from_json(R"({"update_check":"no"})").update_check);   // junk keeps the default
+    Config c;
+    c.update_check = false;
+    CHECK_FALSE(from_json(to_json(c)).update_check);
+}

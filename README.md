@@ -28,6 +28,7 @@ GPU Auto Optimizer tunes the **power limit** and the **core and memory clock off
 - **Stays applied:** the tray app re-applies the tune at every logon, and within about half a minute after a driver reset (TDR).
 - **Fan curves:** Silent, Normal, Cool or Aggressive with any profile, or your own; fans stop at idle without cycling on and off, the app learns the lowest speed your fans can actually hold, and the fans go back to the driver on exit, sleep, logoff and crashes.
 - **Plays fair:** if MSI Afterburner or another tool changes the settings, it steps aside instead of fighting over them.
+- **Updates itself:** a quiet line at the bottom left says when a new version is out; one click downloads it, checks it and restarts the app. Nothing pops up, and nothing is installed without that click.
 - **Native and small:** two C++ programs, under 2 MB together, with no installer, no runtime and no driver or service.
 
 ## One click, +4.5 % performance, with a safety margin
@@ -72,7 +73,7 @@ Turning on **Apply at logon** copies the app to `%ProgramFiles%\GpuAutoOptimizer
 
 | | |
 |---|---|
-| OS | Windows 10 or 11, 64-bit |
+| OS | Windows 10 (version 1803 or later) or 11, 64-bit |
 | GPU | NVIDIA, Pascal (GTX 10-series) or newer, with a current driver |
 | Rights | Administrator to optimize or apply; reading telemetry does not need them |
 
@@ -122,11 +123,24 @@ flowchart LR
 | `gao --probe` | Live telemetry: clocks, temperature, fan, power, clock-offset ranges |
 | `gao --stress <seconds>` | Runs the stress test alone and prints its verdict; changes nothing |
 | `gao --bandwidth` | Measures the current memory bandwidth |
+| `gao --update` | Installs the latest release into the folder `gao.exe` is in, if there is a newer one |
 | `gao --stress-recreate` | Runs the stress test, rebuilds its GPU device, runs it again; prints both scores and the rebuild time; changes nothing |
 
 Ctrl+C during `--optimize` restores stock.
 
 ## FAQ
+
+<details>
+<summary><b>Does it connect to the internet?</b></summary>
+
+Only to look for a new version: one request to `api.github.com` when the app starts and once a day after that. Nothing but the request itself is sent. You can switch it off under **About**. An update is downloaded only when you click **Update available** (or run `gao --update`): the zip comes from this project's GitHub releases over HTTPS and is installed only when its SHA-256 matches the one GitHub publishes for it.
+</details>
+
+<details>
+<summary><b>How do I move to a new version?</b></summary>
+
+From 0.3.1 on, click **Update available** at the bottom left of the window. From an older version, download the zip and start `GpuAutoOptimizer.exe` from it: it offers to replace the older copy that runs in the tray, and it updates the copy that starts at logon by itself.
+</details>
 
 <details>
 <summary><b>Does it work alongside MSI Afterburner?</b></summary>

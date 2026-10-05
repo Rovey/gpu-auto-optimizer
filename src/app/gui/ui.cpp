@@ -41,6 +41,7 @@ enum Icon : unsigned {
     kIconTemp = 0xE9CA, kIconPower = 0xE945, kIconFan = 0xF16A, kIconRefresh = 0xE72C, kIconUndo = 0xE777,
     kIconPlay = 0xF5B0, kIconStop = 0xE71A, kIconClock = 0xE823, kIconStar = 0xE734, kIconQuiet = 0xE992,
     kIconLeaf = 0xEC0A, kIconGauge = 0xEC4A, kIconShield = 0xEA18, kIconList = 0xE8FD, kIconBack = 0xE72B,
+    kIconDownload = 0xE896,
 };
 
 // UTF-8 for a code point in the Basic Multilingual Plane's private use area.
@@ -766,7 +767,7 @@ void optimize_page(UiState& s, const OptimizeWorker::Snapshot& run, const UiActi
 
 // ------------------------------------------------------------------ about
 
-void about() {
+void about(const UiState& s, const UiActions& act) {
     begin_card("about");
     text_bold("GPU Auto Optimizer", 1.6f);
     dim(("Version " + std::string(kVersion)).c_str());
@@ -778,6 +779,14 @@ void about() {
     wrapped(kDim, "State: %ProgramData%\\GpuAutoOptimizer (gao.json, journal.jsonl, boot.log)");
     wrapped(kDim, "Command line: gao.exe --help");
     wrapped(kDim, "Source: github.com/Rovey/gpu-auto-optimizer. MIT License.");
+    ImGui::Spacing();
+    ImGui::Spacing();
+    if (toggle("##updates", s.update_check)) act.set_update_check(!s.update_check);
+    ImGui::SameLine(0, em() * 0.8f);
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted("Look for a new version when the app starts");
+    wrapped(kDim, "One request to github.com at start and once a day; nothing else is sent. A new version is shown at the bottom "
+                  "left and installed only when you click it.");
     end_card();
 }
 
@@ -797,7 +806,27 @@ void nav_item(UiState& s, Page page, Icon icon, const char* label) {
     dl->AddText(ImVec2(p.x + em() * 2.6f, y), ImGui::GetColorU32(kText), label);
 }
 
-void sidebar(UiState& s) {
+// One quiet line above the footer: a new release, installed on a click. Never
+// a dialog, never in the way.
+void update_line(const UiState& s, const UiActions& act) {
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    const ImVec2 size(ImGui::GetContentRegionAvail().x, em() * 1.5f);
+    const bool clicked = ImGui::InvisibleButton("##update", size) && !s.update_busy;
+    const bool hovered = ImGui::IsItemHovered();
+    const ImVec4 colour = s.update_busy ? kDim : hovered ? kText : kAccentBright;
+    const std::string text = ic(kIconDownload) + (s.update_busy ? "  Updating..." : "  Update available");
+    ImGui::GetWindowDrawList()->AddText(ImVec2(p.x, p.y + (size.y - em()) / 2), ImGui::GetColorU32(colour), text.c_str());
+    if (hovered && !s.update_busy) {
+        ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+        ImGui::SetTooltip("%s", ("Version " + s.update_version + " is available (this is " + std::string(kVersion) +
+                                 ").\nClick to download it, check it and restart the app." +
+                                 (s.update_error.empty() ? "" : "\n\nThe last attempt failed: " + s.update_error))
+                                    .c_str());
+    }
+    if (clicked) act.install_update();
+}
+
+void sidebar(UiState& s, const UiActions& act) {
     ImGui::PushStyleColor(ImGuiCol_ChildBg, kNav);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(em() * 0.6f, em() * 0.8f));
     ImGui::BeginChild("nav", ImVec2(em() * 13, 0), ImGuiChildFlags_AlwaysUseWindowPadding, ImGuiWindowFlags_NoScrollbar);
@@ -807,6 +836,9 @@ void sidebar(UiState& s) {
     nav_item(s, Page::Optimize, kIconPulse, "Optimize");
     nav_item(s, Page::Fan, kIconFan, "Fan");
     nav_item(s, Page::About, kIconInfo, "About");
+    const bool update = !s.update_version.empty() || s.update_busy;
+    ImGui::SetCursorPosY(ImGui::GetWindowHeight() - em() * (update ? 3.9f : 2.2f));
+    if (update) update_line(s, act);
     ImGui::SetCursorPosY(ImGui::GetWindowHeight() - em() * 2.2f);
     ImGui::PushStyleColor(ImGuiCol_Text, s.elevated ? kGood : kDim);
     ImGui::TextUnformatted((ic(kIconShield) + (s.elevated ? "  Administrator" : "  Read-only")).c_str());
@@ -891,7 +923,7 @@ void draw_ui(UiState& s, const OptimizeWorker::Snapshot& run, const UiActions& a
                  ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
                      ImGuiWindowFlags_NoBringToFrontOnFocus);
     ImGui::PopStyleVar();
-    sidebar(s);
+    sidebar(s, act);
     ImGui::SameLine(0, 0);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(em() * 0.9f, em() * 0.9f));
     ImGui::BeginChild("content", ImVec2(0, 0), ImGuiChildFlags_AlwaysUseWindowPadding);
@@ -900,7 +932,7 @@ void draw_ui(UiState& s, const OptimizeWorker::Snapshot& run, const UiActions& a
         case Page::Dashboard: dashboard(s, act); break;
         case Page::Optimize: optimize_page(s, run, act); break;
         case Page::Fan: fan_page(s, act); break;
-        case Page::About: about(); break;
+        case Page::About: about(s, act); break;
     }
     ImGui::EndChild();
     ImGui::End();
