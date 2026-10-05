@@ -187,7 +187,7 @@ static BOOL WINAPI OnConsoleCtrl(DWORD type) {
 static int update() {
     const auto check = gao::app::check_for_update();
     if (!check.error.empty()) { std::printf("could not check for updates: %s\n", check.error.c_str()); return 1; }
-    if (!check.release) { std::printf("up to date: %s is the latest release\n", gao::kVersion.data()); return 0; }
+    if (!check.release) { std::printf("up to date: this is %s and there is no newer release\n", gao::kVersion.data()); return 0; }
     std::printf("version %s is available (this is %s); downloading\n", check.release->version.c_str(), gao::kVersion.data());
     std::string message;
     const bool ok = gao::app::install_update(*check.release, &message);

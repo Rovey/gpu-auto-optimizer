@@ -34,6 +34,7 @@ src/core/     pure logic: no windows.h, no driver calls, no D3D. Unit-tested in 
   boot.*          when a logon apply may run (strikes, driver, card) and the verified apply
   watchdog.*      the tray app's decisions: re-apply, give up, back off, driver changed
   task_xml.*      the logon task definition
+  update.*        reading GitHub's "latest release" answer; version numbers
   fan_curve.*     fan curves, the per-second controller and the FanDriver
 src/hw/       the only code that touches hardware or the OS state folders.
   nvml.*          telemetry and power limit via NVML
@@ -42,6 +43,7 @@ src/hw/       the only code that touches hardware or the OS state folders.
   stress.*        the DX11 compute load; the GPU checks every value it computes
   app_files.*     gao.json (atomic writes), the crash journal and boot.log, flushed to disk
   boot_task.*     the logon task and the Program Files copy
+  update_io.*     what an update needs from Windows: HTTPS download, SHA-256, unzip, file version
 src/app/
   common.*        logic both programs share: optimize, logon apply, apply-at-logon on/off
   main.cpp        gao.exe, the command line
@@ -84,6 +86,9 @@ The applied offset is always at least one step below the confirmed edge. Profile
 | No undervolting | Locking a voltage point hard-froze the reference RTX 4070, and reshaping the curve gave no measurable gain on a power-limited card. |
 | Fans through NVML, stop zone via the driver | NVIDIA's legacy NVAPI fan API is gone on RTX 20-series and newer; NVML's `nvmlDeviceSetFanSpeed_v2` is public and verified by reading the target back. Below the stop threshold the driver owns the fans, so no failure of this app can leave them stopped. |
 | Tray app plus logon task | Driver settings are volatile: a reboot or driver reset clears them. The logon task starts the tray app, whose watchdog keeps the tune applied; three crashing logons in a row switch it off. |
+| An update is one click, and never more than that | The app asks GitHub for the latest release (`core/update`) and shows one line in the sidebar; nothing is downloaded until it is clicked. The zip must come from this project's releases over HTTPS and match the SHA-256 the GitHub API publishes for it, and both executables in it must carry the version the release claims. Elevated, the download is unpacked under `%ProgramData%\GpuAutoOptimizer\update`, which only administrators can write, so nothing can be swapped between the check and the copy. The executables are replaced where they run from (a running one is renamed aside) and the app starts again with `--resume`, which keeps a tune that is applied under the watchdog. The trust this rests on is the GitHub account: the executables are not code-signed. |
+| A newer copy takes over from an older one | The app is single-instance, and the copy in the tray usually runs elevated. A copy that is started later reads the running one's version from a window property (builds before 0.3.1 have none and count as older) and, when it is newer itself, offers to replace it: it starts again elevated with `--replace`, asks the old copy to exit through its own tray-menu command (which hands the fans back and stops a run cleanly) and ends it only when it does not go and no optimize run is under way. An elevated start from outside Program Files also replaces the logon copy when apply-at-logon is on and that copy is not newer (`update_logon_copy`): a profile saved by a new build must be one the logon copy accepts. |
+| A logon apply that ends cleanly is no strike | Strikes count logons that may have crashed the machine. An apply that was refused before any write, or failed and reset the card to stock, did not: the strike it recorded up front is taken back. Only a failed reset keeps it. Before 0.3.1 three refused logons read as `disabled after 3 crashes`. |
 | Dear ImGui on DX11 | One small binary with no runtime, and the D3D11 device is in the process anyway for the stress load. |
 
 **Not yet verified on hardware.** The handling of a driver reset during an optimize run (the rows above on the reconnect, the in-probe `STALLED`, the reset budget, the rest and health check, and the memory-first single-step search) describes what the code does. It is implemented and unit-tested. On hardware only this much has been seen, in round A of [hardware check 51](hardware-checks.md), on a build that reconnected but took no rest: `gao` survived a forced reset, reconnected and left the journal clean, and the desktop was unusable afterwards. Whether the rest keeps the desktop usable is not known.
