@@ -17,6 +17,9 @@ std::filesystem::path installed_tray_path();  // ...\GpuAutoOptimizer.exe
 // running copy is renamed aside first);
 // a no-op when `from_dir` already is that folder.
 bool install_app(const std::filesystem::path& from_dir, std::string* why);
+// The same copy into any folder: an update replaces the executables where
+// they run from.
+bool copy_app(const std::filesystem::path& from_dir, const std::filesystem::path& to_dir, std::string* why);
 // Removes both copies and, if empty, the folder. A copy that is running (the
 // tray app) is renamed aside and deleted at the next restart; returns false then.
 bool uninstall_app();

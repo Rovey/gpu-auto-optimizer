@@ -21,6 +21,9 @@ BootDecision decide_boot(const Config& c, const std::string& driver, const std::
 // bounds are refused before anything is written (gao.json is user-writable
 // and boot-apply runs elevated). Any failure resets to stock and returns
 // false with the reason in *why, including whether that reset worked.
-bool apply_profile(const GpuControl& gpu, const Profile& p, std::string* why);
+// *left_clean (optional) says whether a failed apply left nothing of the
+// profile on the card: refused before any write, or reset to stock after a
+// failed one. False after a reset that failed, and after a successful apply.
+bool apply_profile(const GpuControl& gpu, const Profile& p, std::string* why, bool* left_clean = nullptr);
 
 }

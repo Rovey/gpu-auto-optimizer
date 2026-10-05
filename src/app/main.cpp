@@ -183,6 +183,19 @@ static BOOL WINAPI OnConsoleCtrl(DWORD type) {
     return FALSE;
 }
 
+// Exit 0: updated, or already the latest. 1: the check or the update failed.
+static int update() {
+    const auto check = gao::app::check_for_update();
+    if (!check.error.empty()) { std::printf("could not check for updates: %s\n", check.error.c_str()); return 1; }
+    if (!check.release) { std::printf("up to date: %s is the latest release\n", gao::kVersion.data()); return 0; }
+    std::printf("version %s is available (this is %s); downloading\n", check.release->version.c_str(), gao::kVersion.data());
+    std::string message;
+    const bool ok = gao::app::install_update(*check.release, &message);
+    std::printf("%s\n", message.c_str());
+    if (ok) std::printf("A running tray app keeps its old version until it is restarted.\n");
+    return ok ? 0 : 1;
+}
+
 static int optimize(gao::Preset preset, const std::optional<gao::FanCurve>& fan_curve) {
     gao::app::OptimizeHooks hooks;
     hooks.aborted = [] { return g_abort.load(); };
@@ -208,6 +221,8 @@ static int optimize(gao::Preset preset, const std::optional<gao::FanCurve>& fan_
     std::printf("  after:  score=%.0f it/s  core=%d MHz  mem=%d MHz  peak=%d C  power=%d W\n",
                 r.soak.score, r.soak.avg_core_mhz, r.soak.avg_mem_mhz, r.soak.peak_temp_c, r.soak.avg_power_w);
     if (out.saved) std::printf("Saved: `gao --apply` re-applies it, `gao --boot on` applies it at every logon.\n");
+    if (out.saved)
+        if (const std::string note = gao::app::update_logon_copy(); !note.empty()) std::printf("%s\n", note.c_str());
     else std::printf("not saved: %s\n", out.save_note.c_str());
     std::printf("Applied until reboot. `gao --reset` returns to stock.\n");
     return out.saved ? 0 : 2;   // 2: tuned and applied, but --apply and boot-apply cannot use it
@@ -276,15 +291,9 @@ static int status() {
     std::printf("\n");
     if (cfg.fan_min_pct > 0) std::printf("fan minimum: %d %% (learned: the fans stall below it)\n", cfg.fan_min_pct);
     std::printf("boot-apply: %s\n", gao::boot_task_exists() ? "on (logon task registered)" : "off");
-    const auto installed = gao::installed_exe_path();
-    wchar_t self[MAX_PATH];
-    const DWORD n = GetModuleFileNameW(nullptr, self, MAX_PATH);
     std::error_code ec;
-    const auto build_dir = std::filesystem::path(self).parent_path();
-    if (!std::filesystem::exists(installed, ec)) std::printf("boot copy:  not installed\n");
-    else if (n && n < MAX_PATH && gao::files_equal(self, installed) &&
-             gao::files_equal(build_dir / L"GpuAutoOptimizer.exe", gao::installed_tray_path()))
-        std::printf("boot copy:  up to date\n");
+    if (!std::filesystem::exists(gao::installed_exe_path(), ec)) std::printf("boot copy:  not installed\n");
+    else if (gao::app::logon_copy_is_this_build()) std::printf("boot copy:  up to date\n");
     else std::printf("boot copy:  OUTDATED -- run `gao --boot on` to install this build\n");
     std::printf("strikes:    %d of %d\n", cfg.boot_strikes, gao::kMaxBootStrikes);
     const auto log = gao::read_lines(gao::boot_log_path());
@@ -415,6 +424,7 @@ int main(int argc, char** argv) {
         return 1;
     }
     if (argc > 1 && std::strcmp(argv[1], "--status") == 0) return status();
+    if (argc > 1 && std::strcmp(argv[1], "--update") == 0) return update();
     if (argc > 1 && std::strcmp(argv[1], "--optimize") == 0) {
         gao::Preset preset = gao::Preset::BestOfMyGpu;
         if (argc > 2) {
@@ -439,6 +449,7 @@ int main(int argc, char** argv) {
                 "              changes no setting; exit 0 = both STABLE, rebuilt and a clean first batch, 1 = anything else,\n"
                 "              never --stress's 2 / 3)\n"
                 "            | --optimize [best|quiet|cool|max [--fan-curve silent|normal|cool|aggressive]]\n"
-                "            | --apply | --boot on|off | --fan auto | --status]\n");
+                "            | --apply | --boot on|off | --fan auto | --status\n"
+                "            | --update (installs the latest release into this folder, if there is a newer one)]\n");
     return argc > 1 ? 1 : 0;
 }

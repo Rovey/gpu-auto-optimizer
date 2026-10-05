@@ -107,6 +107,43 @@ TEST_CASE("a failed reset is reported, not claimed as stock") {
     CHECK(why.find("reset to stock FAILED") != std::string::npos);
 }
 
+TEST_CASE("a failed apply says whether it left the card clean") {
+    // Clean: nothing of the profile is on the card, so a failed logon apply is
+    // no crash strike. Only a reset that failed leaves the card unknown.
+    std::string why;
+    {
+        Card card;   // refused before any write
+        Profile p = *with_profile("x").profile;
+        p.core_mhz = 99999;
+        bool clean = false;
+        CHECK_FALSE(apply_profile(card.gpu(), p, &why, &clean));
+        CHECK(clean);
+        CHECK(card.writes == 0);
+    }
+    {
+        Card card;   // a write failed, the reset worked
+        card.fail_mem = true;
+        bool clean = false;
+        CHECK_FALSE(apply_profile(card.gpu(), *with_profile("x").profile, &why, &clean));
+        CHECK(clean);
+        CHECK(card.core == 0);
+    }
+    {
+        Card card;   // a write failed and so did the reset
+        card.fail_mem = true;
+        card.reset_ok = false;
+        bool clean = true;
+        CHECK_FALSE(apply_profile(card.gpu(), *with_profile("x").profile, &why, &clean));
+        CHECK_FALSE(clean);
+    }
+    {
+        Card card;   // applied: the profile is on the card
+        bool clean = true;
+        CHECK(apply_profile(card.gpu(), *with_profile("x").profile, &why, &clean));
+        CHECK_FALSE(clean);
+    }
+}
+
 TEST_CASE("values outside the search bounds are refused before anything is written") {
     // gao.json is user-writable, and boot-apply runs elevated: never apply
     // something --optimize could not have produced.

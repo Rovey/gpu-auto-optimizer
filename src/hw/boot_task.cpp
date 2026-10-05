@@ -56,8 +56,12 @@ bool move_aside(const std::filesystem::path& p) {
 bool install_app(const std::filesystem::path& from_dir, std::string* why) {
     const auto dst = installed_dir();
     if (dst.empty()) { if (why) *why = "the Program Files folder could not be resolved"; return false; }
+    return copy_app(from_dir, dst, why);
+}
+
+bool copy_app(const std::filesystem::path& from_dir, const std::filesystem::path& dst, std::string* why) {
     std::error_code ec;
-    if (std::filesystem::equivalent(from_dir, dst, ec)) return true;   // running the installed copy already
+    if (std::filesystem::equivalent(from_dir, dst, ec)) return true;   // already there
     for (const wchar_t* name : kAppExes) {   // all or nothing: never a half-installed pair
         if (!std::filesystem::is_regular_file(from_dir / name, ec)) {
             if (why) *why = (from_dir / name).string() + " is missing; both executables must be in the same folder";
@@ -65,6 +69,14 @@ bool install_app(const std::filesystem::path& from_dir, std::string* why) {
         }
     }
     std::filesystem::create_directories(dst, ec);
+    // Copies renamed aside by an earlier run (see move_aside) that are no
+    // longer running: gone now. Deleting them at restart needs administrator
+    // rights, which an update in a user's own folder does not have.
+    for (std::filesystem::directory_iterator it(dst, ec), end; !ec && it != end; it.increment(ec)) {
+        const std::wstring file = it->path().filename().wstring();
+        for (const wchar_t* name : kAppExes)
+            if (file.rfind(std::wstring(name) + L".old-", 0) == 0) DeleteFileW(it->path().c_str());
+    }
     for (const wchar_t* name : kAppExes) {
         const auto src = from_dir / name;
         const auto to = dst / name;

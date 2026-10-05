@@ -62,6 +62,8 @@ add_library(core STATIC
   src/core/task_xml.cpp
   src/core/watchdog.hpp
   src/core/watchdog.cpp
+  src/core/update.hpp
+  src/core/update.cpp
 )
 target_include_directories(core PUBLIC src)
 target_include_directories(core SYSTEM PRIVATE third_party)
@@ -75,9 +77,11 @@ add_library(hw STATIC
   src/hw/stress.hpp src/hw/stress.cpp
   src/hw/app_files.hpp src/hw/app_files.cpp
   src/hw/boot_task.hpp src/hw/boot_task.cpp
+  src/hw/update_io.hpp src/hw/update_io.cpp
 )
 target_include_directories(hw PUBLIC src)
-target_link_libraries(hw PUBLIC core d3d11 dxgi d3dcompiler shell32 ole32 PRIVATE gao_warnings gao_hardening)
+target_link_libraries(hw PUBLIC core d3d11 dxgi d3dcompiler shell32 ole32 winhttp bcrypt version
+                      PRIVATE gao_warnings gao_hardening)
 
 # UI-independent application logic shared by both executables.
 add_library(app STATIC
@@ -93,7 +97,7 @@ target_link_libraries(gao PRIVATE app gao_warnings gao_hardening)
 # never from the exe's folder.
 target_link_libraries(gao PRIVATE delayimp)
 target_link_options(gao PRIVATE /DELAYLOAD:d3dcompiler_47.dll /DELAYLOAD:d3d11.dll /DELAYLOAD:dxgi.dll
-                   /DEPENDENTLOADFLAG:0x800)
+                   /DELAYLOAD:winhttp.dll /DELAYLOAD:version.dll /DEPENDENTLOADFLAG:0x800)
 # Linker half of the mitigations: Control Flow Guard tables, CET shadow stack
 # compatibility. (/DYNAMICBASE and /HIGHENTROPYVA are already x64 defaults.)
 target_link_options(gao PRIVATE /GUARD:CF /CETCOMPAT)
@@ -118,7 +122,8 @@ add_executable(GpuAutoOptimizer WIN32
 )
 target_link_libraries(GpuAutoOptimizer PRIVATE app imgui gao_warnings gao_hardening delayimp)
 target_link_options(GpuAutoOptimizer PRIVATE /DELAYLOAD:d3dcompiler_47.dll /DELAYLOAD:d3d11.dll /DELAYLOAD:dxgi.dll
-                   /DELAYLOAD:dwmapi.dll /DEPENDENTLOADFLAG:0x800 /GUARD:CF /CETCOMPAT)
+                   /DELAYLOAD:dwmapi.dll /DELAYLOAD:winhttp.dll /DELAYLOAD:version.dll
+                   /DEPENDENTLOADFLAG:0x800 /GUARD:CF /CETCOMPAT)
 
 enable_testing()
 add_executable(core_tests
@@ -135,6 +140,7 @@ add_executable(core_tests
   tests/test_task_xml.cpp
   tests/test_watchdog.cpp
   tests/test_fan_curve.cpp
+  tests/test_update.cpp
 )
 target_link_libraries(core_tests PRIVATE core doctest gao_warnings)
 add_test(NAME core_tests COMMAND core_tests)

@@ -25,6 +25,7 @@ struct Config {
     int boot_strikes = 0;   // logons that applied the profile and have not yet run 2 minutes
     std::optional<FanCurve> fan_curve;   // the active curve, once edited; otherwise active_fan_curve() picks one
     bool fan_control = false;            // drive the fans with the active curve
+    bool update_check = true;            // ask GitHub for a newer release when the app starts
     int fan_min_pct = 0;                 // the lowest speed the fans hold, learned (0: none yet)
     std::string fan_min_gpu;             // the card it was learned on (NVML UUID)
 };

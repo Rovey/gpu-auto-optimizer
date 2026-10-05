@@ -8,7 +8,9 @@
 #include "core/objectives.hpp"
 #include "core/search.hpp"
 #include "core/types.hpp"
+#include "core/update.hpp"
 #include <functional>
+#include <optional>
 #include <string>
 
 namespace gao::app {
@@ -91,5 +93,27 @@ void clear_boot_strike();
 // or removes both. `message` describes the outcome either way.
 bool enable_boot(std::string* message);
 bool disable_boot(std::string* message);
+
+// True when the copies in Program Files are byte for byte this build.
+bool logon_copy_is_this_build();
+// Apply-at-logon runs the copy in Program Files. When this build runs
+// elevated from another folder and that copy is an older or equal version
+// with other contents, it is replaced by this build, so that a profile saved
+// here is one the logon copy accepts. Returns what happened for the log;
+// empty when there was nothing to do.
+std::string update_logon_copy();
+
+struct UpdateCheck {
+    std::optional<ReleaseInfo> release;   // set when a release newer than this build exists
+    std::string error;                    // why the check failed, when it did
+};
+// Asks GitHub for the latest release. One HTTPS request; it sends nothing
+// but the request itself.
+UpdateCheck check_for_update();
+// Downloads that release, checks the zip against the SHA-256 GitHub
+// published for it, and replaces both executables in this program's folder.
+// The running program keeps running its old code until it is restarted.
+// `message` describes the outcome either way.
+bool install_update(const ReleaseInfo& release, std::string* message);
 
 }

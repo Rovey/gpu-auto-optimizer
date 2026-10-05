@@ -13,7 +13,8 @@ BootDecision decide_boot(const Config& c, const std::string& driver, const std::
     return BootDecision::Apply;
 }
 
-bool apply_profile(const GpuControl& gpu, const Profile& p, std::string* why) {
+bool apply_profile(const GpuControl& gpu, const Profile& p, std::string* why, bool* left_clean) {
+    if (left_clean) *left_clean = false;
     // A reported range may only widen what a profile may apply, never narrow it
     // below the built-in limits: it comes from an undocumented buffer, and a
     // low reading must not refuse a profile saved before it was read (every
@@ -25,10 +26,12 @@ bool apply_profile(const GpuControl& gpu, const Profile& p, std::string* why) {
     if (p.power_pct < 50 || p.power_pct > 150 || p.core_mhz < 0 || p.core_mhz > core_limit || p.mem_mhz < 0 ||
         p.mem_mhz > mem_limit) {
         if (why) *why = "profile values out of range; nothing applied";
+        if (left_clean) *left_clean = true;
         return false;
     }
     auto fail = [&](const std::string& reason) {
         const bool reset = gpu.reset_to_stock && gpu.reset_to_stock();
+        if (left_clean) *left_clean = reset;
         if (why) *why = reason + (reset ? " -- card at stock" : " -- reset to stock FAILED, run `gao --reset`");
         return false;
     };
