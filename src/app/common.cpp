@@ -487,16 +487,20 @@ bool install_update(const ReleaseInfo& release, std::string* message) {
         ~Cleanup() { std::error_code e; std::filesystem::remove_all(p, e); }
     } cleanup{work};
 
+    // What to do and in which order is install_release's (core, tested with a
+    // fake source); here are only the real steps.
     const auto zip = work / L"update.zip";
-    if (!https_download(release.zip_url, zip, 64 * 1024 * 1024, &why)) return say("the download failed: " + why, false);
-    if (sha256_hex(zip) != release.sha256) return say("the download does not match the published SHA-256; nothing was changed", false);
-    if (!extract_zip(zip, unpacked, &why)) return say(why, false);
-    // The zip must be the version it claims to be, in both executables.
-    for (const wchar_t* name : kAppExes)
-        if (file_version_number(unpacked / name) != version_number(release.version))
-            return say("the download does not contain version " + release.version + "; nothing was changed", false);
-    if (!copy_app(unpacked, dir, &why)) return say(why, false);
-    return say("updated to version " + release.version, true);
+    UpdateSteps steps;
+    steps.download = [&](const std::string& url, std::string* error) { return https_download(url, zip, 64 * 1024 * 1024, error); };
+    steps.sha256 = [&] { return sha256_hex(zip); };
+    steps.unpack = [&](std::string* error) { return extract_zip(zip, unpacked, error); };
+    steps.unpacked_is = [&](unsigned version) {
+        for (const wchar_t* name : kAppExes)
+            if (file_version_number(unpacked / name) != version) return false;
+        return true;
+    };
+    steps.replace = [&](std::string* error) { return copy_app(unpacked, dir, error); };
+    return install_release(release, steps, message);
 }
 
 }
