@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <numeric>
 
 namespace gao {
 
@@ -25,6 +26,12 @@ const VfPoint* find(const std::vector<VfPoint>& curve, int index) {
     for (const VfPoint& p : curve)
         if (p.index == index) return &p;
     return nullptr;
+}
+
+int find_raw(const std::vector<VfOffset>& offsets, int index) {
+    for (const VfOffset& o : offsets)
+        if (o.index == index) return o.raw;
+    return 0;
 }
 
 bool at_stock(const std::vector<VfPoint>& curve) {
@@ -142,6 +149,13 @@ VfApplyResult apply_flat_top(const GpuControl& gpu, int anchor_index, int freq_k
         const VfPoint* built_in = find(*curve, index);
         return std::max(0, freq_khz - (built_in ? built_in->freq_khz : freq_khz)) + kVfSlackKhz;
     };
+    // The step the card's clock moves in (15 MHz on the reference card), read
+    // off the curve itself. The half step of the first round is kept on it,
+    // so that no offset is ever one the card has to round.
+    int grid_khz = 0;
+    for (std::size_t i = 1; i < curve->size(); ++i)
+        grid_khz = std::gcd(grid_khz, std::abs((*curve)[i].freq_khz - (*curve)[i - 1].freq_khz));
+    if (grid_khz <= 0) grid_khz = 1;
     std::vector<VfPoint> before = *curve;
     for (r.passes = 1; r.passes <= kVfPasses; ++r.passes) {
         std::vector<VfOffset> offsets;
@@ -152,7 +166,7 @@ VfApplyResult apply_flat_top(const GpuControl& gpu, int anchor_index, int freq_k
             // that moves further than asked lands on the target at worst.
             // Lowering a point needs no such care.
             const int gap_khz = freq_khz - now->freq_khz;
-            const int step_khz = r.passes == 1 && gap_khz > 0 ? gap_khz / 2 : gap_khz;
+            const int step_khz = r.passes == 1 && gap_khz > 0 ? gap_khz / 2 / grid_khz * grid_khz : gap_khz;
             offsets.push_back({index, std::min(now->raw_offset + step_khz, limit_raw(index))});
         }
         if (!gpu.write_vf_offsets(offsets)) return fail("writing the curve failed");
@@ -183,6 +197,16 @@ VfApplyResult apply_flat_top(const GpuControl& gpu, int anchor_index, int freq_k
         }
         if (r.passes == 1 && asked >= 4 * kVfToleranceKhz && moved * 20 < asked)
             return fail("the card does not show the curve change in its read-out");
+        // The half step tells whether the card moves a point by what is
+        // written. If it does not, the full step is never written.
+        if (r.passes == 1) {
+            const VfPoint* was = find(before, anchor_index);
+            const VfPoint* is = find(*after, anchor_index);
+            const int asked_khz = find_raw(offsets, anchor_index) - was->raw_offset;
+            if (asked_khz >= 3 * grid_khz && asked_khz >= 3 * kVfToleranceKhz &&
+                std::abs((is->freq_khz - was->freq_khz) - asked_khz) > grid_khz + kVfToleranceKhz)
+                return fail("the card did not move the curve by what was written");
+        }
         before = *after;
     }
     return fail("the curve did not settle on the target");

@@ -40,6 +40,10 @@ struct FakeCurve {
             base_khz.push_back(1500000 + i * 100000);
             raw.push_back(0);
         }
+        // One point off the round numbers, so that the clock grid the write
+        // reads off the curve is a small step (5 MHz), as on a real card,
+        // and not the 100 MHz the other points are apart.
+        base_khz[1] = 1605000;
     }
     int freq(std::size_t i) const {
         long long f = base_khz[i] + (writes ? drift_khz : 0);
@@ -118,13 +122,14 @@ TEST_CASE("a flat top: the anchor and every point above it run the target, the p
 }
 
 TEST_CASE("a card that stores offsets in other units is refused, never overshot") {
-    // Twice the size: every round falls short, the rounds run out, the curve is cleared.
+    // Twice the size: the half step moves the anchor half as far as written, and that ends it.
     FakeCurve half;
     half.raw_per_khz = 2.0;
     const auto r = apply_flat_top(half.gpu(), 8, 2700000);
     CHECK_FALSE(r.ok);
-    CHECK(r.why == "the curve did not settle on the target -- curve at stock");
+    CHECK(r.why == "the card did not move the curve by what was written -- curve at stock");
     CHECK(half.at_stock());
+    CHECK(half.writes == 2);   // the half step, and the clean-up: the full step was never written
 
     // Half the size: the card moves twice as far as asked. The first round
     // only asks for half of the way, so the anchor lands on the target.
@@ -146,7 +151,7 @@ TEST_CASE("frequencies on a 15 MHz grid are accepted within half a step") {
 
 TEST_CASE("a built-in curve that shifts after the first write is followed") {
     FakeCurve card;
-    card.drift_khz = 30000;   // the card warmed up: every point moved two steps
+    card.drift_khz = 5000;   // the card warmed up: every point moved one step of its clock grid
     const auto r = apply_flat_top(card.gpu(), 8, 2700000);
     REQUIRE(r.ok);
     CHECK(std::abs(card.freq(8) - 2700000) <= kVfToleranceKhz);

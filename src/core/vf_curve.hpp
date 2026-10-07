@@ -68,12 +68,14 @@ struct VfApplyResult {
 // them (hardware check 61); nothing estimates other units. What protects a
 // card that stores them differently is the order of the writes: the first
 // round raises a point only half of the way, so a card that moves twice as
-// far as asked lands on the target, not above it; every later round adds
-// each point's own remaining gap as read back, which also follows a built-in
-// curve that shifted with temperature; and no offset is ever written beyond
-// what the plan asks of its point plus kVfSlackKhz. A card that does not
-// arrive within kVfPasses rounds, or whose read-out does not show the change
-// at all, is refused.
+// far as asked lands on the target, not above it, and a card that did not
+// move the anchor by what was written (within one step of its clock grid) is
+// refused before the full step; every later round adds each point's own
+// remaining gap as read back, which also follows a built-in curve that
+// shifted with temperature; and no offset is ever written beyond what the
+// plan asks of its point plus kVfSlackKhz. A card that does not arrive
+// within kVfPasses rounds, or whose read-out does not show the change at
+// all, is refused.
 //
 // A curve that is not at stock is cleared first. Any failure clears the
 // curve again.
