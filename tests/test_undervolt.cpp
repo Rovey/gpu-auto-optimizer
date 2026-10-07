@@ -316,3 +316,48 @@ TEST_CASE("find_undervolt: a journal that cannot be written stops before the car
     CHECK(card.at_stock());
     CHECK(card.probes == 1);   // the baseline only
 }
+
+// The curve of the reference RTX 4070 as `gao --curve` printed it on driver
+// 617.14 (hardware check 61), with the +135 MHz core offset that was applied
+// taken off again: millivolts, and the built-in MHz of each point.
+namespace {
+const int kRtx4070Mv[] = {
+    450, 460, 465, 470, 475, 485, 490, 495, 500, 510, 515, 520, 525, 535, 540, 545, 550, 560, 565, 570, 575, 585,
+    590, 595, 600, 610, 615, 620, 625, 635, 640, 645, 650, 660, 665, 670, 675, 685, 690, 695, 700, 710, 715, 720,
+    725, 735, 740, 745, 750, 760, 765, 770, 775, 785, 790, 795, 800, 810, 815, 820, 825, 835, 840, 845, 850, 860,
+    865, 870, 875, 885, 890, 895, 900, 910, 915, 920, 925, 935, 940, 945, 950, 960, 965, 970, 975, 985, 990, 995,
+    1000, 1010, 1015, 1020, 1025, 1035, 1040, 1045, 1050, 1060, 1065, 1070, 1075, 1085, 1090, 1095, 1100, 1110, 1115,
+    1120, 1125, 1135, 1140, 1145, 1150, 1160, 1165, 1170, 1175, 1185, 1190, 1195, 1200, 1210, 1215, 1220, 1225, 1235,
+    1240
+};
+const int kRtx4070Mhz[] = {
+    255, 300, 330, 375, 405, 450, 480, 525, 555, 600, 630, 675, 705, 735, 780, 810, 840, 885, 915, 945, 975, 1020,
+    1050, 1080, 1110, 1155, 1185, 1215, 1245, 1275, 1305, 1335, 1365, 1395, 1425, 1455, 1485, 1515, 1545, 1575, 1590,
+    1620, 1650, 1665, 1695, 1725, 1740, 1770, 1770, 1785, 1815, 1830, 1860, 1890, 1920, 1950, 1980, 1995, 2025, 2055,
+    2085, 2100, 2130, 2160, 2175, 2205, 2220, 2250, 2280, 2295, 2325, 2340, 2370, 2385, 2415, 2430, 2460, 2475, 2505,
+    2520, 2535, 2565, 2580, 2595, 2610, 2625, 2640, 2655, 2670, 2685, 2700, 2700, 2715, 2730, 2745, 2760, 2760, 2775,
+    2790, 2790, 2805, 2820, 2820, 2835, 2835, 2850, 2850, 2865, 2865, 2880, 2880, 2895, 2895, 2895, 2910, 2910, 2910,
+    2910, 2925, 2925, 2925, 2925, 2925, 2925, 2925, 2925, 2925
+};
+}
+
+TEST_CASE("find_undervolt on the reference RTX 4070's curve, with its measured core edge") {
+    UvCard card;
+    card.volt_uv.clear();
+    card.base_khz.clear();
+    for (int v : kRtx4070Mv) card.volt_uv.push_back(v * 1000);
+    for (int f : kRtx4070Mhz) card.base_khz.push_back(f * 1000);
+    card.raw.assign(card.base_khz.size(), 0);
+    card.stock_load_khz = 2766000;   // what the card ran under the stress load at stock
+    card.edge_khz = card.long_edge_khz = 210000;   // core +210 was confirmed, +225 computed wrong values
+    const auto r = card.go();
+    REQUIRE(r.ok);
+    CHECK(r.freq_khz == 2760000);
+    CHECK(r.stock_uv == 1045000);       // where the card runs 2760 MHz by itself
+    CHECK(r.edge_uv == 960000);         // +195 MHz at that point; the next one down asks +225
+    CHECK(r.confirmed_uv == 960000);
+    CHECK(r.applied_uv == 985000);      // the margin keeps +135 MHz, as for the core offset
+    CHECK(card.applied_raise_mhz() == 135);
+    // Sixty millivolts less for the same clock: about a ninth of the power.
+    CHECK(r.after.avg_power_w < r.baseline.avg_power_w * 0.92);
+}
