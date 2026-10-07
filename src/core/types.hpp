@@ -30,6 +30,18 @@ struct Telemetry {
     bool ok = false;
 };
 
+// One point of the voltage/frequency curve of the graphics clock.
+struct VfPoint {
+    int index = 0;        // the slot in the driver's tables; what a write addresses
+    int volt_uv = 0;
+    int freq_khz = 0;     // what the card runs at this voltage now: its built-in curve plus the offset
+    int raw_offset = 0;   // the offset as the driver stores it (see core/vf_curve.hpp for the units)
+};
+struct VfOffset {
+    int index = 0;
+    int raw = 0;
+};
+
 // What the GPU reports as applied right now (read back, not remembered).
 struct AppliedState {
     int core_mhz = 0;
@@ -75,6 +87,11 @@ struct GpuControl {
     std::function<bool()> set_fan_auto;                    // every fan back to the driver, verified by the policy
     std::function<std::optional<FanReading>()> read_fan;   // nullopt when a read fails
     int fan_min_pct = 0;                                   // the card's minimum manual speed
+    // The voltage/frequency curve. Empty: the card or driver does not offer
+    // it. A write is not verified here; core/vf_curve.hpp reads back and
+    // corrects, because what a raw offset does is the card's to say.
+    std::function<std::optional<std::vector<VfPoint>>()> read_vf_curve;   // lowest voltage first; nullopt when a read fails
+    std::function<bool(const std::vector<VfOffset>&)> write_vf_offsets;   // the named slots; the others keep their offset
 };
 
 }

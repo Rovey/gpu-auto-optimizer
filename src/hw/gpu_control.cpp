@@ -1,4 +1,5 @@
 #include "hw/gpu_control.hpp"
+#include "core/vf_curve.hpp"
 
 namespace gao {
 
@@ -15,10 +16,23 @@ GpuControl make_gpu_control(Nvml& nvml, Nvapi& nvapi, unsigned gpu) {
         // {0, 0} when the query fails later on; the power step skips such a range.
         c.power_limit_range_pct = [&nvml, gpu] { return nvml.PowerLimitRangePct(gpu).value_or(std::pair{0, 0}); };
     }
-    // Stock = offsets 0 and, where the card allows it, the default power limit.
-    c.reset_to_stock = [&nvapi, &nvml, gpu, power] {
+    c.read_vf_curve = [&nvapi, gpu] { return nvapi.ReadVfCurve(gpu); };
+    c.write_vf_offsets = [&nvapi, gpu](const std::vector<VfOffset>& offsets) { return nvapi.WriteVfRawOffsets(gpu, offsets); };
+    // Stock = offsets 0, the built-in voltage/frequency curve and, where the
+    // card allows it, the default power limit. A curve that cannot be read
+    // (no administrator rights, or a card without one) is not one this
+    // program wrote, and does not fail the reset.
+    c.reset_to_stock = [&nvapi, &nvml, gpu, power, read = c.read_vf_curve, write = c.write_vf_offsets] {
+        bool curve = true;
+        if (read()) {
+            GpuControl only_curve;
+            only_curve.read_vf_curve = read;
+            only_curve.write_vf_offsets = write;
+            std::string ignored;
+            curve = clear_vf_curve(only_curve, &ignored);
+        }
         const bool offsets = nvapi.ResetOffsets(gpu);
-        return (power ? nvml.SetPowerLimitPct(gpu, 100) : true) && offsets;
+        return (power ? nvml.SetPowerLimitPct(gpu, 100) : true) && offsets && curve;
     };
     // What is applied right now, straight from the driver. A card without
     // power control counts as 100 %.

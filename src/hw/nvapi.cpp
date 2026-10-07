@@ -1,4 +1,5 @@
 #include "hw/nvapi.hpp"
+#include "core/vf_curve.hpp"
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <cstring>
@@ -177,6 +178,78 @@ bool Nvapi::SetDeltaKhz(unsigned gpu, int offset_bytes, int khz) {
 }
 
 bool Nvapi::SetCoreOffsetMhz(unsigned gpu, int mhz) { return SetDeltaKhz(gpu, kOffCoreDelta, mhz * 1000); }
+
+// ---- the voltage/frequency curve ------------------------------------------
+//
+// Interface ids and buffer versions as the project's Python implementation
+// used them on the reference RTX 4070 (src/backends/nvapi_vfcurve.py, tag
+// v0.9-python). Each buffer's first word is its size with version 1 in the
+// upper half.
+namespace {
+constexpr unsigned kGetClockBoostMaskId = 0x507B4B59;
+constexpr unsigned kGetVfpCurveId = 0x21537AD4;
+constexpr unsigned kGetClockBoostTableId = 0x23F1B133;
+constexpr unsigned kSetClockBoostTableId = 0x0733E009;
+constexpr unsigned VfVersion(std::size_t size) { return static_cast<unsigned>(size) | (1u << 16); }
+}
+
+bool Nvapi::VfCall(unsigned gpu, unsigned id, const char* name, unsigned char* buf) {
+    void* handle = GpuHandle(gpu);
+    if (!handle) return false;   // error_ set by GpuHandle
+    auto call = (fn_get_pstates20)QueryFn(id);   // the same shape: (gpu handle, buffer)
+    if (!call) { error_ = std::string(name) + ": nvapi_QueryInterface returned null"; return false; }
+    const nvapi_status_t rc = call(handle, buf);
+    if (rc != kNvapiOk) { error_ = std::string(name) + " failed (" + std::to_string(rc) + ")"; return false; }
+    return true;
+}
+
+bool Nvapi::ReadVfBuffers(unsigned gpu, bool fill_mask, unsigned char* mask, unsigned char* status, unsigned char* control) {
+    std::memset(mask, 0, kVfMaskSize);
+    PutU32(mask, 0, VfVersion(kVfMaskSize));
+    if (fill_mask) std::memset(mask + kVfHeaderBegin, 0xFF, 32);
+    if (!VfCall(gpu, kGetClockBoostMaskId, "GetClockBoostMask", mask)) return false;
+    // The other two requests name the slots they want with the mask the
+    // first call answered.
+    std::memset(status, 0, kVfStatusSize);
+    PutU32(status, 0, VfVersion(kVfStatusSize));
+    std::memcpy(status + kVfHeaderBegin, mask + kVfHeaderBegin, kVfEntries - kVfHeaderBegin);
+    if (!VfCall(gpu, kGetVfpCurveId, "GetVFPCurve", status)) return false;
+    std::memset(control, 0, kVfControlSize);
+    PutU32(control, 0, VfVersion(kVfControlSize));
+    std::memcpy(control + kVfHeaderBegin, mask + kVfHeaderBegin, kVfEntries - kVfHeaderBegin);
+    return VfCall(gpu, kGetClockBoostTableId, "GetClockBoostTable", control);
+}
+
+std::optional<std::vector<VfPoint>> Nvapi::ReadVfCurve(unsigned gpu) {
+    // Off the stack: 22 kB together.
+    std::vector<unsigned char> mask(kVfMaskSize), status(kVfStatusSize), control(kVfControlSize);
+    for (const bool fill_mask : {false, true}) {   // some drivers only answer when asked for every slot
+        if (!ReadVfBuffers(gpu, fill_mask, mask.data(), status.data(), control.data())) continue;
+        auto points = parse_vf_curve(mask.data(), status.data(), control.data());
+        if (!points.empty()) return points;
+        error_ = "the driver reported no curve points";
+    }
+    return std::nullopt;   // error_ set above
+}
+
+bool Nvapi::WriteVfRawOffsets(unsigned gpu, const std::vector<VfOffset>& offsets) {
+    std::vector<unsigned char> mask(kVfMaskSize), status(kVfStatusSize), control(kVfControlSize);
+    bool read = false;
+    for (const bool fill_mask : {false, true}) {
+        if (!ReadVfBuffers(gpu, fill_mask, mask.data(), status.data(), control.data())) continue;
+        if (!parse_vf_curve(mask.data(), status.data(), control.data()).empty()) { read = true; break; }
+    }
+    if (!read) { if (error_.empty()) error_ = "the curve could not be read before the write"; return false; }
+    // The table as it is now, with only the named slots changed.
+    for (const VfOffset& o : offsets) {
+        if (o.index < 0 || o.index >= kVfSlots) { error_ = "curve slot out of range"; return false; }
+        put_vf_raw_offset(control.data(), o.index, o.raw);
+    }
+    PutU32(control.data(), 0, VfVersion(kVfControlSize));
+    if (!VfCall(gpu, kSetClockBoostTableId, "SetClockBoostTable", control.data())) return false;
+    Sleep(100);   // the read-back that follows must see the new table
+    return true;
+}
 bool Nvapi::SetMemOffsetMhz(unsigned gpu, int mhz) { return SetDeltaKhz(gpu, kOffMemDelta, mhz * 1000); }
 
 bool Nvapi::ResetOffsets(unsigned gpu) {

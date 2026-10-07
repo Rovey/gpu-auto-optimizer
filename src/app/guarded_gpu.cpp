@@ -148,6 +148,16 @@ bool GuardedGpu::Init(std::string* why) {
                 return inner_.read_fan ? inner_.read_fan() : std::optional<FanReading>();
             });
         };
+    if (in.read_vf_curve)
+        outer_.read_vf_curve = [this] {
+            return Call(std::optional<std::vector<VfPoint>>(), [this] {
+                return inner_.read_vf_curve ? inner_.read_vf_curve() : std::optional<std::vector<VfPoint>>();
+            });
+        };
+    if (in.write_vf_offsets)
+        outer_.write_vf_offsets = [this](const std::vector<VfOffset>& offsets) {
+            return Call(false, [&] { return inner_.write_vf_offsets && inner_.write_vf_offsets(offsets); });
+        };
     outer_.recover = [this] { return Recover(); };
     return true;
 }

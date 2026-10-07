@@ -1,0 +1,82 @@
+#pragma once
+#include "core/types.hpp"
+#include <cstddef>
+#include <string>
+#include <vector>
+
+namespace gao {
+
+// The card's voltage/frequency curve: for each voltage the clock generator
+// may use, the frequency the card runs there. The driver lets a program add
+// an offset to each point; the voltages themselves cannot be written. An
+// undervolt is therefore a shape: one point (the anchor) is raised to the
+// wanted frequency, and no point above it runs more than that, so the card
+// has no reason to ask for more voltage than the anchor's ("flat top").
+// Points below the anchor keep the built-in curve, so the card clocks down
+// at idle as it always did. No voltage lock is set: the lock call hard-froze
+// the reference RTX 4070 in the project's Python days.
+
+// The three driver buffers this is read from (NVAPI ClockBoostMask, VFP
+// curve, ClockBoostTable). Not documented by NVIDIA; sizes and offsets are
+// the ones the project's Python implementation read real curves with
+// (src/backends/nvapi_vfcurve.py, tag v0.9-python).
+inline constexpr std::size_t kVfMaskSize = 6188;
+inline constexpr std::size_t kVfStatusSize = 7208;
+inline constexpr std::size_t kVfControlSize = 9248;
+// Bytes [kVfHeaderBegin, kVfEntries) of the mask answer say which slots
+// exist; the other two requests carry a copy of them.
+inline constexpr std::size_t kVfHeaderBegin = 4;
+inline constexpr std::size_t kVfEntries = 68;        // where the per-slot entries start, in all three
+inline constexpr std::size_t kVfMaskEntry = 24;      // uint32 clock domain, uint8 enabled at +4
+inline constexpr std::size_t kVfStatusEntry = 28;    // uint32 kHz at +4, uint32 microvolts at +8
+inline constexpr std::size_t kVfControlEntry = 36;   // int32 raw offset at +kVfControlOffset
+inline constexpr std::size_t kVfControlOffset = 20;
+inline constexpr int kVfSlots = 255;
+inline constexpr unsigned kVfDomainGraphics = 0;
+
+// The enabled points of the graphics clock, lowest voltage first.
+std::vector<VfPoint> parse_vf_curve(const unsigned char* mask, const unsigned char* status, const unsigned char* control);
+void put_vf_raw_offset(unsigned char* control, int index, int raw);
+
+// How close a point must read to its target. Cards quantise the clock in
+// steps of up to 15 MHz (RTX 50), so half a step is as close as a target
+// that lies between two steps can get.
+inline constexpr int kVfToleranceKhz = 8000;
+// The largest raise of a point this code writes. A sanity bound, not a
+// promise that it is stable: the search stops long before, at the first
+// candidate that fails.
+inline constexpr int kVfMaxRaiseKhz = 500000;
+// Write, read back, correct: at most this many rounds.
+inline constexpr int kVfPasses = 8;
+
+struct VfApplyResult {
+    bool ok = false;
+    std::string why;   // when !ok, including whether the curve is back at stock
+    int passes = 0;    // write rounds it took
+};
+
+// Writes a flat top: the point in slot `anchor_index` and every point above
+// it run freq_khz, the points below keep the built-in curve. The target must
+// lie between the anchor's own frequency and the highest the card runs by
+// itself (more is an overclock, not an undervolt).
+//
+// Nothing about the driver's offset units is assumed. The first write takes
+// them one to one, which can only fall short, never overshoot, if they are
+// stored larger; every round then reads the curve back and corrects by what
+// the card actually did. That also follows a built-in curve that shifts
+// with temperature. A card whose read-out does not show the change at all
+// cannot be verified and is refused.
+//
+// A curve that is not at stock is cleared first. Any failure clears the
+// curve again.
+VfApplyResult apply_flat_top(const GpuControl& gpu, int anchor_index, int freq_khz);
+
+// Every offset back to zero, verified by read-back. True without writing
+// when the curve already is at stock, or when the card has no curve calls.
+bool clear_vf_curve(const GpuControl& gpu, std::string* why);
+
+// The slot of the lowest-voltage point that runs at least freq_khz: where
+// the card reaches that frequency by itself. -1 when no point does.
+int stock_point_for(const std::vector<VfPoint>& curve, int freq_khz);
+
+}
