@@ -220,10 +220,12 @@ static int optimize(gao::Preset preset, const std::optional<gao::FanCurve>& fan_
                 r.baseline.score, r.baseline.avg_core_mhz, r.baseline.avg_mem_mhz, r.baseline.peak_temp_c, r.baseline.avg_power_w);
     std::printf("  after:  score=%.0f it/s  core=%d MHz  mem=%d MHz  peak=%d C  power=%d W\n",
                 r.soak.score, r.soak.avg_core_mhz, r.soak.avg_mem_mhz, r.soak.peak_temp_c, r.soak.avg_power_w);
-    if (out.saved) std::printf("Saved: `gao --apply` re-applies it, `gao --boot on` applies it at every logon.\n");
-    if (out.saved)
+    if (out.saved) {
+        std::printf("Saved: `gao --apply` re-applies it, `gao --boot on` applies it at every logon.\n");
         if (const std::string note = gao::app::update_logon_copy(); !note.empty()) std::printf("%s\n", note.c_str());
-    else std::printf("not saved: %s\n", out.save_note.c_str());
+    } else {
+        std::printf("not saved: %s\n", out.save_note.c_str());
+    }
     std::printf("Applied until reboot. `gao --reset` returns to stock.\n");
     return out.saved ? 0 : 2;   // 2: tuned and applied, but --apply and boot-apply cannot use it
 }
