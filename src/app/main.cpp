@@ -272,6 +272,35 @@ static int optimize(gao::Preset preset, const std::optional<gao::FanCurve>& fan_
     return out.saved ? 0 : 2;   // 2: tuned and applied, but --apply and boot-apply cannot use it
 }
 
+// A first version: finds the undervolt and leaves it applied; nothing is saved.
+static int undervolt() {
+    gao::app::OptimizeHooks hooks;
+    hooks.aborted = [] { return g_abort.load(); };
+    hooks.log = [](const std::string& msg) { std::printf("  %s\n", msg.c_str()); };
+    hooks.active_gpu = [](const gao::GpuControl* gpu) {
+        g_gpu = gpu;
+        SetConsoleCtrlHandler(OnConsoleCtrl, gpu ? TRUE : FALSE);
+    };
+    const auto out = gao::app::run_undervolt(hooks);
+    if (!out.ran) { std::printf("%s\n", out.error.c_str()); return 1; }
+    const gao::UndervoltResult& r = out.result;
+    if (!r.ok) {
+        std::printf("RESULT: not applied -- %s (%s)\n", r.reason.c_str(),
+                    r.stock_restored ? "card at stock" : "reset to stock FAILED, run `gao --reset`");
+        if (r.driver_resets > 0) std::printf("  driver resets during this run: %d\n", r.driver_resets);
+        return 1;
+    }
+    std::printf("RESULT: %d MHz at %d mV instead of %d mV (lowest stable %d mV, confirmed %d mV)\n", r.freq_khz / 1000,
+                r.applied_uv / 1000, r.stock_uv / 1000, r.edge_uv / 1000, r.confirmed_uv / 1000);
+    if (r.driver_resets > 0) std::printf("  driver resets during this run: %d\n", r.driver_resets);
+    std::printf("  before: score=%.0f it/s  core=%d MHz  peak=%d C  power=%d W\n", r.baseline.score, r.baseline.avg_core_mhz,
+                r.baseline.peak_temp_c, r.baseline.avg_power_w);
+    std::printf("  after:  score=%.0f it/s  core=%d MHz  peak=%d C  power=%d W\n", r.after.score, r.after.avg_core_mhz,
+                r.after.peak_temp_c, r.after.avg_power_w);
+    std::printf("Applied until a restart or `gao --reset`. Not saved: this first version does not keep it.\n");
+    return 0;
+}
+
 static int apply() {
     if (!gao::app::is_elevated()) { std::printf("--apply needs an elevated (administrator) shell\n"); return 1; }
     std::string why;
@@ -469,6 +498,7 @@ int main(int argc, char** argv) {
     }
     if (argc > 1 && std::strcmp(argv[1], "--status") == 0) return status();
     if (argc > 1 && std::strcmp(argv[1], "--curve") == 0) return curve();
+    if (argc > 1 && std::strcmp(argv[1], "--undervolt") == 0) return undervolt();
     if (argc > 1 && std::strcmp(argv[1], "--curve-flatten") == 0) {
         int mv = 0, mhz = 0;
         if (argc < 4 || !ParseIntArg(argv[2], &mv) || !ParseIntArg(argv[3], &mhz)) {
@@ -504,6 +534,7 @@ int main(int argc, char** argv) {
                 "            | --optimize [best|quiet|cool|max [--fan-curve silent|normal|cool|aggressive]]\n"
                 "            | --apply | --boot on|off | --fan auto | --status\n"
                 "            | --curve (prints the voltage/frequency curve; changes nothing)\n"
+                "            | --undervolt (first version: the stock load clock on the lowest stable voltage; not saved)\n"
                 "            | --curve-flatten <mV> <MHz> (the point at <mV> and all above it run <MHz>; --reset undoes it)\n"
                 "            | --update (installs the latest release into this folder, if there is a newer one)]\n");
     return argc > 1 ? 1 : 0;

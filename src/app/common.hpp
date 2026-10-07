@@ -8,6 +8,7 @@
 #include "core/objectives.hpp"
 #include "core/search.hpp"
 #include "core/types.hpp"
+#include "core/undervolt.hpp"
 #include "core/update.hpp"
 #include <functional>
 #include <optional>
@@ -75,6 +76,18 @@ struct OptimizeOutcome {
 // fan_curve: the curve to drive the fans with during the run and to save
 // as the tested curve; empty means the profile's own (default_curve).
 OptimizeOutcome run_optimize(Preset preset, const OptimizeHooks& hooks, const std::optional<FanCurve>& fan_curve = {});
+
+struct UndervoltOutcome {
+    bool ran = false;          // false: stopped before the search; `error` says why
+    std::string error;
+    UndervoltResult result;    // valid when ran
+};
+
+// gao --undervolt from start to end: state folder, drivers, journal, the
+// search (core/undervolt.hpp). Needs elevation. A first version: the result
+// stays applied until a reset or a restart and is not saved to the profile;
+// the NVIDIA driver keeps the fans.
+UndervoltOutcome run_undervolt(const OptimizeHooks& hooks);
 
 struct BootApplyOutcome {
     bool applied = false;
