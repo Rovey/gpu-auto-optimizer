@@ -64,19 +64,42 @@ int stock_point_for(const std::vector<VfPoint>& curve, int freq_khz) {
     return -1;
 }
 
+namespace {
+// Writes zero to every point. The return code of the write is not what
+// counts: the caller reads back.
+bool zero_curve(const GpuControl& gpu, const std::vector<VfPoint>& curve) {
+    std::vector<VfOffset> zero;
+    for (const VfPoint& p : curve) zero.push_back({p.index, 0});
+    return gpu.write_vf_offsets(zero);
+}
+
+bool has_shape(const std::vector<VfPoint>& curve) {
+    return std::any_of(curve.begin(), curve.end(), [&](const VfPoint& p) { return p.raw_offset != curve.front().raw_offset; });
+}
+}
+
 bool clear_vf_curve(const GpuControl& gpu, std::string* why) {
     auto fail = [&](const char* m) { if (why) *why = m; return false; };
     if (!gpu.read_vf_curve || !gpu.write_vf_offsets) return true;   // nothing this program could have written
     auto curve = gpu.read_vf_curve();
     if (!curve) return fail("the curve could not be read");
     if (at_stock(*curve)) return true;
-    std::vector<VfOffset> zero;
-    for (const VfPoint& p : *curve) zero.push_back({p.index, 0});
-    if (!gpu.write_vf_offsets(zero)) return fail("writing the curve failed");
+    const bool accepted = zero_curve(gpu, *curve);
     curve = gpu.read_vf_curve();
-    if (!curve) return fail("the curve could not be read back");
-    if (!at_stock(*curve)) return fail("the curve did not go back to stock");
+    if (!curve) return fail(accepted ? "the curve could not be read back" : "writing the curve failed");
+    if (!at_stock(*curve)) return fail(accepted ? "the curve did not go back to stock" : "writing the curve failed");
     return true;
+}
+
+bool remove_vf_shape(const GpuControl& gpu, std::string* why) {
+    if (!gpu.read_vf_curve || !gpu.write_vf_offsets) return true;
+    auto curve = gpu.read_vf_curve();
+    if (!curve || curve->empty() || !has_shape(*curve)) return true;
+    zero_curve(gpu, *curve);
+    curve = gpu.read_vf_curve();
+    if (curve && !curve->empty() && !has_shape(*curve)) return true;
+    if (why) *why = "the shape on the voltage/frequency curve could not be removed";
+    return false;
 }
 
 VfApplyResult apply_flat_top(const GpuControl& gpu, int anchor_index, int freq_khz) {
@@ -113,29 +136,29 @@ VfApplyResult apply_flat_top(const GpuControl& gpu, int anchor_index, int freq_k
     for (const VfPoint& p : *curve)
         if (p.volt_uv < anchor_uv) below.emplace_back(p.index, p.freq_khz);
 
-    // raw units per kHz: one to one until the card shows otherwise. Assuming
-    // too few can only fall short of the target; assuming too many would
-    // overshoot it, and an overshoot is the one thing this must never write.
-    double raw_per_khz = 1.0;
+    // What the plan asks of each point, from this read at stock, and with it
+    // the most that will ever be written there.
+    auto limit_raw = [&](int index) {
+        const VfPoint* built_in = find(*curve, index);
+        return std::max(0, freq_khz - (built_in ? built_in->freq_khz : freq_khz)) + kVfSlackKhz;
+    };
     std::vector<VfPoint> before = *curve;
     for (r.passes = 1; r.passes <= kVfPasses; ++r.passes) {
         std::vector<VfOffset> offsets;
         for (int index : tail) {
             const VfPoint* now = find(before, index);
             if (!now) return fail("a point disappeared from the curve");
-            // The first round raises a point only half of the way: should the
-            // card store offsets smaller than assumed, that lands on the
-            // target at worst, and the round after knows the units.
+            // The first round raises a point only half of the way: a card
+            // that moves further than asked lands on the target at worst.
+            // Lowering a point needs no such care.
             const int gap_khz = freq_khz - now->freq_khz;
-            const double share = r.passes == 1 && gap_khz > 0 ? 0.5 : 1.0;
-            offsets.push_back({index, now->raw_offset + static_cast<int>(std::lround(gap_khz * share * raw_per_khz))});
+            const int step_khz = r.passes == 1 && gap_khz > 0 ? gap_khz / 2 : gap_khz;
+            offsets.push_back({index, std::min(now->raw_offset + step_khz, limit_raw(index))});
         }
         if (!gpu.write_vf_offsets(offsets)) return fail("writing the curve failed");
         const auto after = gpu.read_vf_curve();
         if (!after) return fail("the curve could not be read back");
 
-        // What did the card do with it? The response of the points that were
-        // asked to move tells the units, and whether the read-out is live.
         long long asked = 0, moved = 0;
         bool reached = true;
         for (const VfOffset& o : offsets) {
@@ -152,18 +175,14 @@ VfApplyResult apply_flat_top(const GpuControl& gpu, int anchor_index, int freq_k
         }
         for (const auto& [index, base] : below) {
             const VfPoint* is = find(*after, index);
-            if (!is || std::abs(is->freq_khz - base) > 2 * 15000) return fail("a point below the anchor moved");
+            if (!is || std::abs(is->freq_khz - base) > kVfSlackKhz) return fail("a point below the anchor moved");
         }
         if (reached) {
             r.ok = true;
             return r;
         }
-        if (asked >= 4 * kVfToleranceKhz && moved * 20 < asked)
+        if (r.passes == 1 && asked >= 4 * kVfToleranceKhz && moved * 20 < asked)
             return fail("the card does not show the curve change in its read-out");
-        // Only a large move tells the units: a small correction on a card
-        // that quantises its clock can read back as no change at all.
-        if (asked >= 20 * kVfToleranceKhz && moved > 0)
-            raw_per_khz = std::clamp(static_cast<double>(asked) / static_cast<double>(moved), 0.5, 4.0);
         before = *after;
     }
     return fail("the curve did not settle on the target");

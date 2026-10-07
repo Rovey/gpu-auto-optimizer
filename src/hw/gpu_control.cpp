@@ -18,19 +18,17 @@ GpuControl make_gpu_control(Nvml& nvml, Nvapi& nvapi, unsigned gpu) {
     }
     c.read_vf_curve = [&nvapi, gpu] { return nvapi.ReadVfCurve(gpu); };
     c.write_vf_offsets = [&nvapi, gpu](const std::vector<VfOffset>& offsets) { return nvapi.WriteVfRawOffsets(gpu, offsets); };
-    // Stock = offsets 0, the built-in voltage/frequency curve and, where the
-    // card allows it, the default power limit. A curve that cannot be read
-    // (no administrator rights, or a card without one) is not one this
-    // program wrote, and does not fail the reset.
+    // Stock = the built-in voltage/frequency curve, offsets 0 and, where the
+    // card allows it, the default power limit. A plain core offset is the
+    // same offset on every point of the curve and goes with the offset reset,
+    // as it always did; only a shape (a flat top) is zeroed first, and only
+    // then does the curve add a write, or a way to fail, to a reset.
     c.reset_to_stock = [&nvapi, &nvml, gpu, power, read = c.read_vf_curve, write = c.write_vf_offsets] {
-        bool curve = true;
-        if (read()) {
-            GpuControl only_curve;
-            only_curve.read_vf_curve = read;
-            only_curve.write_vf_offsets = write;
-            std::string ignored;
-            curve = clear_vf_curve(only_curve, &ignored);
-        }
+        GpuControl only_curve;
+        only_curve.read_vf_curve = read;
+        only_curve.write_vf_offsets = write;
+        std::string ignored;
+        const bool curve = remove_vf_shape(only_curve, &ignored);
         const bool offsets = nvapi.ResetOffsets(gpu);
         return (power ? nvml.SetPowerLimitPct(gpu, 100) : true) && offsets && curve;
     };

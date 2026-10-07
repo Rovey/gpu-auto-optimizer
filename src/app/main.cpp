@@ -111,6 +111,12 @@ static int curve() {
 // Writes a flat top by hand: the point at or just above <mv> and every point
 // above it run <mhz>. For the hardware checks; `gao --reset` undoes it.
 static int curve_flatten(int mv, int mhz) {
+    const gao::app::TuningLock lock;
+    if (!lock.owned()) { std::printf("another optimize is already running (in the app or on the command line)\n"); return 1; }
+    // A running tray app would take the missing core offset for a driver
+    // reset and write its saved tune over the flat top: it is told to leave
+    // the card alone, as after `gao --reset`.
+    gao::app::tell_tray(gao::app::TrayNotice::StockByChoice);
     gao::Nvml nvml;
     gao::Nvapi nvapi;
     if (!nvml.Init()) { std::printf("NVML init failed: %s\n", nvml.Error().c_str()); return 1; }
@@ -135,7 +141,15 @@ static int reset() {
     gao::app::tell_tray(gao::app::TrayNotice::StockByChoice);
     gao::Nvapi nvapi;
     if (!nvapi.Init()) { std::printf("NVAPI init failed: %s\n", nvapi.Error().c_str()); return 1; }
-    bool ok = nvapi.ResetOffsets(kGpu);
+    // A flat top on the voltage/frequency curve first: the offset reset below
+    // is not known to remove one.
+    gao::GpuControl curve;
+    curve.read_vf_curve = [&nvapi] { return nvapi.ReadVfCurve(kGpu); };
+    curve.write_vf_offsets = [&nvapi](const std::vector<gao::VfOffset>& offsets) { return nvapi.WriteVfRawOffsets(kGpu, offsets); };
+    std::string why;
+    bool ok = gao::remove_vf_shape(curve, &why);
+    if (!ok) std::printf("curve: %s\n", why.c_str());
+    ok = nvapi.ResetOffsets(kGpu) && ok;
     const auto readback = nvapi.ReadOffsetsMhz(kGpu);
     std::printf("reset: requested core 0 MHz, mem 0 MHz\n");
     if (readback) std::printf("read back core %d MHz, mem %d MHz\n", readback->first, readback->second);
@@ -283,6 +297,9 @@ static int undervolt() {
         g_gpu = gpu;
         SetConsoleCtrlHandler(OnConsoleCtrl, gpu ? TRUE : FALSE);
     };
+    // As for --curve-flatten: a running tray app must not write its saved tune
+    // over the result.
+    gao::app::tell_tray(gao::app::TrayNotice::StockByChoice);
     const auto out = gao::app::run_undervolt(hooks);
     if (!out.ran) { std::printf("%s\n", out.error.c_str()); return 1; }
     const gao::UndervoltResult& r = out.result;

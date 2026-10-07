@@ -21,7 +21,10 @@ struct FakeCurve {
     std::vector<int> base_khz;   // the built-in curve
     std::vector<int> raw;        // offsets as stored
     double raw_per_khz = 1.0;    // 2.0: the driver stores offsets at twice their size
-    int bin_khz = 0;             // > 0: frequencies snap down to this grid
+    int bin_khz = 0;             // > 0: frequencies snap to this grid
+    bool round_nearest = false;  // snap to the nearest step instead of down
+    int min_raw = -2000000000;   // the lowest offset the driver stores; lower ones are clamped
+    bool report_failure = false; // writes go through, but the call says it failed
     bool live = true;            // false: the read-out never shows an offset
     bool write_ok = true;
     int writes_allowed = -1;     // >= 0: this many writes succeed, the rest fail
@@ -41,7 +44,7 @@ struct FakeCurve {
     int freq(std::size_t i) const {
         long long f = base_khz[i] + (writes ? drift_khz : 0);
         if (live) f += std::llround(raw[i] / raw_per_khz);
-        if (bin_khz > 0) f = f / bin_khz * bin_khz;
+        if (bin_khz > 0) f = (f + (round_nearest ? bin_khz / 2 : 0)) / bin_khz * bin_khz;
         return static_cast<int>(f);
     }
     GpuControl gpu() {
@@ -58,8 +61,8 @@ struct FakeCurve {
         g.write_vf_offsets = [this](const std::vector<VfOffset>& offsets) {
             if (!write_ok || (writes_allowed >= 0 && writes >= writes_allowed)) return false;
             ++writes;
-            for (const VfOffset& o : offsets) raw[static_cast<std::size_t>(o.index)] = o.raw;
-            return true;
+            for (const VfOffset& o : offsets) raw[static_cast<std::size_t>(o.index)] = std::max(o.raw, min_raw);
+            return !report_failure;
         };
         return g;
     }
@@ -114,17 +117,23 @@ TEST_CASE("a flat top: the anchor and every point above it run the target, the p
     CHECK(card.max_freq_seen == 3000000);   // nothing ever read above the built-in top
 }
 
-TEST_CASE("the write finds its own way when the driver stores offsets at twice their size") {
-    FakeCurve card;
-    card.raw_per_khz = 2.0;
-    const auto r = apply_flat_top(card.gpu(), 8, 2700000);
-    REQUIRE(r.ok);
-    CHECK(std::abs(card.freq(8) - 2700000) <= kVfToleranceKhz);
-    for (std::size_t i = 8; i < 16; ++i) CHECK(card.freq(i) <= 2700000 + kVfToleranceKhz);
-    // It assumed one to one first, so it came from below: the anchor never
-    // read above the target on the way.
-    CHECK(r.passes > 1);
-    CHECK(card.raw[8] > 400000);   // it took about twice the plain difference to get there
+TEST_CASE("a card that stores offsets in other units is refused, never overshot") {
+    // Twice the size: every round falls short, the rounds run out, the curve is cleared.
+    FakeCurve half;
+    half.raw_per_khz = 2.0;
+    const auto r = apply_flat_top(half.gpu(), 8, 2700000);
+    CHECK_FALSE(r.ok);
+    CHECK(r.why == "the curve did not settle on the target -- curve at stock");
+    CHECK(half.at_stock());
+
+    // Half the size: the card moves twice as far as asked. The first round
+    // only asks for half of the way, so the anchor lands on the target.
+    FakeCurve twice;
+    twice.raw_per_khz = 0.5;
+    const auto t = apply_flat_top(twice.gpu(), 8, 2700000);
+    REQUIRE(t.ok);
+    CHECK(twice.freq(8) == 2700000);
+    for (std::size_t i = 8; i < 16; ++i) CHECK(twice.freq(i) <= 2700000);
 }
 
 TEST_CASE("frequencies on a 15 MHz grid are accepted within half a step") {
@@ -248,25 +257,98 @@ TEST_CASE("stock_point_for finds where the card reaches a frequency by itself") 
     CHECK(stock_point_for(curve, 3100000) == -1);   // the card never runs that
 }
 
-TEST_CASE("no point ever reads above the target on the way, whatever the driver's units") {
-    for (double units : {0.5, 1.0, 2.0}) {
-        FakeCurve card;
-        card.raw_per_khz = units;
-        // Only the points that are raised: slots 8 to 11 run less than 2700 MHz by themselves.
-        int highest = 0;
-        GpuControl gpu = card.gpu();
-        const auto read = gpu.read_vf_curve;
-        gpu.read_vf_curve = [&]() {
-            auto curve = read();
-            if (curve)
-                for (const VfPoint& p : *curve)
-                    if (p.index >= 8 && p.index <= 11) highest = std::max(highest, p.freq_khz);
-            return curve;
-        };
-        const auto r = apply_flat_top(gpu, 8, 2700000);
-        CAPTURE(units);
-        REQUIRE(r.ok);
-        CHECK(highest <= 2700000 + kVfToleranceKhz);
-        CHECK(std::abs(card.freq(8) - 2700000) <= kVfToleranceKhz);
+TEST_CASE("no raised point ever reads above the target on the way, whatever the card does with the write") {
+    struct Quirk { double units; int bin; bool nearest; int min_raw; };
+    for (const Quirk& q : {Quirk{1.0, 0, false, -2000000000}, Quirk{0.5, 0, false, -2000000000}, Quirk{2.0, 0, false, -2000000000},
+                           Quirk{1.0, 15000, false, -2000000000}, Quirk{1.0, 15000, true, -2000000000},
+                           Quirk{1.0, 0, false, -100000}, Quirk{1.0, 15000, true, -100000}}) {
+        for (int anchor = 2; anchor <= 11; ++anchor) {   // raises from 1000 MHz down to 100 MHz... all refused or exact
+            FakeCurve card;
+            card.raw_per_khz = q.units;
+            card.bin_khz = q.bin;
+            card.round_nearest = q.nearest;
+            card.min_raw = q.min_raw;
+            int highest = 0;   // of the points the plan raises
+            GpuControl gpu = card.gpu();
+            const auto read = gpu.read_vf_curve;
+            gpu.read_vf_curve = [&]() {
+                auto curve = read();
+                if (curve)
+                    for (const VfPoint& p : *curve)
+                        if (p.index >= anchor && p.index <= 11) highest = std::max(highest, p.freq_khz);
+                return curve;
+            };
+            const auto r = apply_flat_top(gpu, anchor, 2700000);
+            CAPTURE(q.units);
+            CAPTURE(q.bin);
+            CAPTURE(q.min_raw);
+            CAPTURE(anchor);
+            CHECK(highest <= 2700000 + kVfToleranceKhz);
+            if (r.ok) CHECK(std::abs(card.freq(static_cast<std::size_t>(anchor)) - 2700000) <= kVfToleranceKhz);
+            else CHECK(card.at_stock());
+        }
     }
 }
+
+TEST_CASE("on a card that keeps the units and a 15 MHz grid, every anchor settles") {
+    for (bool nearest : {false, true}) {
+        for (int anchor = 8; anchor <= 11; ++anchor) {   // raises of about 400 MHz and less
+            FakeCurve card;
+            card.bin_khz = 15000;
+            card.round_nearest = nearest;
+            const auto r = apply_flat_top(card.gpu(), anchor, 2700000);
+            CAPTURE(nearest);
+            CAPTURE(anchor);
+            REQUIRE(r.ok);
+            CHECK(card.freq(static_cast<std::size_t>(anchor)) == 2700000);
+            CHECK(r.passes <= 2);
+        }
+    }
+}
+
+TEST_CASE("a driver that cannot lower the points above the anchor far enough: refused, at stock") {
+    FakeCurve card;
+    card.min_raw = -100000;   // slots 14 and 15 run 2900 and 3000 MHz and cannot come down to 2700
+    const auto r = apply_flat_top(card.gpu(), 8, 2700000);
+    CHECK_FALSE(r.ok);
+    CHECK(card.at_stock());
+}
+
+TEST_CASE("clearing the curve is judged by the read-back, not by what the write call says") {
+    FakeCurve card;
+    REQUIRE(apply_flat_top(card.gpu(), 8, 2700000).ok);
+    card.report_failure = true;   // the driver applies the write and reports an error, as the Python days saw
+    std::string why;
+    CHECK(clear_vf_curve(card.gpu(), &why));
+    CHECK(card.at_stock());
+}
+
+TEST_CASE("remove_vf_shape: a flat top is zeroed, a plain core offset is left to the offset reset") {
+    std::string why;
+    FakeCurve offset;   // core +135 MHz: the same offset on every point
+    for (int& r : offset.raw) r = 135000;
+    CHECK(remove_vf_shape(offset.gpu(), &why));
+    CHECK(offset.writes == 0);
+    CHECK(offset.raw[0] == 135000);
+
+    FakeCurve shaped;
+    REQUIRE(apply_flat_top(shaped.gpu(), 8, 2700000).ok);
+    const int writes = shaped.writes;
+    CHECK(remove_vf_shape(shaped.gpu(), &why));
+    CHECK(shaped.at_stock());
+    CHECK(shaped.writes == writes + 1);
+
+    FakeCurve stuck;    // a shape the driver will not let go of
+    stuck.raw[10] = 50000;
+    stuck.write_ok = false;
+    CHECK_FALSE(remove_vf_shape(stuck.gpu(), &why));
+
+    FakeCurve blind;    // a curve that cannot be read is not this program's doing
+    blind.raw[10] = 50000;
+    blind.read_ok = false;
+    CHECK(remove_vf_shape(blind.gpu(), &why));
+
+    GpuControl none;
+    CHECK(remove_vf_shape(none, &why));
+}
+

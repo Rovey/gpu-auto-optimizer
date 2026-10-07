@@ -45,11 +45,12 @@ UndervoltResult find_undervolt(const GpuControl& gpu, Journal& journal, const Un
         return r;   // nothing was touched
     }
     if (!to_stock()) return finish_fail("could not set the card to stock");
-    const auto stock = gpu.read_vf_curve();
-    if (!stock || stock->empty()) return finish_fail("the curve could not be read");
-    const std::vector<VfPoint>& curve = *stock;   // the built-in curve, lowest voltage first
-    if (std::any_of(curve.begin(), curve.end(), [](const VfPoint& p) { return p.raw_offset != 0; }))
-        return finish_fail("the curve did not go back to stock");
+    {   // before any load: a curve that cannot be read or is not at stock ends the run here
+        const auto first = gpu.read_vf_curve();
+        if (!first || first->empty()) return finish_fail("the curve could not be read");
+        if (std::any_of(first->begin(), first->end(), [](const VfPoint& p) { return p.raw_offset != 0; }))
+            return finish_fail("the curve did not go back to stock");
+    }
 
     log("baseline: 30 s at stock");
     r.baseline = io.probe(kUvBaselineS, max_temp_c, 0.0);
@@ -58,6 +59,11 @@ UndervoltResult find_undervolt(const GpuControl& gpu, Journal& journal, const Un
     if (r.baseline.verdict != Verdict::Stable)
         return finish_fail(std::string("the card is not stable at stock (") + verdict_name(r.baseline.verdict) + ")");
     if (r.baseline.avg_core_mhz <= 0 || r.baseline.score <= 0) return finish_fail("the card did not report its clock under load");
+    // Read now, with the card warm from the baseline: the built-in curve can
+    // sit a step lower hot than cold, and the candidates are counted on it.
+    const auto stock = gpu.read_vf_curve();
+    if (!stock || stock->empty()) return finish_fail("the curve could not be read");
+    const std::vector<VfPoint>& curve = *stock;   // the built-in curve, lowest voltage first
 
     // The clock to keep: the highest point of the curve that is not above
     // what the card ran. Its own position on the curve is where the descent
