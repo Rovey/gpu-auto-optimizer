@@ -66,6 +66,8 @@ add_library(core STATIC
   src/core/update.cpp
   src/core/vf_curve.hpp
   src/core/vf_curve.cpp
+  src/core/undervolt.hpp
+  src/core/undervolt.cpp
 )
 target_include_directories(core PUBLIC src)
 target_include_directories(core SYSTEM PRIVATE third_party)
@@ -144,6 +146,7 @@ add_executable(core_tests
   tests/test_fan_curve.cpp
   tests/test_update.cpp
   tests/test_vf_curve.cpp
+  tests/test_undervolt.cpp
 )
 target_link_libraries(core_tests PRIVATE core doctest gao_warnings)
 add_test(NAME core_tests COMMAND core_tests)

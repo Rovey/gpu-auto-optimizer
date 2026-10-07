@@ -7,13 +7,13 @@ namespace gao {
 
 namespace {
 struct Pending {
-    std::optional<int> core, mem;
+    std::optional<int> core, mem, uv;
 };
 
 // True when a clock of the entry is above stock: only then is there a
 // setting a later run can stay below.
 bool caps_anything(const Pending& p) {
-    return (p.core && *p.core > 0) || (p.mem && *p.mem > 0);
+    return (p.core && *p.core > 0) || (p.mem && *p.mem > 0) || (p.uv && *p.uv > 0);
 }
 
 std::string describe(const Pending& p) {
@@ -21,6 +21,7 @@ std::string describe(const Pending& p) {
     std::string s;
     if (p.core) s += "core +" + std::to_string(*p.core);
     if (p.mem) s += (s.empty() ? "" : " / ") + std::string("mem +") + std::to_string(*p.mem);
+    if (p.uv) s += (s.empty() ? "" : " / ") + std::string("undervolt +") + std::to_string(*p.uv);
     return s;
 }
 
@@ -55,11 +56,11 @@ Journal::Journal(const std::vector<std::string>& existing_lines, Append append)
         const auto id = int_field(j, "id");
         const auto state = j.find("state");
         if (!id || *id <= 0 || *id >= kMaxJournalId || state == j.end() || !state->is_string()) continue;
-        const auto core = int_field(j, "core"), mem = int_field(j, "mem");
+        const auto core = int_field(j, "core"), mem = int_field(j, "mem"), uv = int_field(j, "uv");
         auto sane = [](std::optional<int> v) { return !v || (*v >= 0 && *v <= kMaxClockMhz); };
-        if (!sane(core) || !sane(mem)) continue;
+        if (!sane(core) || !sane(mem) || !sane(uv)) continue;
         max_id = std::max(max_id, *id);
-        if (*state == "begin") pending[*id] = {core, mem};
+        if (*state == "begin") pending[*id] = {core, mem, uv};
         else if (*state == "complete") pending.erase(*id);
     }
     for (const auto& [id, p] : pending) {
@@ -67,16 +68,18 @@ Journal::Journal(const std::vector<std::string>& existing_lines, Append append)
         // "never search this clock", which no freeze at stock can justify.
         if (p.core && *p.core > 0) ceilings_.core_mhz = std::min(ceilings_.core_mhz, *p.core);
         if (p.mem && *p.mem > 0) ceilings_.mem_mhz = std::min(ceilings_.mem_mhz, *p.mem);
+        if (p.uv && *p.uv > 0) ceilings_.uv_mhz = std::min(ceilings_.uv_mhz, *p.uv);
         freezes_.push_back(describe(p));
         freeze_entries_.push_back({freezes_.back(), caps_anything(p)});
     }
     next_id_ = max_id + 1;
 }
 
-int Journal::begin(std::optional<int> core, std::optional<int> mem) {
+int Journal::begin(std::optional<int> core, std::optional<int> mem, std::optional<int> uv) {
     nlohmann::json j = {{"id", next_id_}, {"state", "begin"}};
     if (core) j["core"] = *core;
     if (mem) j["mem"] = *mem;
+    if (uv) j["uv"] = *uv;
     if (!write(j.dump())) return -1;
     open_id_ = next_id_;
     return next_id_++;
