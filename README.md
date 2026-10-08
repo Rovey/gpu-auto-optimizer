@@ -4,7 +4,7 @@
 
 # GPU Auto Optimizer
 
-**Finds the fastest settings your NVIDIA graphics card is stable at, and keeps them applied.**
+**One click tunes your NVIDIA graphics card: a little faster, on less power, with quieter fans.<br>Then it keeps it that way. You do not have to think about it again.**
 
 [![Release](https://img.shields.io/github/v/release/Rovey/gpu-auto-optimizer?color=2f6fd6)](https://github.com/Rovey/gpu-auto-optimizer/releases/latest)
 [![CI](https://github.com/Rovey/gpu-auto-optimizer/actions/workflows/ci.yml/badge.svg)](https://github.com/Rovey/gpu-auto-optimizer/actions/workflows/ci.yml)
@@ -12,28 +12,67 @@
 ![Windows 10 | 11](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4)
 ![NVIDIA](https://img.shields.io/badge/NVIDIA-Pascal%2B-76B900?logo=nvidia&logoColor=white)
 
-[**Download**](https://github.com/Rovey/gpu-auto-optimizer/releases/latest) · [How it works](#how-it-works) · [Command line](#command-line) · [FAQ](#faq)
+[**Download**](https://github.com/Rovey/gpu-auto-optimizer/releases/latest) · [What one click does](#one-click-then-nothing) · [How it works](#how-it-works) · [Command line](#command-line) · [FAQ](#faq)
+
+<img src="docs/images/hero.svg" width="860" alt="One click on the reference RTX 4070: 1.6 % more speed on 8 % less power, with the fans at 62 % instead of 73 %. Best of my GPU alone: 4.5 % more speed. Undervolt alone: 20 % less power, 8 °C cooler.">
 
 <img src="docs/images/dashboard.png" width="860" alt="The GPU Auto Optimizer dashboard: live telemetry, the current tuning, the profiles and the log">
 
 </div>
 
-## What it does
+## One click, then nothing
 
-GPU Auto Optimizer tunes the **power limit** and the **core and memory clock offsets** of an NVIDIA card. It stress-tests every candidate setting and keeps the highest one that computes correct results, then backs off by a safety margin. You pick a goal and press one button; a run takes about a quarter of an hour. It can also **undervolt**: keep the speed the card has at stock and find the lowest voltage that holds it.
+1. **You press one button.** **Optimize GPU**, with **All in one** already selected. There are no values to enter and nothing to read up on. In about 35 minutes the app measures your card at stock, finds its overclock, puts an undervolt on top of it, measures the quietest fan curve that keeps it cool, and tests the result as a whole for five minutes.
+2. **It shows you what you got.** Your card at stock next to your card now: score, power, temperature and fan speed, each measured for five minutes.
+3. **It stays that way.** From then on the result is applied at every logon; the run switches that on itself, and one tick declines it. The tray app puts the tune back within half a minute after a driver reset, runs the fan curve, and says so with one quiet line when a new version is out.
 
-- **All in one:** one button that overclocks, undervolts on top of that and tunes the fans, and then shows what the card did at stock next to what it does now.
-- **Four clock profiles and an undervolt:** Best of my GPU, Cool & efficient, Quiet and Max performance, or the same speed on less voltage.
-- **You see what it does:** during a run the window draws the card's voltage/frequency curve as the run writes it, over the card's own.
-- **Verified, not trusted:** every value written to the driver is read back and checked, and a failed apply ends at stock.
-- **Crash-proof search:** a journal on disk records each candidate before it is tried, so a setting that froze the machine is never tried again.
-- **Stays applied:** the tray app re-applies the tune at every logon, and within about half a minute after a driver reset (TDR).
-- **Fan curves:** Silent, Normal, Cool or Aggressive with any profile, or your own; fans stop at idle without cycling on and off, the app learns the lowest speed your fans can actually hold, and the fans go back to the driver on exit, sleep, logoff and crashes.
-- **Plays fair:** if MSI Afterburner or another tool changes the settings, it steps aside instead of fighting over them.
-- **Updates itself:** a quiet line at the bottom left says when a new version is out; one click downloads it, checks it and restarts the app. Nothing pops up, and nothing is installed without that click.
+It cannot leave you worse off than stock:
+
+- **Verified, not trusted.** Every value written to the driver is read back and checked, and a failed apply ends at stock.
+- **A crash is remembered.** A journal on disk records each setting before it is tried, so one that froze the machine is never tried again.
+- **It gives up before you have to.** Three logons in a row that crash switch apply-at-logon off; four driver resets within an hour with the tune applied put the card back at stock.
+- **It plays fair.** If MSI Afterburner or another tool changes the settings, it steps aside instead of fighting over them.
+
+The one time it asks for you again is after a driver update: a tune belongs to the driver it was tested on, so the app does not apply it, says so, and one more click tunes the card for the new driver.
+
+What else is in it:
+
+- **Five more profiles** for when you want one thing only: Best of my GPU, Cool & efficient, Quiet, Max performance and Undervolt.
+- **You see what it does:** during a run the window draws the card's voltage/frequency curve as the run writes it, over the card's own, and counts every long measurement down.
+- **Fan curves:** the measured one, Silent, Normal, Cool or Aggressive, or your own; fans stop at idle without cycling on and off, the app learns the lowest speed your fans can actually hold, and the fans go back to the driver on exit, sleep, logoff and crashes.
 - **Native and small:** two C++ programs, under 2 MB together, with no installer, no runtime and no driver or service.
 
-## One click, +4.5 % performance, with a safety margin
+## What one click gave on the reference card
+
+<div align="center">
+
+<img src="docs/images/all-in-one-result.png" width="860" alt="The result screen of an All in one run on the reference RTX 4070: core +135 MHz, memory +1500 MHz, power limit 105 %, 2850 MHz at 1035 mV, fans 52 % at 70 °C; score 5728 to 5820 iterations per second, power 196 to 180 watts, fan speed 73 to 62 percent">
+
+</div>
+
+**All in one** is the default: it overclocks, undervolts on top of that, measures the quietest fan curve and tests the whole for five minutes. One run on the reference card, both columns five minutes of full load:
+
+| | Stock | After one click |
+|---|---|---|
+| Stress-test score | 5728 it/s | **5820 it/s (+1.6 %)** |
+| Power under load | 196 W | **180 W (−8.2 %)** |
+| Fan speed | 73 % | **62 %** |
+| Temperature | 67 °C | 71 °C |
+| Core clock under load | 2789 MHz | 2835 MHz |
+| Memory clock under load | 10495 MHz | 12000 MHz |
+
+A little faster, on less power, with slower fans. The card is warmer because the fans are allowed to be: the fan tune aims for 70 °C, 5 °C under the profile's limit, and found that 52 % holds it. With the NVIDIA driver's own fan curve the same settings ran at 63 °C on 176 W. The run took 34 minutes. A second run gave 0.9 % more score on 10.8 % less power, with the fans at 55 %.
+
+The gains are smaller than those of the two sections below, and that is the point of it. An overclock and an undervolt do not add up: an overclock moves the whole voltage/frequency curve, so at every clock the card already runs on less voltage, and with the same safety margin there is nothing left to take off. They are two ends of one line. All in one takes the middle, where the card beats stock on both counts; **Best of my GPU** and **Undervolt** are the ends.
+
+<div align="center">
+<img src="docs/images/all-in-one-run.png" width="860" alt="An All in one run in its third step: the overclock's curve above the card's own, cut off flat at 2850 MHz, with the countdown of the soak above it">
+</div>
+
+> [!NOTE]
+> Close games and other programs that use the graphics card before a run. In an earlier run an emulator on 11 % of the card cost 6 % of the score; the run now says so when its final test does not match the step before it. The logs are in [docs/hardware-checks.md](docs/hardware-checks.md) (checks 75 and 76).
+
+## All of the speed instead: +4.5 % performance
 
 <div align="center">
 
@@ -55,7 +94,7 @@ The search raised each clock until the card computed a wrong value (core +225 MH
 > [!NOTE]
 > The score is the app's own stress test, a DirectX 11 compute load. Games gain a different amount, and every card has its own limits. The log of this run is in [docs/hardware-checks.md](docs/hardware-checks.md) (check 52, fourth run).
 
-## Or almost the same speed on 20 % less power
+## All of the saving instead: 20 % less power at almost the same speed
 
 <div align="center">
 
@@ -79,42 +118,12 @@ Both columns are five minutes of full load, so the card is heated through on bot
 > [!NOTE]
 > An undervolt is saved in place of an overclock, not next to it, so this is the other choice, not an extra. Every card has its own limits. The log of this run is in [docs/hardware-checks.md](docs/hardware-checks.md) (check 72).
 
-## Or everything in one click: All in one
-
-<div align="center">
-
-<img src="docs/images/all-in-one-result.png" width="860" alt="The result screen of an All in one run on the reference RTX 4070: core +135 MHz, memory +1500 MHz, power limit 105 %, 2850 MHz at 1035 mV, fans 52 % at 70 °C; score 5728 to 5820 iterations per second, power 196 to 180 watts, fan speed 73 to 62 percent">
-
-</div>
-
-**All in one** is the default: it overclocks, undervolts on top of that, measures the quietest fan curve and tests the whole for five minutes. One run on the reference card, both columns five minutes of full load:
-
-| | Stock | After one click |
-|---|---|---|
-| Stress-test score | 5728 it/s | **5820 it/s (+1.6 %)** |
-| Power under load | 196 W | **180 W (−8.2 %)** |
-| Fan speed | 73 % | **62 %** |
-| Temperature | 67 °C | 71 °C |
-| Core clock under load | 2789 MHz | 2835 MHz |
-| Memory clock under load | 10495 MHz | 12000 MHz |
-
-A little faster, on less power, with slower fans. The card is warmer because the fans are allowed to be: the fan tune aims for 70 °C, 5 °C under the profile's limit, and found that 52 % holds it. With the NVIDIA driver's own fan curve the same settings ran at 63 °C on 176 W. The run took 34 minutes. A second run gave 0.9 % more score on 10.8 % less power, with the fans at 55 %.
-
-The gains are smaller than those of the two sections above, and that is the point of it. An overclock and an undervolt do not add up: an overclock moves the whole voltage/frequency curve, so at every clock the card already runs on less voltage, and with the same safety margin there is nothing left to take off. They are two ends of one line. All in one takes the middle, where the card beats stock on both counts; **Best of my GPU** and **Undervolt** are the ends.
-
-<div align="center">
-<img src="docs/images/all-in-one-run.png" width="860" alt="An All in one run in its third step: the overclock's curve above the card's own, cut off flat at 2850 MHz, with the countdown of the soak above it">
-</div>
-
-> [!NOTE]
-> Close games and other programs that use the graphics card before a run. In an earlier run an emulator on 11 % of the card cost 6 % of the score; the run now says so when its final test does not match the step before it. The logs are in [docs/hardware-checks.md](docs/hardware-checks.md) (checks 75 and 76).
-
 ## Quick start
 
 1. Download `GpuAutoOptimizer-<version>-win-x64.zip` from the [latest release](https://github.com/Rovey/gpu-auto-optimizer/releases/latest) and unzip it anywhere.
 2. Start **`GpuAutoOptimizer.exe`**.
 3. Open **Optimize** and press **Optimize GPU**: **All in one** is selected, and you can pick another profile first. Close games and other programs that use the graphics card before you do. The app asks for administrator rights, because it changes clocks and power limits.
-4. When the run is done, turn on **Apply at logon** to keep the result after a restart.
+4. That is all. When the run is done the result is applied, saved, and kept at every logon. Untick **Keep the result applied at every logon** before the run if you only want to try it.
 
 > [!NOTE]
 > The executables are not code-signed yet, so Windows SmartScreen may warn on the first start. Choose **More info**, then **Run anyway**. To check the download first:
@@ -123,7 +132,7 @@ The gains are smaller than those of the two sections above, and that is the poin
 > gh attestation verify .\GpuAutoOptimizer-<version>-win-x64.zip --repo Rovey/gpu-auto-optimizer
 > ```
 
-Turning on **Apply at logon** copies the app to `%ProgramFiles%\GpuAutoOptimizer\`, so the unzipped folder can be deleted afterwards.
+Keeping the result applied copies the app to `%ProgramFiles%\GpuAutoOptimizer\` and starts it in the tray at logon, so the unzipped folder can be deleted afterwards. **Apply at logon** on the dashboard switches it off again.
 
 ## Requirements
 

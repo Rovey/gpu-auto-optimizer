@@ -846,6 +846,9 @@ void on_telemetry() {
             g.watch_reset = false;   // the search's own resets are not the result's
         }
         refresh_status(false);
+        // One click is all of it: a result that was saved is kept at every
+        // logon without another click, unless that was unticked.
+        if (snap.kept() && g.ui.keep_at_logon && !g.ui.boot_on) act_boot(true);
     }
     g.worker_was_running = running;
 }

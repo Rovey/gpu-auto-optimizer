@@ -771,6 +771,14 @@ void choose(UiState& s, const UiActions& act) {
     dim("Abort restores stock at any time. A setting that crashes the machine is never tried again.");
     dim("Close games and other programs that use the graphics card first: they change what the run measures.");
     ImGui::EndGroup();
+    // One click is all of it: the result is kept at every logon without
+    // another one. Shown while that is still off, so that it can be declined.
+    if (s.elevated && !s.boot_on) {
+        ImGui::Spacing();
+        ImGui::Checkbox("Keep the result applied at every logon", &s.keep_at_logon);
+        ImGui::SameLine(0, em());
+        dim("Copies the app to Program Files and starts it in the tray at logon.");
+    }
     end_card();
 }
 
@@ -1067,7 +1075,8 @@ void results(UiState& s, const OptimizeWorker::Snapshot& run, const UiActions& a
     if (applied) {
         const bool saved = run.all_in_one ? run.all_in_one->ok : run.undervolt ? run.undervolt->saved : run.outcome->saved;
         ImGui::Spacing();
-        if (saved) wrapped(kText, "Saved. It stays applied until reboot; turn on apply at logon to keep it.");
+        if (saved && s.boot_on) wrapped(kText, "Saved, and applied at every logon from now on. There is nothing left to do.");
+        else if (saved) wrapped(kText, "Saved. It stays applied until reboot; turn on apply at logon to keep it.");
         else wrapped(kWarn, "Not saved: " + (run.undervolt ? run.undervolt->save_note : run.outcome ? run.outcome->save_note : std::string()));
         if (saved && !s.boot_on && primary_button("Apply at every logon")) act.set_boot(true);
         if (saved && !s.boot_on) ImGui::SameLine();

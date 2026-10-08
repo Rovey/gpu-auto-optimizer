@@ -74,6 +74,9 @@ struct UiState {
     bool update_busy = false;     // it is being downloaded and installed
     std::string update_error;     // why the last attempt failed
     bool update_check = true;     // look for a new release when the app starts
+    // One click is to be all of it: a run that ends saved also switches
+    // apply-at-logon on, unless this is unticked on the Optimize page.
+    bool keep_at_logon = true;
 };
 
 struct UiActions {
