@@ -3,6 +3,7 @@
 #include "core/fan_curve.hpp"
 #include "core/config.hpp"
 #include "core/types.hpp"
+#include "core/vf_curve.hpp"
 #include <deque>
 #include <functional>
 #include <optional>
@@ -39,6 +40,9 @@ struct UiState {
     bool profile_driver_ok = false;
     bool profile_gpu_ok = false;
     std::optional<AppliedState> applied;
+    // The voltage/frequency curve seen from the saved undervolt. Empty: no
+    // undervolt is saved, or the curve could not be read.
+    std::optional<CurveState> curve;
     bool boot_on = false;
     int strikes = 0;
     std::vector<std::string> boot_log;   // the last lines of boot.log, oldest first

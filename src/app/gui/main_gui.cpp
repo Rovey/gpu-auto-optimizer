@@ -116,6 +116,7 @@ struct App {
     std::unique_ptr<gao::gui::OptimizeWorker> worker;
     gao::Watchdog watchdog;
     bool watch = false;   // keep the saved tune applied (off after a revert or a reset by choice)
+    bool watch_reset = false;   // a driver reset was seen since the watchdog last looked
     bool worker_was_running = false;
     bool strike_pending = false;   // a logon apply whose 2-minute grace has not passed yet
     std::unique_ptr<gao::FanDriver> fan;   // while the curve drives the fans
@@ -442,6 +443,15 @@ void fan_sync() {
     g.fan = std::make_unique<gao::FanDriver>(g.gpu, *curve, g.ui.fan_max_temp_c, g.ui.fan_min_pct);
 }
 
+// The curve as the saved undervolt sees it; empty without one, or when it
+// cannot be read. Reading needs no administrator rights.
+std::optional<gao::CurveState> read_curve_state(const gao::Config& cfg) {
+    if (!cfg.profile || !cfg.profile->undervolt || !g.gpu.read_vf_curve) return std::nullopt;
+    const auto points = g.gpu.read_vf_curve();
+    if (!points) return std::nullopt;
+    return gao::curve_state(*points, cfg.profile->undervolt->volt_uv);
+}
+
 void refresh_status(bool with_task) {
     g.ui.elevated = gao::app::is_elevated();
     const gao::Config cfg = gao::app::load_config();
@@ -455,6 +465,8 @@ void refresh_status(bool with_task) {
         g.ui.profile_gpu_ok = cfg.profile && !gpu_id.empty() && gpu_id == cfg.profile->gpu;
     }
     if (g.gpu.read_applied) g.ui.applied = g.gpu.read_applied();
+    // Not under a running search: it writes the curve from its own thread.
+    if (!(g.worker && g.worker->running()) && !gao::app::tuning_in_progress()) g.ui.curve = read_curve_state(cfg);
     const auto log = gao::read_lines(gao::boot_log_path());
     g.ui.boot_log.clear();
     if (log) g.ui.boot_log.assign(log->size() > 200 ? log->end() - 200 : log->begin(), log->end());
@@ -764,6 +776,7 @@ void on_telemetry() {
     const bool reset = g.driver_reset;
     g.driver_reset = false;
     if (reset) g.device_lost = true;
+    if (reset) g.watch_reset = true;   // for the watchdog: a reset with the tune applied counts against it
     if (g.device_lost && GetTickCount64() >= g.recover_at) recover_device();
     // A device that is still there 30 s after it was built ends the run of
     // failures. Only recover_device() clears g.device_lost, so not lost now
@@ -809,6 +822,7 @@ void on_telemetry() {
         if (snap.outcome && snap.outcome->ran) {
             g.watch = snap.outcome->result.ok && snap.outcome->saved;
             g.watchdog = gao::Watchdog();
+            g.watch_reset = false;   // the search's own resets are not the result's
         }
         refresh_status(false);
     }
@@ -816,8 +830,15 @@ void on_telemetry() {
 }
 
 void on_watchdog() {
-    // Never under a running search -- ours, or gao --optimize in a shell.
-    if (!g.watch || g.worker->running() || gao::app::tuning_in_progress()) return;
+    // Never under a running search -- ours, or gao --optimize in a shell. A
+    // search resets the driver on purpose: those resets say nothing about
+    // the saved tune.
+    if (!g.watch || g.worker->running() || gao::app::tuning_in_progress()) {
+        g.watch_reset = false;
+        return;
+    }
+    // Right after a driver reset the libraries are not back yet: the reset
+    // that was seen waits for the tick that can look at the card.
     if (!g.ui.elevated || !g.nvml_ok || !g.nvapi_ok) return;
     const gao::Config cfg = gao::app::load_config();
     if (!cfg.profile) return;
@@ -826,9 +847,13 @@ void on_watchdog() {
         hw_lost();
         return;
     }
+    g.ui.curve = read_curve_state(cfg);
+    const bool driver_reset = g.watch_reset;
+    g.watch_reset = false;
     const std::string driver = g.nvml->DriverVersion(), gpu_id = g.nvml->GpuUuid(kGpu);
     const auto action = g.watchdog.check(*cfg.profile, applied, !driver.empty() && driver == cfg.profile->driver,
-                                         !gpu_id.empty() && gpu_id == cfg.profile->gpu, std::chrono::steady_clock::now());
+                                         !gpu_id.empty() && gpu_id == cfg.profile->gpu, std::chrono::steady_clock::now(),
+                                         g.ui.curve, driver_reset);
     switch (action) {
         case gao::WatchAction::None: return;
         case gao::WatchAction::Reapply: {
@@ -842,12 +867,19 @@ void on_watchdog() {
             }
             break;
         }
-        case gao::WatchAction::GiveUpUnstable:
-            gao::app::boot_log("watchdog: reset 4 times within an hour; stopped re-applying");
-            notify("The tune keeps getting reset (4 times within an hour), which usually means it is not stable. "
-                   "Stopped re-applying it; optimize again.",
+        case gao::WatchAction::GiveUpUnstable: {
+            // The driver may have kept all or part of the tune: stock, not whatever is left.
+            const bool stock = g.gpu.reset_to_stock && g.gpu.reset_to_stock();
+            g.watch = false;
+            gao::app::boot_log(std::string("watchdog: 4 resets within an hour; stopped re-applying, ") +
+                               (stock ? "card at stock" : "reset to stock FAILED, run `gao --reset`"));
+            notify(std::string("The tune was reset, or the driver reset with it applied, 4 times within an hour, which usually "
+                               "means it is not stable. ") +
+                       (stock ? "The card is back at stock" : "Setting the card to stock FAILED (run gao --reset)") +
+                       " and the tune is not re-applied; optimize again.",
                    false);
             break;
+        }
         case gao::WatchAction::BackOffForeign:
             gao::app::boot_log("watchdog: another program changed the GPU settings; leaving them alone");
             notify("Another program (Afterburner, NVIDIA App...) changed the GPU settings. Leaving them alone.", false);
@@ -1126,8 +1158,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdline, int) {
     }
     // The copy before this one kept the tune applied; so does this one.
     if (resume && g.ui.elevated && g.ui.profile && g.ui.profile_driver_ok && g.ui.profile_gpu_ok && g.ui.applied &&
-        g.ui.applied->core_mhz == g.ui.profile->core_mhz && g.ui.applied->mem_mhz == g.ui.profile->mem_mhz &&
-        g.ui.applied->power_pct == g.ui.profile->power_pct)
+        gao::tune_applied(*g.ui.profile, *g.ui.applied, g.ui.curve))
         g.watch = true;
     // Apply-at-logon runs the copy in Program Files: keep it this version.
     if (g.ui.elevated) {

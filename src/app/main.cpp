@@ -297,9 +297,8 @@ static int undervolt() {
         g_gpu = gpu;
         SetConsoleCtrlHandler(OnConsoleCtrl, gpu ? TRUE : FALSE);
     };
-    // As for --curve-flatten: a running tray app must not write its saved tune
-    // over the result.
-    gao::app::tell_tray(gao::app::TrayNotice::StockByChoice);
+    // A running tray app holds off for the whole run (the tuning lock), as
+    // for --optimize, and afterwards finds the profile this run saved.
     const auto out = gao::app::run_undervolt(hooks);
     if (!out.ran) { std::printf("%s\n", out.error.c_str()); return 1; }
     const gao::UndervoltResult& r = out.result;
