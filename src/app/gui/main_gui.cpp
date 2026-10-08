@@ -17,6 +17,7 @@
 #include "app/gui/worker.hpp"
 #include "core/boot.hpp"
 #include "core/fan_curve.hpp"
+#include "core/fan_tune.hpp"
 #include "core/version.hpp"
 #include "core/watchdog.hpp"
 #include "hw/app_files.hpp"
@@ -825,6 +826,16 @@ void on_telemetry() {
     tray_icon(NIM_MODIFY, tip);
     // A finished optimize run: its result is applied, so watch it from now on.
     const bool running = g.worker->running();
+    // For the fan tile: during a run the card says who has the fans, and the
+    // run says whether it is measuring them.
+    g.ui.run_active = running;
+    g.ui.run_tunes_fans = false;
+    g.ui.fan_manual.reset();
+    if (running) {
+        g.ui.run_tunes_fans = gao::is_fan_tune_measurement(g.worker->snapshot().measuring);
+        if (g.gpu.read_fan)
+            if (const auto fan = g.gpu.read_fan()) g.ui.fan_manual = fan->manual;
+    }
     if (g.worker_was_running && !running) {
         const auto snap = g.worker->snapshot();
         // A run that never started left the GPU alone: keep watching as before.

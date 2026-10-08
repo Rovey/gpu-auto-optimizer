@@ -96,6 +96,11 @@ TEST_CASE("tune_fan: a speed is judged when the temperature has settled, not bef
     // Every look is 15 s; no speed got fewer than four unless it was clearly too warm.
     CHECK(card.probes >= 4 * 4);
     CHECK(std::find(card.measuring.begin(), card.measuring.end(), "Fan speed 65 %: waiting for the temperature to settle") != card.measuring.end());
+    // What the window knows the fan tune by: every announcement of it starts the same way.
+    for (const std::string& m : card.measuring)
+        if (!m.empty()) CHECK(is_fan_tune_measurement(m));
+    CHECK_FALSE(is_fan_tune_measurement("Measuring the card at stock"));
+    CHECK_FALSE(is_fan_tune_measurement(""));
     CHECK(card.measuring.back().empty());
 }
 

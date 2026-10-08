@@ -234,10 +234,10 @@ void telemetry_tiles(const UiState& s) {
     ImGui::SameLine();
     tile("power", kIconPower, "Power", reading(t.power_w, "") + " / " + reading(t.power_limit_w, " W"), w, h);
     ImGui::SameLine();
-    const char* mode = s.fan_state.mode == FanMode::Curve     ? " (curve)"
-                       : s.fan_state.mode == FanMode::Foreign ? " (other program)"
-                       : s.fan_control && s.fan_available     ? " (driver)"
-                                                              : "";
+    // Who has the fans: the app's curve, the NVIDIA driver, another program,
+    // or, during a run, the run itself (its curve, or its fan measurement).
+    const char* mode = fan_owner_label(
+        fan_owner(s.fan_state.mode, s.fan_control && s.fan_available, s.run_active, s.run_tunes_fans, s.fan_manual));
     tile("fan", kIconFan, "Fan speed", reading(t.fan_pct, " %") + mode, w, h);
 }
 

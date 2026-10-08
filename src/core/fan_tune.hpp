@@ -32,6 +32,11 @@ inline constexpr int kFanTuneSettleSlices = 4;
 inline constexpr int kFanTuneMaxSlices = 12;
 inline constexpr int kFanTuneMarginC = 5;
 
+// What tune_fan announces while it waits at a speed starts with this; the
+// window knows the fan tune by it.
+inline constexpr char kFanTuneAnnounce[] = "Fan speed ";
+inline bool is_fan_tune_measurement(const std::string& what) { return what.rfind(kFanTuneAnnounce, 0) == 0; }
+
 struct FanTuneIo {
     Probe probe;                                    // one stress run, as in the searches
     std::function<bool()> aborted;

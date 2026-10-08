@@ -387,3 +387,35 @@ TEST_CASE("fans that stall even at 70 % go back to the driver") {
     CHECK(d.tick(35, 20, t).mode == FanMode::Failed);
     CHECK_FALSE(f.manual);
 }
+
+TEST_CASE("who has the fans, for the label next to the fan speed") {
+    // No run: what the app's own curve driver says, as before.
+    CHECK(fan_owner(FanMode::Curve, true, false, false, std::nullopt) == FanOwner::Curve);
+    CHECK(fan_owner(FanMode::Foreign, true, false, false, std::nullopt) == FanOwner::Other);
+    CHECK(fan_owner(FanMode::Driver, true, false, false, std::nullopt) == FanOwner::Driver);
+    CHECK(fan_owner(FanMode::Driver, false, false, false, std::nullopt) == FanOwner::Unknown);   // fan control is off or absent
+    // During a run the app's own driver is released and says nothing: the
+    // card does. A speed set by hand is the run's; while the run measures the
+    // fans it says so.
+    CHECK(fan_owner(FanMode::Driver, true, true, false, true) == FanOwner::Run);
+    CHECK(fan_owner(FanMode::Driver, true, true, true, true) == FanOwner::Measuring);
+    // The run left the fans to the NVIDIA driver (the undervolt search does), or handed them back.
+    CHECK(fan_owner(FanMode::Driver, true, true, false, false) == FanOwner::Driver);
+    CHECK(fan_owner(FanMode::Driver, true, true, true, false) == FanOwner::Driver);   // between two speeds of the tune
+    // The fans could not be read: no claim either way.
+    CHECK(fan_owner(FanMode::Driver, true, true, true, std::nullopt) == FanOwner::Unknown);
+    // A run on a card without fan control is still a run: the label follows the card, not the setting.
+    CHECK(fan_owner(FanMode::Driver, false, true, false, true) == FanOwner::Run);
+    // The run is over: back to what the app's own driver says.
+    CHECK(fan_owner(FanMode::Driver, true, false, true, true) == FanOwner::Driver);
+    CHECK(fan_owner(FanMode::Curve, true, false, true, true) == FanOwner::Curve);
+}
+
+TEST_CASE("every owner of the fans has its label") {
+    CHECK(std::string(fan_owner_label(FanOwner::Unknown)).empty());
+    CHECK(std::string(fan_owner_label(FanOwner::Driver)) == " (driver)");
+    CHECK(std::string(fan_owner_label(FanOwner::Curve)) == " (curve)");
+    CHECK(std::string(fan_owner_label(FanOwner::Other)) == " (other program)");
+    CHECK(std::string(fan_owner_label(FanOwner::Run)) == " (run)");
+    CHECK(std::string(fan_owner_label(FanOwner::Measuring)) == " (measuring)");
+}

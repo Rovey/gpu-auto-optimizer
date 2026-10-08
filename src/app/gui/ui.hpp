@@ -55,6 +55,13 @@ struct UiState {
     int fan_min_pct = 0;
     int fan_max_temp_c = 75;
     FanState fan_state;
+    // While a run from this window is under way the curve driver above is
+    // released and the run has the fans: what the card reports then (a
+    // speed set by hand or not; empty when it could not be read), and
+    // whether the run is measuring the fans right now.
+    bool run_active = false;
+    bool run_tunes_fans = false;
+    std::optional<bool> fan_manual;
     std::optional<FanPreset> optimize_fan;   // fan curve for the next run; empty: the profile's own
     // The voltage/frequency curve during a run from this window, read back
     // once a second: as the run last left it, and as it last read at stock.

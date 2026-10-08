@@ -43,7 +43,7 @@ FanTuneResult tune_fan(const GpuControl& gpu, const FanTuneIo& io, int limit_tem
     for (;;) {
         if (io.aborted && io.aborted()) return give_back("aborted");
         if (!gpu.set_fan_pct(speed)) return give_back("a fan speed did not verify");
-        if (io.measuring) io.measuring("Fan speed " + std::to_string(speed) + " %: waiting for the temperature to settle", kFanTuneSliceS * kFanTuneMaxSlices);
+        if (io.measuring) io.measuring(kFanTuneAnnounce + std::to_string(speed) + " %: waiting for the temperature to settle", kFanTuneSliceS * kFanTuneMaxSlices);
         std::vector<int> seen;
         bool too_hot = false;
         std::string failed;
