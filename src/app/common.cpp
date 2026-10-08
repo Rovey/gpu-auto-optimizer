@@ -330,6 +330,84 @@ OptimizeOutcome run_optimize(Preset preset, const OptimizeHooks& hooks, const st
     return out;
 }
 
+UndervoltOutcome run_undervolt(const OptimizeHooks& hooks) {
+    UndervoltOutcome out;
+    auto log = [&](const std::string& m) { if (hooks.log) hooks.log(m); };
+    auto fail = [&](const std::string& why) { out.error = why; return out; };
+    if (!is_elevated()) return fail("undervolting changes the card's voltage/frequency curve and needs administrator rights");
+    const TuningLock lock;
+    if (!lock.owned()) return fail("another optimize is already running (in the app or on the command line)");
+    std::string why;
+    if (!prepare_state(&why)) return fail(why);
+    GuardedGpu hw(kGpu);   // guarded driver calls and a reconnect, as in run_optimize
+    if (!hw.Init(&why)) return fail(why);
+    auto load = std::make_unique<Stress>();   // on the heap: left alone after an access violation
+    if (!load->Init()) return fail("stress init failed: " + load->Error());
+    const GpuControl& gpu = hw.control();
+
+    const auto path = journal_path();
+    if (path.empty()) return fail("the ProgramData folder could not be resolved; cannot keep the crash journal");
+    const auto lines = read_lines(path);
+    if (!lines) return fail("the crash journal " + path.string() + " exists but cannot be read; not tuning without it");
+    Journal journal(*lines, [&path](const std::string& l) { return append_line_durable(path, l); });
+    if (!append_line_durable(path, "{\"session\":\"" + now_text() + "\"}"))
+        return fail("cannot write the crash journal " + path.string() + "; not tuning without it");
+
+    struct KeepAwake {
+        KeepAwake() { SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED); }
+        ~KeepAwake() { SetThreadExecutionState(ES_CONTINUOUS); }
+    } keep_awake;
+    UndervoltIo io;
+    io.probe = [&](double seconds, int max_temp, double stall_below) {
+        return run_stability([&] { return load->Batch(); }, [&] { return gpu.read(); }, seconds, max_temp, hooks.aborted, stall_below);
+    };
+    io.aborted = hooks.aborted;
+    io.log = hooks.log;
+    io.rest = [&hooks](double seconds) {   // no load, no driver call; a stop request ends it within a quarter of a second
+        using namespace std::chrono;
+        const auto end = steady_clock::now() + duration_cast<steady_clock::duration>(duration<double>(std::min(seconds, 3600.0)));
+        for (;;) {
+            if (hooks.aborted && hooks.aborted()) return false;
+            const auto left_ms = duration_cast<milliseconds>(end - steady_clock::now()).count();
+            if (left_ms <= 0) return true;
+            Sleep(static_cast<DWORD>(left_ms < 250 ? left_ms : 250));
+        }
+    };
+    io.prepare_load = [&] {
+        if (load->Recreate()) return true;
+        log("the stress load could not be rebuilt: " + load->Error());
+        return false;
+    };
+
+    const Objectives obj = objectives_for(Preset::BestOfMyGpu);   // its temperature limit and margin
+    if (hooks.active_gpu) hooks.active_gpu(&gpu);
+    bool crashed = false;
+    try {
+        crashed = !guarded([&] { out.result = find_undervolt(gpu, journal, io, obj.max_temp_c, obj.perf_push); });
+    } catch (...) {   // never leave a candidate applied, whatever went wrong
+        if (hooks.active_gpu) hooks.active_gpu(nullptr);
+        if (gpu.reset_to_stock) gpu.reset_to_stock();
+        if (journal.open_id() >= 0) journal.complete(journal.open_id(), "CRASHED");
+        throw;
+    }
+    if (crashed) {
+        // As in run_optimize: the frames of the search were skipped, the load
+        // may be halfway through a D3D call and is left alone.
+        (void)load.release();
+        log("access violation during the search -- resetting the card to stock");
+        if (journal.open_id() >= 0 && !journal.complete(journal.open_id(), "CRASHED"))
+            log("warning: the crash journal entry could not be closed; later runs will stay below this candidate");
+        bool stock = gpu.reset_to_stock && gpu.reset_to_stock();
+        if (!stock && gpu.reset_to_stock && gpu.recover) stock = gpu.recover() && gpu.reset_to_stock();
+        out.result = {};
+        out.result.reason = "access violation during the search";
+        out.result.stock_restored = stock;
+    }
+    if (hooks.active_gpu) hooks.active_gpu(nullptr);
+    out.ran = true;
+    return out;
+}
+
 BootApplyOutcome apply_at_logon() {
     BootApplyOutcome out;
     auto done = [&](const std::string& msg) { out.message = msg; boot_log(msg); return out; };

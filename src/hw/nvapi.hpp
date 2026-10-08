@@ -27,6 +27,15 @@ public:
     // The range the driver accepts for each offset, from the same buffer.
     std::optional<ClockOffsetRanges> ReadOffsetRangesMhz(unsigned gpu);
 
+    // The voltage/frequency curve of the graphics clock (core/vf_curve.hpp),
+    // through three more undocumented calls. Reading may need administrator
+    // rights. nullopt when a call fails or the card reports no points.
+    std::optional<std::vector<VfPoint>> ReadVfCurve(unsigned gpu);
+    // Sets the raw offsets of the named slots and leaves the others as they
+    // are. True when the driver accepted the call; what the card did with it
+    // is for the caller to read back (apply_flat_top does).
+    bool WriteVfRawOffsets(unsigned gpu, const std::vector<VfOffset>& offsets);
+
     const std::string& Error() const { return error_; }
 
 private:
@@ -36,6 +45,11 @@ private:
     bool SetDeltaKhz(unsigned gpu, int offset_bytes, int khz);
     // Fills buf (kBufferSize bytes) via NvAPI_GPU_GetPstates20.
     bool GetPstates20(unsigned gpu, unsigned char* buf);
+    // One of the curve calls: `buf` must carry its version word already.
+    bool VfCall(unsigned gpu, unsigned id, const char* name, unsigned char* buf);
+    // Fills the three curve buffers. fill_mask: ask for every slot instead of
+    // letting the driver say which exist.
+    bool ReadVfBuffers(unsigned gpu, bool fill_mask, unsigned char* mask, unsigned char* status, unsigned char* control);
     // Resolves gpu to a physical GPU handle from Init()'s enumeration, or
     // returns nullptr with error_ set (out of range, or Init() never ran).
     void* GpuHandle(unsigned gpu);

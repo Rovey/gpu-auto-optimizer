@@ -11,6 +11,9 @@ namespace gao {
 struct Ceilings {
     int core_mhz = INT_MAX;
     int mem_mhz = INT_MAX;
+    // For an undervolt: how far the anchor point runs above its built-in
+    // frequency (core/undervolt.hpp).
+    int uv_mhz = INT_MAX;
 };
 
 // One unfinished candidate of an earlier run.
@@ -45,7 +48,8 @@ public:
 
     // Returns the entry id, or -1 when the line could not be written -- in
     // which case the caller must not touch the hardware.
-    int begin(std::optional<int> core, std::optional<int> mem);
+    // uv: the raise of an undervolt candidate, in MHz.
+    int begin(std::optional<int> core, std::optional<int> mem, std::optional<int> uv = std::nullopt);
     bool complete(int id, const std::string& verdict);
 
 private:

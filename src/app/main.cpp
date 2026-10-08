@@ -4,6 +4,7 @@
 #include "app/common.hpp"
 #include "core/stability.hpp"
 #include "core/version.hpp"
+#include "core/vf_curve.hpp"
 #include "hw/app_files.hpp"
 #include "hw/boot_task.hpp"
 #include "hw/gpu_control.hpp"
@@ -85,13 +86,70 @@ static int set_offset(const char* label, int mhz, bool core) {
     return ok ? 0 : 1;
 }
 
+static void print_curve(const std::vector<gao::VfPoint>& curve) {
+    std::printf("voltage/frequency curve: %zu points, %d to %d mV\n", curve.size(), curve.front().volt_uv / 1000,
+                curve.back().volt_uv / 1000);
+    std::printf("  slot    mV     MHz  raw offset\n");
+    for (const gao::VfPoint& p : curve)
+        std::printf("  %4d  %4d  %6.1f  %d\n", p.index, p.volt_uv / 1000, p.freq_khz / 1000.0, p.raw_offset);
+}
+
+// Read-only: what the driver reports as the curve. Exit 1 when it cannot be read.
+static int curve() {
+    gao::Nvapi nvapi;
+    if (!nvapi.Init()) { std::printf("NVAPI init failed: %s\n", nvapi.Error().c_str()); return 1; }
+    const auto points = nvapi.ReadVfCurve(kGpu);
+    if (!points) {
+        std::printf("curve: unavailable (%s)%s\n", nvapi.Error().c_str(),
+                    gao::app::is_elevated() ? "" : "; reading it may need an administrator shell");
+        return 1;
+    }
+    print_curve(*points);
+    return 0;
+}
+
+// Writes a flat top by hand: the point at or just above <mv> and every point
+// above it run <mhz>. For the hardware checks; `gao --reset` undoes it.
+static int curve_flatten(int mv, int mhz) {
+    const gao::app::TuningLock lock;
+    if (!lock.owned()) { std::printf("another optimize is already running (in the app or on the command line)\n"); return 1; }
+    // A running tray app would take the missing core offset for a driver
+    // reset and write its saved tune over the flat top: it is told to leave
+    // the card alone, as after `gao --reset`.
+    gao::app::tell_tray(gao::app::TrayNotice::StockByChoice);
+    gao::Nvml nvml;
+    gao::Nvapi nvapi;
+    if (!nvml.Init()) { std::printf("NVML init failed: %s\n", nvml.Error().c_str()); return 1; }
+    if (!nvapi.Init()) { std::printf("NVAPI init failed: %s\n", nvapi.Error().c_str()); return 1; }
+    const gao::GpuControl gpu = gao::make_gpu_control(nvml, nvapi, kGpu);
+    const auto before = gpu.read_vf_curve();
+    if (!before) { std::printf("curve: unavailable (%s)\n", nvapi.Error().c_str()); return 1; }
+    int anchor = -1;
+    for (const gao::VfPoint& p : *before)   // lowest voltage first
+        if (p.volt_uv >= mv * 1000) { anchor = p.index; break; }
+    if (anchor < 0) { std::printf("no curve point at or above %d mV\n", mv); return 1; }
+    const gao::VfApplyResult r = gao::apply_flat_top(gpu, anchor, mhz * 1000);
+    if (const auto after = gpu.read_vf_curve()) print_curve(*after);
+    if (!r.ok) { std::printf("not applied: %s\n", r.why.c_str()); return 1; }
+    std::printf("flat top applied: slot %d runs %d MHz, in %d write rounds -- OK\n", anchor, mhz, r.passes);
+    return 0;
+}
+
 static int reset() {
     // Stock by choice: tell a running tray app first, or a watchdog tick
     // between the writes and the notice would take it for a TDR and re-apply.
     gao::app::tell_tray(gao::app::TrayNotice::StockByChoice);
     gao::Nvapi nvapi;
     if (!nvapi.Init()) { std::printf("NVAPI init failed: %s\n", nvapi.Error().c_str()); return 1; }
-    bool ok = nvapi.ResetOffsets(kGpu);
+    // A flat top on the voltage/frequency curve first: the offset reset below
+    // is not known to remove one.
+    gao::GpuControl curve;
+    curve.read_vf_curve = [&nvapi] { return nvapi.ReadVfCurve(kGpu); };
+    curve.write_vf_offsets = [&nvapi](const std::vector<gao::VfOffset>& offsets) { return nvapi.WriteVfRawOffsets(kGpu, offsets); };
+    std::string why;
+    bool ok = gao::remove_vf_shape(curve, &why);
+    if (!ok) std::printf("curve: %s\n", why.c_str());
+    ok = nvapi.ResetOffsets(kGpu) && ok;
     const auto readback = nvapi.ReadOffsetsMhz(kGpu);
     std::printf("reset: requested core 0 MHz, mem 0 MHz\n");
     if (readback) std::printf("read back core %d MHz, mem %d MHz\n", readback->first, readback->second);
@@ -228,6 +286,38 @@ static int optimize(gao::Preset preset, const std::optional<gao::FanCurve>& fan_
     }
     std::printf("Applied until reboot. `gao --reset` returns to stock.\n");
     return out.saved ? 0 : 2;   // 2: tuned and applied, but --apply and boot-apply cannot use it
+}
+
+// A first version: finds the undervolt and leaves it applied; nothing is saved.
+static int undervolt() {
+    gao::app::OptimizeHooks hooks;
+    hooks.aborted = [] { return g_abort.load(); };
+    hooks.log = [](const std::string& msg) { std::printf("  %s\n", msg.c_str()); };
+    hooks.active_gpu = [](const gao::GpuControl* gpu) {
+        g_gpu = gpu;
+        SetConsoleCtrlHandler(OnConsoleCtrl, gpu ? TRUE : FALSE);
+    };
+    // As for --curve-flatten: a running tray app must not write its saved tune
+    // over the result.
+    gao::app::tell_tray(gao::app::TrayNotice::StockByChoice);
+    const auto out = gao::app::run_undervolt(hooks);
+    if (!out.ran) { std::printf("%s\n", out.error.c_str()); return 1; }
+    const gao::UndervoltResult& r = out.result;
+    if (!r.ok) {
+        std::printf("RESULT: not applied -- %s (%s)\n", r.reason.c_str(),
+                    r.stock_restored ? "card at stock" : "reset to stock FAILED, run `gao --reset`");
+        if (r.driver_resets > 0) std::printf("  driver resets during this run: %d\n", r.driver_resets);
+        return 1;
+    }
+    std::printf("RESULT: %d MHz at %d mV instead of %d mV (lowest stable %d mV, confirmed %d mV)\n", r.freq_khz / 1000,
+                r.applied_uv / 1000, r.stock_uv / 1000, r.edge_uv / 1000, r.confirmed_uv / 1000);
+    if (r.driver_resets > 0) std::printf("  driver resets during this run: %d\n", r.driver_resets);
+    std::printf("  before: score=%.0f it/s  core=%d MHz  peak=%d C  power=%d W\n", r.baseline.score, r.baseline.avg_core_mhz,
+                r.baseline.peak_temp_c, r.baseline.avg_power_w);
+    std::printf("  after:  score=%.0f it/s  core=%d MHz  peak=%d C  power=%d W\n", r.after.score, r.after.avg_core_mhz,
+                r.after.peak_temp_c, r.after.avg_power_w);
+    std::printf("Applied until a restart or `gao --reset`. Not saved: this first version does not keep it.\n");
+    return 0;
 }
 
 static int apply() {
@@ -426,6 +516,16 @@ int main(int argc, char** argv) {
         return 1;
     }
     if (argc > 1 && std::strcmp(argv[1], "--status") == 0) return status();
+    if (argc > 1 && std::strcmp(argv[1], "--curve") == 0) return curve();
+    if (argc > 1 && std::strcmp(argv[1], "--undervolt") == 0) return undervolt();
+    if (argc > 1 && std::strcmp(argv[1], "--curve-flatten") == 0) {
+        int mv = 0, mhz = 0;
+        if (argc < 4 || !ParseIntArg(argv[2], &mv) || !ParseIntArg(argv[3], &mhz)) {
+            std::printf("--curve-flatten expects <mV> <MHz>\n");
+            return 1;
+        }
+        return curve_flatten(mv, mhz);
+    }
     if (argc > 1 && std::strcmp(argv[1], "--update") == 0) return update();
     if (argc > 1 && std::strcmp(argv[1], "--optimize") == 0) {
         gao::Preset preset = gao::Preset::BestOfMyGpu;
@@ -452,6 +552,9 @@ int main(int argc, char** argv) {
                 "              never --stress's 2 / 3)\n"
                 "            | --optimize [best|quiet|cool|max [--fan-curve silent|normal|cool|aggressive]]\n"
                 "            | --apply | --boot on|off | --fan auto | --status\n"
+                "            | --curve (prints the voltage/frequency curve; changes nothing)\n"
+                "            | --undervolt (first version: the stock load clock on the lowest stable voltage; not saved)\n"
+                "            | --curve-flatten <mV> <MHz> (the point at <mV> and all above it run <MHz>; --reset undoes it)\n"
                 "            | --update (installs the latest release into this folder, if there is a newer one)]\n");
     return argc > 1 ? 1 : 0;
 }
