@@ -35,6 +35,7 @@ struct UvCard {
     std::vector<double> probe_seconds;
     std::vector<int> probe_raise_mhz;   // the raise each probe ran at (0 at stock)
     std::vector<std::string> journal, log;
+    std::vector<std::string> measuring;   // what the search said it was measuring, with the length: "what|seconds"
 
     UvCard() {
         for (int i = 0; i < 127; ++i) {
@@ -125,6 +126,9 @@ struct UvCard {
         io.aborted = [this] { return aborted_now; };
         io.log = [this](const std::string& m) { log.push_back(m); };
         io.rest = [this](double) { ++rests; return true; };
+        io.measuring = [this](const std::string& what, double seconds) {
+            measuring.push_back(what + "|" + std::to_string(static_cast<int>(seconds)));
+        };
         return find_undervolt(gpu(), j, io, 75, 0.7f);
     }
     bool logged(const std::string& what) const {
@@ -200,7 +204,7 @@ TEST_CASE("find_undervolt: the lowest voltage that holds the stock load clock, m
     // Every entry was closed; the journal names the raise of each candidate.
     CHECK(card.count("\"begin\"") == card.count("\"complete\""));
     CHECK(card.count("\"uv\":") == card.count("\"begin\""));
-    CHECK(card.logged("baseline: 30 s at stock"));
+    CHECK(card.logged("baseline: 300 s at stock"));
 }
 
 TEST_CASE("find_undervolt: an edge that does not hold 30 s is given up one point at a time") {
@@ -376,4 +380,32 @@ TEST_CASE("find_undervolt: a candidate the card will not take ends the descent; 
     CHECK(card.logged("not set -- writing the curve failed -- curve at stock"));
     CHECK(*std::max_element(card.probe_raise_mhz.begin(), card.probe_raise_mhz.end()) <= 120);
     CHECK(card.count("\"begin\"") == card.count("\"complete\""));
+}
+
+TEST_CASE("find_undervolt: the card is measured at stock for as long as the soak lasts") {
+    // What the result is compared with must be like for like: a card is not
+    // heated through after half a minute, so its temperature and fan speed
+    // then say nothing next to those of a five-minute soak.
+    UvCard card;
+    const auto r = card.go();
+    REQUIRE(r.ok);
+    CHECK(kUvBaselineS == kUvSoakS);
+    CHECK(card.probe_seconds.front() == kUvSoakS);
+    CHECK(card.probe_raise_mhz.front() == 0);   // at stock
+    CHECK(r.baseline.seconds == kUvSoakS);
+    CHECK(r.after.seconds == kUvSoakS);
+}
+
+TEST_CASE("find_undervolt: every long measurement is announced with its length, and its end") {
+    // For the countdown on the run screen. The short probes of the descent are not announced.
+    UvCard card;
+    REQUIRE(card.go().ok);
+    const std::vector<std::string> expected = {"Measuring the card at stock|300", "|0", "Confirming the lowest voltage|30", "|0",
+                                               "Soak: the result has to hold|300", "|0"};
+    CHECK(card.measuring == expected);
+    // A measurement that is cut short is ended too.
+    UvCard stopped;
+    stopped.abort_at_probe = 1;
+    CHECK_FALSE(stopped.go().ok);
+    CHECK(stopped.measuring == std::vector<std::string>{"Measuring the card at stock|300", "|0"});
 }

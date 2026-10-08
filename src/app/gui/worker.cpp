@@ -15,6 +15,7 @@ bool OptimizeWorker::start(Preset preset, std::optional<FanCurve> fan_curve) {
         log_.clear();
         outcome_.reset();
         undervolt_.reset();
+        measuring_.clear();
     }
     abort_ = false;
     thread_ = std::jthread([this, preset, fan_curve] {
@@ -24,6 +25,15 @@ bool OptimizeWorker::start(Preset preset, std::optional<FanCurve> fan_curve) {
             {
                 std::lock_guard lock(mu_);
                 log_.push_back(line);
+            }
+            wake_();
+        };
+        hooks.measuring = [this](const std::string& what, double seconds) {
+            {
+                std::lock_guard lock(mu_);
+                measuring_ = what;
+                measuring_seconds_ = seconds;
+                measuring_from_ = std::chrono::steady_clock::now();
             }
             wake_();
         };
@@ -40,6 +50,7 @@ bool OptimizeWorker::start(Preset preset, std::optional<FanCurve> fan_curve) {
             std::lock_guard lock(mu_);
             if (is_undervolt) undervolt_ = std::move(undervolt);
             else outcome_ = std::move(outcome);
+            measuring_.clear();   // also after a run that ended in an exception
         }
         running_ = false;
         wake_();
@@ -49,7 +60,13 @@ bool OptimizeWorker::start(Preset preset, std::optional<FanCurve> fan_curve) {
 
 OptimizeWorker::Snapshot OptimizeWorker::snapshot() const {
     std::lock_guard lock(mu_);
-    return {running_.load(), log_, outcome_, undervolt_};
+    Snapshot s{running_.load(), log_, outcome_, undervolt_};
+    if (!measuring_.empty()) {
+        s.measuring = measuring_;
+        s.measuring_seconds = measuring_seconds_;
+        s.measuring_spent = std::chrono::duration<double>(std::chrono::steady_clock::now() - measuring_from_).count();
+    }
+    return s;
 }
 
 }

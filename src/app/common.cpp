@@ -367,6 +367,7 @@ UndervoltOutcome run_undervolt(const OptimizeHooks& hooks) {
     };
     io.aborted = hooks.aborted;
     io.log = hooks.log;
+    io.measuring = hooks.measuring;
     io.rest = [&hooks](double seconds) {   // no load, no driver call; a stop request ends it within a quarter of a second
         using namespace std::chrono;
         const auto end = steady_clock::now() + duration_cast<steady_clock::duration>(duration<double>(std::min(seconds, 3600.0)));

@@ -28,7 +28,13 @@ namespace gao {
 // then starts kResetBackoffSteps points higher. A second reset ends the run.
 // Any failure ends at stock.
 
-inline constexpr double kUvBaselineS = 30, kUvProbeS = 3, kUvConfirmS = 30, kUvSoakS = 300;
+inline constexpr double kUvProbeS = 3, kUvConfirmS = 30, kUvSoakS = 300;
+// The card at stock is measured for as long as the result is soaked. The
+// two are what a user compares: after half a minute a card is not heated
+// through, and its temperature and fan speed would read lower than those
+// of the soak for no reason but the clock. It also means the clock to keep
+// and the built-in curve are read on a warm card, as the result will run.
+inline constexpr double kUvBaselineS = kUvSoakS;
 inline constexpr int kUvConfirmTries = 3;
 inline constexpr int kUvSoakAttempts = 3;
 // A candidate must run the target clock within what the built-in curve moves
@@ -46,6 +52,9 @@ struct UndervoltIo {
     std::function<void(const std::string&)> log;
     std::function<bool(double seconds)> rest;       // waits without load; false: cut short by a stop request
     std::function<bool()> prepare_load;             // a fresh stress load after a driver reset; false: not ready
+    // A probe of kUvConfirmS or longer starts (what it is, and its length),
+    // or has ended ("", 0): for a countdown. Optional.
+    std::function<void(const std::string& what, double seconds)> measuring;
 };
 
 struct UndervoltResult {

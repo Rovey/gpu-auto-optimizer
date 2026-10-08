@@ -85,6 +85,12 @@ const char* title_of(Preset preset) {
 }
 
 std::string offset(int mhz) { return (mhz >= 0 ? "+" : "") + std::to_string(mhz) + " MHz"; }
+std::string duration_text(double seconds) {
+    char buf[32];
+    if (seconds < 90) std::snprintf(buf, sizeof(buf), "%.0f s", seconds);
+    else std::snprintf(buf, sizeof(buf), "%.0f min", seconds / 60);
+    return buf;
+}
 std::string undervolt_text(const UndervoltTune& u) {
     return std::to_string(u.freq_khz / 1000) + " MHz at " + std::to_string(u.volt_uv / 1000) + " mV";
 }
@@ -691,7 +697,7 @@ void choose(UiState& s, const UiActions& act) {
     if (go) s.elevated ? act.optimize(s.preset) : act.restart_elevated();
     ImGui::SameLine(0, em() * 1.5f);
     ImGui::BeginGroup();
-    ImGui::TextUnformatted((ic(kIconClock) + (undervolt ? "  About 8 minutes of full GPU load."
+    ImGui::TextUnformatted((ic(kIconClock) + (undervolt ? "  About 13 minutes of full GPU load."
                                                         : "  About 15 minutes of full GPU load."))
                                .c_str());
     dim("Abort restores stock at any time. A setting that crashes the machine is never tried again.");
@@ -801,6 +807,21 @@ void run_screen(UiState& s, const OptimizeWorker::Snapshot& run, const UiActions
     }
     dim("Aborting stops the running probe and restores stock.");
     ImGui::Spacing();
+    // A long measurement: what it is and how long it still takes.
+    if (run.running && !run.measuring.empty() && run.measuring_seconds > 0) {
+        const double left = std::max(0.0, run.measuring_seconds - run.measuring_spent);
+        char time[48];
+        std::snprintf(time, sizeof(time), "%d:%02d left of %s", static_cast<int>(left) / 60, static_cast<int>(left) % 60,
+                      duration_text(run.measuring_seconds).c_str());
+        text_bold((ic(kIconClock) + "  " + run.measuring).c_str(), 1.1f);
+        ImGui::SameLine(0, em());
+        ImGui::TextUnformatted(time);
+        ImGui::PushStyleColor(ImGuiCol_PlotHistogram, kAccentBright);
+        ImGui::PushStyleColor(ImGuiCol_FrameBg, kInner);
+        ImGui::ProgressBar(static_cast<float>(std::min(1.0, run.measuring_spent / run.measuring_seconds)), ImVec2(-1, em() * 0.5f), "");
+        ImGui::PopStyleColor(2);
+        ImGui::Spacing();
+    }
     telemetry_tiles(s);
     ImGui::Spacing();
     const float w = (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) / 2;
@@ -825,13 +846,6 @@ void run_screen(UiState& s, const OptimizeWorker::Snapshot& run, const UiActions
     ImGui::EndChild();
     end_card();
     if (!run.running && run.ended()) s.screen = Screen::Results;
-}
-
-std::string duration_text(double seconds) {
-    char buf[32];
-    if (seconds < 90) std::snprintf(buf, sizeof(buf), "%.0f s", seconds);
-    else std::snprintf(buf, sizeof(buf), "%.0f min", seconds / 60);
-    return buf;
 }
 
 // A before/after table; `rows` fills it through `row(name, before, after)`.

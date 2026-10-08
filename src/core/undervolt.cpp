@@ -29,6 +29,14 @@ UndervoltResult find_undervolt(const GpuControl& gpu, Journal& journal, const Un
     auto log = [&](const std::string& m) { if (io.log) io.log("  " + m); };
     auto aborted = [&] { return io.aborted && io.aborted(); };
     auto to_stock = [&] { return gpu.reset_to_stock && gpu.reset_to_stock(); };
+    // A probe, announced when it is long enough to be worth a countdown.
+    auto probe = [&](const char* what, double seconds, double stall_below) {
+        const bool announced = what && seconds >= kUvConfirmS && io.measuring;
+        if (announced) io.measuring(what, seconds);
+        const StabilityResult s = io.probe(seconds, max_temp_c, stall_below);
+        if (announced) io.measuring("", 0);
+        return s;
+    };
     // Every way out that is not a success: the card goes back to stock, with
     // one reconnect if the plain reset does not get through.
     auto finish_fail = [&](const std::string& why) {
@@ -52,8 +60,8 @@ UndervoltResult find_undervolt(const GpuControl& gpu, Journal& journal, const Un
             return finish_fail("the curve did not go back to stock");
     }
 
-    log("baseline: 30 s at stock");
-    r.baseline = io.probe(kUvBaselineS, max_temp_c, 0.0);
+    log("baseline: " + std::to_string(static_cast<int>(kUvBaselineS)) + " s at stock");
+    r.baseline = probe("Measuring the card at stock", kUvBaselineS, 0.0);
     log("baseline: " + describe(verdict_name(r.baseline.verdict), r.baseline));
     if (r.baseline.verdict == Verdict::Aborted) return finish_fail("aborted");
     if (r.baseline.verdict != Verdict::Stable)
@@ -107,7 +115,8 @@ UndervoltResult find_undervolt(const GpuControl& gpu, Journal& journal, const Un
             stopped = "writing the curve failed: " + written.why;
             return Step::Stop;
         }
-        last = io.probe(seconds, max_temp_c, kStalledScore * r.baseline.score);
+        last = probe(seconds >= kUvSoakS ? "Soak: the result has to hold" : "Confirming the lowest voltage", seconds,
+                     kStalledScore * r.baseline.score);
         const char* verdict = verdict_name(last.verdict);
         bool pass = last.verdict == Verdict::Stable;
         if (pass && (last.avg_core_mhz * 1000 < r.freq_khz - kUvClockSlackKhz || last.score < kUvScoreKeep * r.baseline.score)) {

@@ -61,6 +61,9 @@ struct OptimizeHooks {
     // The GPU being tuned while a run is active (nullptr before and after), so
     // an emergency handler can reset it.
     std::function<void(const GpuControl*)> active_gpu;
+    // A long measurement starts (what it is, its length in seconds) or has
+    // ended ("", 0). The undervolt run reports them; see UndervoltIo.
+    std::function<void(const std::string& what, double seconds)> measuring;
 };
 
 struct OptimizeOutcome {
