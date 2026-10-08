@@ -79,6 +79,36 @@ Both columns are five minutes of full load, so the card is heated through on bot
 > [!NOTE]
 > An undervolt is saved in place of an overclock, not next to it, so this is the other choice, not an extra. Every card has its own limits. The log of this run is in [docs/hardware-checks.md](docs/hardware-checks.md) (check 72).
 
+## Or everything in one click: All in one
+
+<div align="center">
+
+<img src="docs/images/all-in-one-result.png" width="860" alt="The result screen of an All in one run on the reference RTX 4070: core +135 MHz, memory +1500 MHz, power limit 105 %, 2850 MHz at 1035 mV, fans 52 % at 70 °C; score 5728 to 5820 iterations per second, power 196 to 180 watts, fan speed 73 to 62 percent">
+
+</div>
+
+**All in one** is the default: it overclocks, undervolts on top of that, measures the quietest fan curve and tests the whole for five minutes. One run on the reference card, both columns five minutes of full load:
+
+| | Stock | After one click |
+|---|---|---|
+| Stress-test score | 5728 it/s | **5820 it/s (+1.6 %)** |
+| Power under load | 196 W | **180 W (−8.2 %)** |
+| Fan speed | 73 % | **62 %** |
+| Temperature | 67 °C | 71 °C |
+| Core clock under load | 2789 MHz | 2835 MHz |
+| Memory clock under load | 10495 MHz | 12000 MHz |
+
+A little faster, on less power, with slower fans. The card is warmer because the fans are allowed to be: the fan tune aims for 70 °C, 5 °C under the profile's limit, and found that 52 % holds it. With the NVIDIA driver's own fan curve the same settings ran at 63 °C on 176 W. The run took 34 minutes.
+
+The gains are smaller than those of the two sections above, and that is the point of it. An overclock and an undervolt do not add up: an overclock moves the whole voltage/frequency curve, so at every clock the card already runs on less voltage, and with the same safety margin there is nothing left to take off. They are two ends of one line. All in one takes the middle, where the card beats stock on both counts; **Best of my GPU** and **Undervolt** are the ends.
+
+<div align="center">
+<img src="docs/images/all-in-one-run.png" width="860" alt="An All in one run in its third step: the overclock's curve above the card's own, cut off flat at 2850 MHz, with the countdown of the soak above it">
+</div>
+
+> [!NOTE]
+> Close games and other programs that use the graphics card before a run. In an earlier run an emulator on 11 % of the card cost 6 % of the score; the run now says so when its final test does not match the step before it. The logs are in [docs/hardware-checks.md](docs/hardware-checks.md) (checks 75 and 76).
+
 ## Quick start
 
 1. Download `GpuAutoOptimizer-<version>-win-x64.zip` from the [latest release](https://github.com/Rovey/gpu-auto-optimizer/releases/latest) and unzip it anywhere.
