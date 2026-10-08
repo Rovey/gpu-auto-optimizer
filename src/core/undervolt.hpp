@@ -34,10 +34,11 @@ inline constexpr int kUvSoakAttempts = 3;
 // A candidate must run the target clock within what the built-in curve moves
 // with temperature (45 MHz between cold and warm on the reference card: a
 // flat top written on a cooler card runs that much lower once it is hot), and
-// keep this share of the stock score. One that computes right but slower
-// took the curve without running it ("SLOW").
+// keep this share of the stock score (3 s probes scatter by a few percent
+// around the 30 s baseline). One that computes right but clearly slower took
+// the curve without running it ("SLOW").
 inline constexpr int kUvClockSlackKhz = 45000;
-inline constexpr double kUvScoreKeep = 0.97;
+inline constexpr double kUvScoreKeep = 0.9;
 
 struct UndervoltIo {
     Probe probe;                                    // one stress run, as in the clock search

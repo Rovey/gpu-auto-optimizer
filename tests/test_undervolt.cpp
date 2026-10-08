@@ -25,6 +25,7 @@ struct UvCard {
     bool dead = false;            // after a driver reset, until recover()
     bool slow = false;            // the card accepts the curve but does not run the frequency
     bool write_ok = true;
+    int write_fails_above_khz = -1;   // >= 0: a curve write that raises a point by more than this fails
     bool baseline_ok = true;
     int abort_at_probe = -1;
     bool aborted_now = false;
@@ -73,6 +74,9 @@ struct UvCard {
         };
         g.write_vf_offsets = [this](const std::vector<VfOffset>& offsets) {
             if (dead || !write_ok) return false;
+            if (write_fails_above_khz >= 0)
+                for (const VfOffset& o : offsets)
+                    if (o.raw > write_fails_above_khz) return false;
             for (const VfOffset& o : offsets) raw[static_cast<std::size_t>(o.index)] = o.raw;
             return true;
         };
@@ -360,4 +364,15 @@ TEST_CASE("find_undervolt on the reference RTX 4070's curve, with its measured c
     CHECK(card.applied_raise_mhz() == 135);
     // Sixty millivolts less for the same clock: about a ninth of the power.
     CHECK(r.after.avg_power_w < r.baseline.avg_power_w * 0.92);
+}
+
+TEST_CASE("find_undervolt: a candidate the card will not take ends the descent; what passed is kept") {
+    UvCard card;
+    card.write_fails_above_khz = 120000;   // the driver refuses to raise a point by more than 120 MHz
+    const auto r = card.go();
+    REQUIRE(r.ok);
+    CHECK(card.count("SET FAILED") == 1);
+    CHECK(card.logged("not set -- writing the curve failed -- curve at stock"));
+    CHECK(*std::max_element(card.probe_raise_mhz.begin(), card.probe_raise_mhz.end()) <= 120);
+    CHECK(card.count("\"begin\"") == card.count("\"complete\""));
 }

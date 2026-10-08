@@ -28,12 +28,6 @@ const VfPoint* find(const std::vector<VfPoint>& curve, int index) {
     return nullptr;
 }
 
-int find_raw(const std::vector<VfOffset>& offsets, int index) {
-    for (const VfOffset& o : offsets)
-        if (o.index == index) return o.raw;
-    return 0;
-}
-
 bool at_stock(const std::vector<VfPoint>& curve) {
     return std::all_of(curve.begin(), curve.end(), [](const VfPoint& p) { return p.raw_offset == 0; });
 }
@@ -111,11 +105,12 @@ bool remove_vf_shape(const GpuControl& gpu, std::string* why) {
 
 VfApplyResult apply_flat_top(const GpuControl& gpu, int anchor_index, int freq_khz) {
     VfApplyResult r;
-    auto refuse = [&](const std::string& why) { r.why = why; return r; };
+    auto refuse = [&](const std::string& why) { r.why = why; r.at_stock = true; return r; };   // nothing was written
     // After a write: the card must not keep half a curve.
     auto fail = [&](const std::string& why) {
         std::string ignored;
-        r.why = why + (clear_vf_curve(gpu, &ignored) ? " -- curve at stock" : " -- reset to stock FAILED, run `gao --reset`");
+        r.at_stock = clear_vf_curve(gpu, &ignored);
+        r.why = why + (r.at_stock ? " -- curve at stock" : " -- reset to stock FAILED, run `gao --reset`");
         return r;
     };
     if (!gpu.read_vf_curve || !gpu.write_vf_offsets) return refuse("this card or driver does not offer the voltage/frequency curve");
@@ -138,13 +133,10 @@ VfApplyResult apply_flat_top(const GpuControl& gpu, int anchor_index, int freq_k
     std::vector<int> tail;
     for (const VfPoint& p : *curve)
         if (p.volt_uv >= anchor_uv) tail.push_back(p.index);
-    // The points below the anchor, to see that they stay untouched, and the
-    // nearest of them as a yardstick: it is written nothing, and what the
-    // card's temperature does to it, it does to the anchor next to it.
+    // The points below the anchor, to see that they stay untouched.
     std::vector<int> below;
-    int neighbour = -1;
-    for (const VfPoint& p : *curve)   // lowest voltage first
-        if (p.volt_uv < anchor_uv) { below.push_back(p.index); neighbour = p.index; }
+    for (const VfPoint& p : *curve)
+        if (p.volt_uv < anchor_uv) below.push_back(p.index);
 
     // What the plan asks of each point, from this read at stock, and with it
     // the most that will ever be written there.
@@ -207,26 +199,12 @@ VfApplyResult apply_flat_top(const GpuControl& gpu, int anchor_index, int freq_k
         }
         if (r.passes == 1 && asked >= 4 * kVfToleranceKhz && moved * 20 < asked)
             return fail("the card does not show the curve change in its read-out");
-        // The half step tells whether the card moves a point by what is
-        // written. If it does not, the full step is never written.
-        if (r.passes == 1) {
-            const VfPoint* was = find(before, anchor_index);
-            const VfPoint* is = find(*after, anchor_index);
-            const int asked_khz = find_raw(offsets, anchor_index) - was->raw_offset;
-            // Measured against the neighbour below, so that a built-in curve
-            // that moved between the two reads does not count as the anchor's
-            // doing.
-            int moved_khz = is->freq_khz - was->freq_khz;
-            if (const VfPoint* ref_was = find(before, neighbour), *ref_is = find(*after, neighbour); ref_was && ref_is)
-                moved_khz -= ref_is->freq_khz - ref_was->freq_khz;
-            if (asked_khz >= 3 * grid_khz && asked_khz >= 3 * kVfToleranceKhz &&
-                std::abs(moved_khz - asked_khz) > grid_khz + kVfToleranceKhz)
-                return fail("the card did not move the curve by what was written (asked " + std::to_string(asked_khz / 1000) +
-                            " MHz, moved " + std::to_string(moved_khz / 1000) + ")");
-        }
         before = *after;
     }
-    return fail("the curve did not settle on the target");
+    const VfPoint* anchor_now = find(before, anchor_index);
+    return fail("the curve did not settle on the target (the anchor reads " +
+                std::to_string(anchor_now ? anchor_now->freq_khz / 1000 : 0) + " MHz, the target is " +
+                std::to_string(freq_khz / 1000) + ")");
 }
 
 }

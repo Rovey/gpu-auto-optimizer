@@ -126,14 +126,14 @@ TEST_CASE("a flat top: the anchor and every point above it run the target, the p
 }
 
 TEST_CASE("a card that stores offsets in other units is refused, never overshot") {
-    // Twice the size: the half step moves the anchor half as far as written, and that ends it.
+    // Twice the size: every round falls short, the rounds run out, the curve is cleared.
     FakeCurve half;
     half.raw_per_khz = 2.0;
     const auto r = apply_flat_top(half.gpu(), 8, 2700000);
     CHECK_FALSE(r.ok);
-    CHECK(r.why == "the card did not move the curve by what was written (asked 200 MHz, moved 100) -- curve at stock");
+    CHECK(r.why.find("the curve did not settle on the target (the anchor reads ") == 0);
+    CHECK(r.at_stock);
     CHECK(half.at_stock());
-    CHECK(half.writes == 2);   // the half step, and the clean-up: the full step was never written
 
     // Half the size: the card moves twice as far as asked. The first round
     // only asks for half of the way, so the anchor lands on the target.

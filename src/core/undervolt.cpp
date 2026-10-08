@@ -97,8 +97,13 @@ UndervoltResult find_undervolt(const GpuControl& gpu, Journal& journal, const Un
         if (id < 0) { stopped = "could not write the journal"; return Step::Stop; }
         const VfApplyResult written = apply_flat_top(gpu, curve[static_cast<std::size_t>(pos)].index, r.freq_khz);
         if (!written.ok) {
-            // Not a verdict on the candidate: the card did not take the curve.
+            // Not a verdict on the candidate's stability: the card did not
+            // take this curve. With the curve back at stock that only means
+            // this candidate is not to be had, and the search goes on with
+            // what passed; a curve that could not be cleared ends the run.
             journal.complete(id, "SET FAILED");
+            log(std::string(what) + std::to_string(mv(pos)) + " mV (+" + std::to_string(raise_mhz(pos)) + " MHz): not set -- " + written.why);
+            if (written.at_stock) return Step::Fail;
             stopped = "writing the curve failed: " + written.why;
             return Step::Stop;
         }
