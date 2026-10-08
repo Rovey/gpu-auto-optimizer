@@ -145,13 +145,16 @@ void wrapped(const ImVec4& color, const std::string& text) {
 }
 
 // A rounded panel. height 0: as tall as its contents. Always pair with end_card().
+// It never scrolls itself: the wheel goes to the page behind it. (A panel as
+// tall as its contents can still be a pixel short of them, and then it
+// kept the wheel: the page did not scroll with the mouse on such a card.)
 void begin_card(const char* id, float height = 0, const ImVec4& bg = kCard, float width = 0) {
     ImGui::PushStyleColor(ImGuiCol_ChildBg, bg);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(em() * 0.9f, em() * 0.75f));
     ImGui::BeginChild(id, ImVec2(width, height),
                       ImGuiChildFlags_Borders | ImGuiChildFlags_AlwaysUseWindowPadding |
                           (height == 0 ? ImGuiChildFlags_AutoResizeY : ImGuiChildFlags_None),
-                      ImGuiWindowFlags_NoScrollbar);
+                      ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
     ImGui::PopStyleVar();
     ImGui::PopStyleColor();
 }
@@ -280,7 +283,7 @@ void preset_card(UiState& s, const PresetInfo& p, float w, float h) {
     ImGui::BeginChild("preset", ImVec2(w, h),
                       ImGuiChildFlags_Borders | ImGuiChildFlags_AlwaysUseWindowPadding |
                           (h == 0 ? ImGuiChildFlags_AutoResizeY : ImGuiChildFlags_None),
-                      ImGuiWindowFlags_NoScrollbar);
+                      ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
     ImGui::PopStyleVar(2);
     ImGui::PopStyleColor(2);
     const float badge = em() * 2.1f;
