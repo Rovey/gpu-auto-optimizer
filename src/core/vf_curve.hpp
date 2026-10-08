@@ -95,6 +95,14 @@ bool clear_vf_curve(const GpuControl& gpu, std::string* why);
 // (not this program's doing), has no shape, or reads without one afterwards.
 bool remove_vf_shape(const GpuControl& gpu, std::string* why);
 
+// What the curve carries, seen from a flat top anchored at anchor_uv. Told
+// by the offsets alone, never by frequencies: the built-in curve moves with
+// temperature. FlatTop: no point below the anchor has an offset and the
+// anchor is raised. Other: anything else that is not stock, a plain core
+// offset (the same on every point) included.
+enum class CurveState { Stock, FlatTop, Other };
+CurveState curve_state(const std::vector<VfPoint>& curve, int anchor_uv);
+
 // The slot of the lowest-voltage point that runs at least freq_khz: where
 // the card reaches that frequency by itself. -1 when no point does.
 int stock_point_for(const std::vector<VfPoint>& curve, int freq_khz);

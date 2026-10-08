@@ -378,6 +378,19 @@ static int status() {
         std::printf("applied:    power %d %%, core %+d MHz, mem %+d MHz\n", applied->power_pct, applied->core_mhz, applied->mem_mhz);
     else
         std::printf("applied:    unknown (could not read the driver)\n");
+    // The offsets above say nothing about a flat top: the curve does.
+    if (cfg.profile && cfg.profile->undervolt) {
+        const auto points = nvapi.ReadVfCurve(kGpu);
+        const char* state = "unknown (the curve could not be read)";
+        if (points) {
+            switch (gao::curve_state(*points, cfg.profile->undervolt->volt_uv)) {
+                case gao::CurveState::FlatTop: state = "applied"; break;
+                case gao::CurveState::Stock: state = "not applied (the curve is at stock)"; break;
+                case gao::CurveState::Other: state = "not applied (the curve carries other offsets)"; break;
+            }
+        }
+        std::printf("undervolt:  %s\n", state);
+    }
     if (const auto fan = nvml.ReadFan(kGpu))
         std::printf("fans:       %s\n", fan->manual ? ("manual " + std::to_string(fan->target_pct) + " %").c_str() : "driver control");
     const auto curve = gao::active_fan_curve(cfg);

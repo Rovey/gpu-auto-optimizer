@@ -1,5 +1,7 @@
 #include "core/boot.hpp"
 #include "core/search.hpp"
+#include "core/undervolt.hpp"
+#include "core/vf_curve.hpp"
 
 #include <algorithm>
 
@@ -11,6 +13,26 @@ BootDecision decide_boot(const Config& c, const std::string& driver, const std::
     if (driver.empty() || driver != c.profile->driver) return BootDecision::DriverChanged;
     if (gpu.empty() || gpu != c.profile->gpu) return BootDecision::GpuChanged;
     return BootDecision::Apply;
+}
+
+namespace {
+// The profile's flat top, on a curve that carries no shape. Empty on
+// success, otherwise why not.
+std::string apply_undervolt(const GpuControl& gpu, const UndervoltTune& u) {
+    std::string why;
+    if (!clear_vf_curve(gpu, &why)) return why;
+    const auto curve = gpu.read_vf_curve();
+    if (!curve) return "the curve could not be read";
+    const auto anchor = std::find_if(curve->begin(), curve->end(), [&](const VfPoint& pt) { return pt.volt_uv == u.volt_uv; });
+    if (anchor == curve->end()) return "the card's curve has no point at " + std::to_string(u.volt_uv / 1000) + " mV";
+    const int raise_khz = u.freq_khz - anchor->freq_khz;
+    if (raise_khz > u.raise_khz + kUvClockSlackKhz)
+        return "the curve point would be raised by " + std::to_string(raise_khz / 1000) + " MHz; the undervolt was tested with " +
+               std::to_string(u.raise_khz / 1000) + " MHz";
+    const VfApplyResult written = apply_flat_top(gpu, anchor->index, u.freq_khz);
+    // Its reason ends with where the curve was left; the caller resets the whole card and says so itself.
+    return written.ok ? std::string() : written.why.substr(0, written.why.find(" -- "));
+}
 }
 
 bool apply_profile(const GpuControl& gpu, const Profile& p, std::string* why, bool* left_clean) {
@@ -29,6 +51,20 @@ bool apply_profile(const GpuControl& gpu, const Profile& p, std::string* why, bo
         if (left_clean) *left_clean = true;
         return false;
     }
+    if (p.undervolt) {
+        const UndervoltTune& u = *p.undervolt;
+        const char* refused = u.volt_uv <= 0 || u.freq_khz <= 0 || u.raise_khz <= 0 || u.raise_khz > kVfMaxRaiseKhz
+                                  ? "profile values out of range; nothing applied"
+                              : p.core_mhz != 0 ? "a core offset and an undervolt cannot be combined; nothing applied"
+                              : !gpu.read_vf_curve || !gpu.write_vf_offsets
+                                  ? "this card or driver does not offer the voltage/frequency curve; nothing applied"
+                              : nullptr;
+        if (refused) {
+            if (why) *why = refused;
+            if (left_clean) *left_clean = true;
+            return false;
+        }
+    }
     auto fail = [&](const std::string& reason) {
         const bool reset = gpu.reset_to_stock && gpu.reset_to_stock();
         if (left_clean) *left_clean = reset;
@@ -39,11 +75,19 @@ bool apply_profile(const GpuControl& gpu, const Profile& p, std::string* why, bo
     auto set = [](const std::function<bool(int)>& setter, int value, int stock) {
         return setter ? setter(value) : value == stock;
     };
+    // An offset write that asks for what the driver already reports may
+    // change nothing, and would then leave a flat top where it is.
+    std::string curve_why;
+    if (!remove_vf_shape(gpu, &curve_why)) return fail(curve_why);
     if (!set(gpu.set_power_limit, p.power_pct, 100))
         return fail("setting power " + std::to_string(p.power_pct) + " % failed" +
                     (gpu.set_power_limit ? "" : " (no power control on this card)"));
     if (!set(gpu.set_core_offset, p.core_mhz, 0)) return fail("setting core +" + std::to_string(p.core_mhz) + " MHz failed");
     if (!set(gpu.set_mem_offset, p.mem_mhz, 0)) return fail("setting mem +" + std::to_string(p.mem_mhz) + " MHz failed");
+    if (p.undervolt) {
+        const std::string failed = apply_undervolt(gpu, *p.undervolt);
+        if (!failed.empty()) return fail("the undervolt was not applied: " + failed);
+    }
     return true;
 }
 

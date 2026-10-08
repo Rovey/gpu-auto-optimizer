@@ -387,3 +387,23 @@ TEST_CASE("an offset that appears on a point below the anchor ends the write") {
     CHECK_FALSE(r.ok);
     CHECK(r.why.find("a point below the anchor got an offset (slot 5") == 0);
 }
+
+TEST_CASE("curve_state tells a flat top at the saved voltage from stock and from anything else") {
+    FakeCurve card;
+    const GpuControl gpu = card.gpu();
+    const int anchor_uv = card.volt_uv[6];
+    CHECK(curve_state(*gpu.read_vf_curve(), anchor_uv) == CurveState::Stock);
+    REQUIRE(apply_flat_top(gpu, 6, 2300000).ok);
+    CHECK(curve_state(*gpu.read_vf_curve(), anchor_uv) == CurveState::FlatTop);
+    // The same curve seen from another anchor is not that flat top.
+    CHECK(curve_state(*gpu.read_vf_curve(), card.volt_uv[4]) == CurveState::Other);
+    CHECK(curve_state(*gpu.read_vf_curve(), card.volt_uv[9]) == CurveState::Other);
+    // A plain core offset (the same on every point) is someone's tune, not a flat top.
+    std::fill(card.raw.begin(), card.raw.end(), 30000);
+    CHECK(curve_state(*gpu.read_vf_curve(), anchor_uv) == CurveState::Other);
+    // A voltage the curve does not have, or no curve at all.
+    std::fill(card.raw.begin(), card.raw.end(), 0);
+    card.raw[6] = 100000;
+    CHECK(curve_state(*gpu.read_vf_curve(), anchor_uv + 1) == CurveState::Other);
+    CHECK(curve_state({}, anchor_uv) == CurveState::Other);
+}

@@ -59,6 +59,17 @@ void put_vf_raw_offset(unsigned char* control, int index, int raw) {
     std::memcpy(control + kVfEntries + static_cast<std::size_t>(index) * kVfControlEntry + kVfControlOffset, &raw, sizeof(raw));
 }
 
+CurveState curve_state(const std::vector<VfPoint>& curve, int anchor_uv) {
+    if (curve.empty()) return CurveState::Other;
+    if (at_stock(curve)) return CurveState::Stock;
+    bool anchored = false;
+    for (const VfPoint& p : curve) {
+        if (p.volt_uv < anchor_uv && p.raw_offset != 0) return CurveState::Other;
+        if (p.volt_uv == anchor_uv) anchored = p.raw_offset > 0;
+    }
+    return anchored ? CurveState::FlatTop : CurveState::Other;
+}
+
 int stock_point_for(const std::vector<VfPoint>& curve, int freq_khz) {
     for (const VfPoint& p : curve)   // lowest voltage first
         if (p.freq_khz >= freq_khz) return p.index;

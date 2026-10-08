@@ -1,10 +1,12 @@
 #include "doctest/doctest.h"
 #include "core/boot.hpp"
 #include "core/types.hpp"
+#include <algorithm>
 #include <optional>
 #include <string>
 #include <tuple>
 #include <utility>
+#include <vector>
 
 using namespace gao;
 
@@ -220,4 +222,180 @@ TEST_CASE("a reported range below the built-in limits does not refuse a profile 
     p.core_mhz = 315;   // above both the reported and the built-in limit
     CHECK_FALSE(apply_profile(over.gpu(), p, &why));
     CHECK(over.writes == 0);
+}
+
+namespace {
+// A card with a voltage/frequency curve. As on the reference RTX 4070, the
+// core offset and the curve are one table: an offset write puts the same
+// value on every point, and writing the offset the driver already reports
+// changes nothing.
+struct CurveCard {
+    std::vector<int> volt_uv, base_khz, raw;
+    int power = 100, core = 0, mem = 0;
+    bool curve_write_ok = true;
+    int curve_writes = 0, offset_writes = 0;
+
+    CurveCard() {
+        for (int i = 0; i < 40; ++i) {   // 700 .. 1090 mV, 1800 .. 2970 MHz on a 15 MHz grid
+            volt_uv.push_back(700000 + i * 10000);
+            base_khz.push_back(1800000 + i * 30000);
+            raw.push_back(0);
+        }
+    }
+    int freq(std::size_t i) const { return base_khz[i] + raw[i]; }
+    bool at_stock() const { return std::all_of(raw.begin(), raw.end(), [](int v) { return v == 0; }); }
+    GpuControl gpu() {
+        GpuControl g;
+        g.set_power_limit = [this](int p) { ++offset_writes; power = p; return true; };
+        g.set_core_offset = [this](int v) {
+            ++offset_writes;
+            if (v != core) std::fill(raw.begin(), raw.end(), v * 1000);
+            core = v;
+            return true;
+        };
+        g.set_mem_offset = [this](int v) { ++offset_writes; mem = v; return true; };
+        g.read_vf_curve = [this]() -> std::optional<std::vector<VfPoint>> {
+            std::vector<VfPoint> out;
+            for (std::size_t i = 0; i < raw.size(); ++i) out.push_back({static_cast<int>(i), volt_uv[i], freq(i), raw[i]});
+            return out;
+        };
+        g.write_vf_offsets = [this](const std::vector<VfOffset>& offsets) {
+            if (!curve_write_ok) return false;
+            ++curve_writes;
+            for (const VfOffset& o : offsets) raw[static_cast<std::size_t>(o.index)] = o.raw;
+            return true;
+        };
+        g.reset_to_stock = [this] {
+            std::fill(raw.begin(), raw.end(), 0);
+            power = 100; core = 0; mem = 0;
+            return true;
+        };
+        return g;
+    }
+    // The flat top of `undervolt_profile()` as another run left it.
+    void flat_top(std::size_t anchor, int freq_khz) {
+        for (std::size_t i = anchor; i < raw.size(); ++i) raw[i] = freq_khz - base_khz[i];
+    }
+};
+
+// 2400 MHz (the card's own clock at 900 mV) at 850 mV: a raise of 150 MHz at slot 15.
+Profile undervolt_profile() {
+    Profile p;
+    p.preset = Preset::Undervolt;
+    p.driver = "x";
+    p.gpu = "GPU-1";
+    p.undervolt = UndervoltTune{850000, 2400000, 150000};
+    return p;
+}
+}
+
+TEST_CASE("an undervolt profile writes its flat top") {
+    CurveCard card;
+    std::string why;
+    bool clean = true;
+    REQUIRE(apply_profile(card.gpu(), undervolt_profile(), &why, &clean));
+    CHECK_FALSE(clean);   // the profile is on the card
+    CHECK(card.freq(15) == 2400000);
+    for (std::size_t i = 0; i < card.raw.size(); ++i) {
+        if (i < 15) CHECK(card.raw[i] == 0);          // below the anchor: the built-in curve
+        else CHECK(card.freq(i) == 2400000);          // from the anchor up: nothing runs more
+    }
+    CHECK(card.power == 100);
+    CHECK(card.core == 0);
+}
+
+TEST_CASE("an undervolt is applied again over what is on the card") {
+    CurveCard card;
+    card.flat_top(10, 2250000);   // an older flat top, anchored elsewhere
+    std::string why;
+    REQUIRE(apply_profile(card.gpu(), undervolt_profile(), &why));
+    for (std::size_t i = 0; i < 15; ++i) CHECK(card.raw[i] == 0);
+    CHECK(card.freq(15) == 2400000);
+}
+
+TEST_CASE("an undervolt that does not fit this card's curve is refused and ends at stock") {
+    std::string why;
+    {
+        CurveCard card;   // no point at that voltage
+        Profile p = undervolt_profile();
+        p.undervolt->volt_uv = 855000;
+        bool clean = false;
+        CHECK_FALSE(apply_profile(card.gpu(), p, &why, &clean));
+        CHECK(why.find("no point at 855 mV") != std::string::npos);
+        CHECK(clean);
+        CHECK(card.at_stock());
+        CHECK(card.curve_writes == 0);
+    }
+    {
+        CurveCard card;   // the built-in curve reads 60 MHz lower than when it was tested: the raise would be 210, tested 150
+        for (int& f : card.base_khz) f -= 60000;
+        bool clean = false;
+        CHECK_FALSE(apply_profile(card.gpu(), undervolt_profile(), &why, &clean));
+        CHECK(why.find("tested with 150 MHz") != std::string::npos);
+        CHECK(clean);
+        CHECK(card.at_stock());
+        CHECK(card.curve_writes == 0);
+    }
+    {
+        CurveCard card;   // 30 MHz lower is what temperature does: applied
+        for (int& f : card.base_khz) f -= 30000;
+        CHECK(apply_profile(card.gpu(), undervolt_profile(), &why));
+        CHECK(card.freq(15) == 2400000);
+    }
+}
+
+TEST_CASE("an undervolt profile is refused before anything is written when it cannot be what the search saved") {
+    std::string why;
+    auto refused = [&](const Profile& p, GpuControl gpu, CurveCard& card) {
+        bool clean = false;
+        CHECK_FALSE(apply_profile(gpu, p, &why, &clean));
+        CHECK(clean);
+        CHECK(card.offset_writes == 0);
+        CHECK(card.curve_writes == 0);
+    };
+    {
+        CurveCard card;   // a core offset and a flat top are one table
+        Profile p = undervolt_profile();
+        p.core_mhz = 60;
+        refused(p, card.gpu(), card);
+        CHECK(why.find("cannot be combined") != std::string::npos);
+    }
+    for (const UndervoltTune bad : {UndervoltTune{850000, 2400000, 0}, UndervoltTune{850000, 2400000, 900000},
+                                    UndervoltTune{0, 2400000, 150000}, UndervoltTune{850000, -1, 150000}}) {
+        CurveCard card;
+        Profile p = undervolt_profile();
+        p.undervolt = bad;
+        refused(p, card.gpu(), card);
+        CHECK(why.find("out of range") != std::string::npos);
+    }
+    {
+        CurveCard card;   // a card or driver without the curve calls
+        GpuControl gpu = card.gpu();
+        gpu.read_vf_curve = nullptr;
+        gpu.write_vf_offsets = nullptr;
+        refused(undervolt_profile(), gpu, card);
+        CHECK(why.find("voltage/frequency curve") != std::string::npos);
+    }
+}
+
+TEST_CASE("an undervolt whose curve write fails ends at stock and says so") {
+    CurveCard card;
+    card.curve_write_ok = false;
+    std::string why;
+    bool clean = false;
+    CHECK_FALSE(apply_profile(card.gpu(), undervolt_profile(), &why, &clean));
+    CHECK(why == "the undervolt was not applied: writing the curve failed -- card at stock");
+    CHECK(clean);
+    CHECK(card.at_stock());
+}
+
+TEST_CASE("a profile without an undervolt removes a flat top that is on the card") {
+    CurveCard card;
+    card.flat_top(15, 2400000);
+    Profile p = *with_profile("x").profile;
+    p.core_mhz = 0;   // the driver reports core +0 already: the offset write alone would change nothing
+    std::string why;
+    REQUIRE(apply_profile(card.gpu(), p, &why));
+    CHECK(card.at_stock());
+    CHECK(card.mem == 1050);
 }
