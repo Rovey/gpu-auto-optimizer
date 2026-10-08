@@ -94,7 +94,9 @@ UndervoltResult find_undervolt(const GpuControl& gpu, Journal& journal, const Un
     // The clock to keep: the highest point of the curve that is not above
     // what the card ran. Its own position on the curve is where the descent
     // starts from.
-    const int load_khz = r.baseline.avg_core_mhz * 1000;
+    // Or a lower one of the caller's choosing; never more than the card ran.
+    const bool chosen = base.clock_khz > 0 && base.clock_khz < r.baseline.avg_core_mhz * 1000;
+    const int load_khz = chosen ? base.clock_khz : r.baseline.avg_core_mhz * 1000;
     int target = -1;
     for (int i = 0; i < static_cast<int>(curve.size()); ++i)
         if (curve[static_cast<std::size_t>(i)].freq_khz <= load_khz + kVfToleranceKhz) target = i;
@@ -122,7 +124,9 @@ UndervoltResult find_undervolt(const GpuControl& gpu, Journal& journal, const Un
     // entry. `what` names the probe in the log.
     auto candidate = [&](int pos, double seconds, const char* what) -> Step {
         if (aborted()) { stopped = "aborted"; return Step::Stop; }
-        const int id = journal.begin(std::nullopt, std::nullopt, raise_mhz(pos));
+        // A candidate that raises nothing (the curve only cut off, no core offset under it) is journaled without a
+        // raise, like a probe at stock: it could never become a ceiling.
+        const int id = journal.begin(std::nullopt, std::nullopt, raise_mhz(pos) > 0 ? std::optional<int>(raise_mhz(pos)) : std::nullopt);
         if (id < 0) { stopped = "could not write the journal"; return Step::Stop; }
         const VfApplyResult written = apply_flat_top(gpu, curve[static_cast<std::size_t>(pos)].index, r.freq_khz, kVfTailDropKhz,
                                                      base.core_mhz * 1000);
@@ -188,14 +192,21 @@ UndervoltResult find_undervolt(const GpuControl& gpu, Journal& journal, const Un
     }
     if (!stopped.empty()) return finish_fail(stopped);
     if (reset && !recovered()) return finish_fail(stopped);
-    if (edge < 0) return finish_fail("the card held no undervolt: the first step below its own voltage already failed");
+    // With a clock of the caller's choosing the point that reaches it by
+    // itself is a result as well: the curve cut off there, nothing raised.
+    const int top_pos = chosen ? own : own - 1;   // the highest position that may be the result
+    if (edge < 0) {
+        if (!chosen) return finish_fail("the card held no undervolt: the first step below its own voltage already failed");
+        edge = own;
+    }
     r.edge_uv = curve[static_cast<std::size_t>(edge)].volt_uv;
 
     // Confirm with a long probe; give up one point at a time, or
     // kResetBackoffSteps after a reset.
     int confirmed = -1;
     int pos = reset ? edge + kResetBackoffSteps : edge;
-    for (int tries = 0; tries < kUvConfirmTries && pos < own; ++tries) {
+    pos = std::min(pos, top_pos);
+    for (int tries = 0; tries < kUvConfirmTries && pos <= top_pos; ++tries) {
         const Step step = candidate(pos, kUvConfirmS, "confirm ");
         if (step == Step::Pass) { confirmed = pos; break; }
         if (step == Step::Stop) return finish_fail(stopped);
@@ -211,12 +222,13 @@ UndervoltResult find_undervolt(const GpuControl& gpu, Journal& journal, const Un
     int applied = -1;
     for (int p = confirmed; p < own; ++p)
         if (extra_mhz(p) > 0 && raise_mhz(p) <= kept_mhz) { applied = p; break; }
+    if (applied < 0 && chosen) applied = own;   // the margin allows no raise beyond the overclock: its curve, cut off
     if (applied < 0) return finish_fail("nothing was left of the undervolt after the safety margin");
     log("undervolt: lowest stable " + std::to_string(mv(edge)) + " mV, confirmed " + std::to_string(mv(confirmed)) + " mV, applying " +
         std::to_string(mv(applied)) + " mV (+" + std::to_string(raise_mhz(applied)) + " MHz at that point)");
 
     // The soak decides. A failure moves two points up; a reset more.
-    for (int attempt = 0; attempt < kUvSoakAttempts && applied < own; ++attempt) {
+    for (int attempt = 0; attempt < kUvSoakAttempts && applied <= top_pos; ++attempt) {
         const Step step = candidate(applied, kUvSoakS, "soak ");
         if (step == Step::Pass) {
             r.ok = true;
@@ -228,7 +240,8 @@ UndervoltResult find_undervolt(const GpuControl& gpu, Journal& journal, const Un
         }
         if (step == Step::Stop) return finish_fail(stopped);
         if (step == Step::Reset && !recovered()) return finish_fail(stopped);
-        applied += step == Step::Reset ? kResetBackoffSteps : 2;
+        if (applied == top_pos) break;   // nothing higher to fall back to
+        applied = std::min(applied + (step == Step::Reset ? kResetBackoffSteps : 2), top_pos);
     }
     return finish_fail("the soak failed");
 }

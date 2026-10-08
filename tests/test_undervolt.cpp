@@ -1,4 +1,5 @@
 #include "core/undervolt.hpp"
+#include "core/vf_curve.hpp"
 #include <doctest/doctest.h>
 
 #include <algorithm>
@@ -515,4 +516,47 @@ TEST_CASE("find_undervolt over an overclock that leaves no room: nothing is kept
     CHECK_FALSE(r.ok);
     CHECK(r.reason == "nothing was left of the undervolt after the safety margin");
     CHECK(card.at_stock());
+}
+
+TEST_CASE("find_undervolt at a clock between stock and the overclock: the balance of the two") {
+    // The overclock runs 2805 MHz; the caller asks for 2760, most of the way back to
+    // the 2745 of stock. Less clock needs less voltage for the same raise.
+    UvCard card;
+    card.base = UndervoltBase{100, 60, 0, std::nullopt, 2760000};
+    const auto r = card.go();
+    REQUIRE(r.ok);
+    CHECK(r.freq_khz == 2760000);
+    CHECK(r.after.avg_core_mhz == 2760);
+    const auto anchor = static_cast<std::size_t>(std::find(card.volt_uv.begin(), card.volt_uv.end(), r.applied_uv) - card.volt_uv.begin());
+    CHECK(card.freq(anchor) == 2760000);
+    for (std::size_t i = 0; i < anchor; ++i) CHECK(card.raw[i] == 60000);
+    // Against the same search at the full overclocked clock: a lower voltage.
+    UvCard full;
+    full.base = UndervoltBase{100, 60, 0, std::nullopt, 0};
+    const auto f = full.go();
+    REQUIRE(f.ok);
+    CHECK(r.applied_uv < f.applied_uv);
+    // A clock above what the card ran is not taken: the card's own it is then.
+    UvCard above;
+    above.base = UndervoltBase{100, 60, 0, std::nullopt, 2900000};
+    CHECK(above.go().freq_khz == 2805000);
+}
+
+TEST_CASE("find_undervolt at a chosen clock: when the margin allows no more raise, the overclock's curve cut off there is the result") {
+    // The edge is 75 MHz over the built-in curve and the overclock takes 60 of
+    // it: nothing more may be raised. At the full overclocked clock that is no
+    // result at all; at a lower one the cut itself already saves voltage.
+    UvCard card;
+    card.edge_khz = card.long_edge_khz = 75000;
+    card.base = UndervoltBase{100, 60, 0, std::nullopt, 2760000};
+    const auto r = card.go();
+    INFO(r.reason);
+    REQUIRE(r.ok);
+    CHECK(r.freq_khz == 2760000);
+    CHECK(r.raise_khz == 60000);   // the overclock's own, nothing on top
+    const auto anchor = static_cast<std::size_t>(std::find(card.volt_uv.begin(), card.volt_uv.end(), r.applied_uv) - card.volt_uv.begin());
+    for (std::size_t i = 0; i <= anchor; ++i) CHECK(card.raw[i] == 60000);
+    for (std::size_t i = anchor + 1; i < card.raw.size(); ++i) CHECK(card.freq(i) < 2760000);
+    CHECK(curve_state(*card.gpu().read_vf_curve(), r.applied_uv, 60000) == CurveState::FlatTop);
+    CHECK(card.probe_seconds.back() == kUvSoakS);   // soaked like any other result
 }

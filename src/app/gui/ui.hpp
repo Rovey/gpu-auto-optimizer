@@ -27,7 +27,7 @@ struct Note {
 struct UiState {
     Page page = Page::Dashboard;
     Screen screen = Screen::Choose;
-    Preset preset = Preset::BestOfMyGpu;
+    Preset preset = Preset::AllInOne;   // what the one button does when nothing else is picked
     bool elevated = false;
 
     std::string gpu_name;

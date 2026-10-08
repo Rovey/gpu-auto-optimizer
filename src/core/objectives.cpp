@@ -8,6 +8,7 @@ Objectives objectives_for(const Preset preset) {
         case Preset::CoolAndEfficient: return {65, 0.3f, false, false, true};
         case Preset::MaxPerformance:   return {83, 1.0f, true,  true,  true};
         case Preset::Undervolt:        return {75, 0.7f, false, false, false};
+        case Preset::AllInOne:         return {75, 0.7f, true,  true,  true};
         case Preset::BestOfMyGpu:
         default:                       return {75, 0.7f, true,  true,  true};
     }
@@ -19,13 +20,14 @@ const char* preset_name(const Preset preset) {
         case Preset::CoolAndEfficient: return "cool";
         case Preset::MaxPerformance:   return "max";
         case Preset::Undervolt:        return "undervolt";
+        case Preset::AllInOne:         return "all";
         case Preset::BestOfMyGpu:
         default:                       return "best";
     }
 }
 
 std::optional<Preset> preset_from_name(const std::string& name) {
-    for (Preset p : {Preset::BestOfMyGpu, Preset::Quiet, Preset::CoolAndEfficient, Preset::MaxPerformance, Preset::Undervolt})
+    for (Preset p : {Preset::BestOfMyGpu, Preset::Quiet, Preset::CoolAndEfficient, Preset::MaxPerformance, Preset::Undervolt, Preset::AllInOne})
         if (name == preset_name(p)) return p;
     return std::nullopt;
 }

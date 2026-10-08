@@ -60,6 +60,12 @@ struct UndervoltBase {
     // The overclock's own long run under load (its soak), when the caller
     // has one: it is the reference then, and nothing is measured again.
     std::optional<StabilityResult> measured;
+    // > 0: the clock to keep, when that is to be less than the card runs in
+    // the reference: a balance between the overclock and the undervolt,
+    // which are two ends of one line (hardware check 74). The overclock's
+    // curve cut off at that clock, with no point raised any further, is a
+    // result then too: it is what is left when the margin allows no more.
+    int clock_khz = 0;
 };
 
 struct UndervoltIo {

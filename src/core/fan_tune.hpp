@@ -17,7 +17,7 @@ namespace gao {
 // settles above the target or the fans' minimum is reached. The answer is the
 // lowest speed that held. When the speed it starts from does not hold, it
 // goes up instead, to the first that does. A speed is judged when the
-// temperature has stopped moving (within 1 C over three looks, 15 s apart),
+// temperature has stopped moving (within 1 C over four looks, 15 s apart),
 // or sooner once it is clearly above the target; never after more than three
 // minutes.
 //
@@ -28,7 +28,7 @@ namespace gao {
 // on. Every way out that is not a success hands the fans back to the driver.
 inline constexpr int kFanTuneStepPct = 5;
 inline constexpr double kFanTuneSliceS = 15;
-inline constexpr int kFanTuneSettleSlices = 3;
+inline constexpr int kFanTuneSettleSlices = 4;
 inline constexpr int kFanTuneMaxSlices = 12;
 inline constexpr int kFanTuneMarginC = 5;
 

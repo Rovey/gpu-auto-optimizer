@@ -5,6 +5,7 @@
 #include <windows.h>
 #include "core/journal.hpp"
 #include "core/fan_curve.hpp"
+#include "core/fan_tune.hpp"
 #include "core/stability.hpp"
 #include "core/task_xml.hpp"
 #include "hw/app_files.hpp"
@@ -16,6 +17,7 @@
 #include "hw/update_io.hpp"
 #include "core/version.hpp"
 #include <algorithm>
+#include <cstdio>
 #include <ctime>
 #include <chrono>
 #include <filesystem>
@@ -334,7 +336,7 @@ OptimizeOutcome run_optimize(Preset preset, const OptimizeHooks& hooks, const st
     return out;
 }
 
-UndervoltOutcome run_undervolt(const OptimizeHooks& hooks, bool on_saved_tune) {
+UndervoltOutcome run_undervolt(const OptimizeHooks& hooks, bool on_saved_tune, const UndervoltOnTune& how) {
     UndervoltOutcome out;
     auto log = [&](const std::string& m) { if (hooks.log) hooks.log(m); };
     auto fail = [&](const std::string& why) { out.error = why; return out; };
@@ -396,7 +398,7 @@ UndervoltOutcome run_undervolt(const OptimizeHooks& hooks, bool on_saved_tune) {
         const BootDecision d = decide_boot(cfg, driver_now, hw.GpuUuid());
         if (d != BootDecision::Apply) return fail("no saved tune to undervolt: " + decision_text(d, cfg, driver_now));
         over = cfg.profile;
-        base = UndervoltBase{over->power_pct, over->core_mhz, over->mem_mhz, std::nullopt};
+        base = UndervoltBase{over->power_pct, over->core_mhz, over->mem_mhz, how.measured, how.clock_khz};
         log("on top of the saved tune: power " + std::to_string(base.power_pct) + " %, core +" + std::to_string(base.core_mhz) +
             " MHz, mem +" + std::to_string(base.mem_mhz) + " MHz");
     }
@@ -442,6 +444,7 @@ UndervoltOutcome run_undervolt(const OptimizeHooks& hooks, bool on_saved_tune) {
     if (over) {   // the overclock it was searched on keeps everything it had; the undervolt joins it
         p = *over;
         p.saved_at = now_text();
+        if (how.save_as) p.preset = *how.save_as;
     }
     p.undervolt = UndervoltTune{out.result.applied_uv, out.result.freq_khz, out.result.raise_khz};
     cfg.profile = p;
@@ -622,6 +625,237 @@ bool install_update(const ReleaseInfo& release, std::string* message) {
     };
     steps.replace = [&](std::string* error) { return copy_app(unpacked, dir, error); };
     return install_release(release, steps, message);
+}
+
+namespace {
+
+// The card at stock under load, and the card with the saved tune under load
+// while its fans are tuned: the two measuring steps of the all-in-one run.
+// Each brings its own drivers and stress load, like the searches.
+struct KeepAwake {
+    KeepAwake() { SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED); }
+    ~KeepAwake() { SetThreadExecutionState(ES_CONTINUOUS); }
+};
+
+constexpr int kStockTempC = 85;        // a card at stock is only stopped by this
+constexpr double kLongRunS = 300;      // as the soaks: the two sides of the comparison last equally long
+
+struct StockOutcome {
+    std::string error;       // why it did not run
+    StabilityResult result;
+};
+
+StockOutcome measure_stock(const OptimizeHooks& hooks) {
+    StockOutcome out;
+    auto fail = [&](const std::string& why) { out.error = why; return out; };
+    const TuningLock lock;
+    if (!lock.owned()) return fail("another optimize is already running (in the app or on the command line)");
+    std::string why;
+    if (!prepare_state(&why)) return fail(why);
+    GuardedGpu hw(kGpu);
+    if (!hw.Init(&why)) return fail(why);
+    auto load = std::make_unique<Stress>();
+    if (!load->Init()) return fail("stress init failed: " + load->Error());
+    const GpuControl& gpu = hw.control();
+    if (!gpu.reset_to_stock || !gpu.reset_to_stock()) return fail("could not set the card to stock");
+    const KeepAwake keep_awake;
+    if (hooks.measuring) hooks.measuring("Measuring the card at stock", kLongRunS);
+    const bool crashed = !guarded([&] {
+        out.result = run_stability([&] { return load->Batch(); }, [&] { return gpu.read(); }, kLongRunS, kStockTempC, hooks.aborted);
+    });
+    if (hooks.measuring) hooks.measuring("", 0);
+    if (crashed) {
+        (void)load.release();   // as in run_optimize: a load that faulted is left alone
+        return fail("access violation while the card was measured at stock");
+    }
+    return out;
+}
+
+struct FanStepOutcome {
+    std::string error;       // why the step ended without a result; the card is at stock then
+    FanTuneResult fan;
+    StabilityResult final;   // the five minutes with everything applied; seconds 0 when not run
+    std::string note;        // what was kept instead, when the tuned curve was not
+};
+
+// Steps 4 and 5: the saved tune applied, the fans tuned under load, then five
+// minutes with the fans on the tuned curve. Saves the curve into the profile
+// when that run is stable. A stop request ends at stock.
+FanStepOutcome fan_step(const OptimizeHooks& hooks, int start_pct) {
+    FanStepOutcome out;
+    auto log = [&](const std::string& m) { if (hooks.log) hooks.log(m); };
+    auto fail = [&](const std::string& why) { out.error = why; return out; };
+    const TuningLock lock;
+    if (!lock.owned()) return fail("another optimize is already running (in the app or on the command line)");
+    std::string why;
+    if (!prepare_state(&why)) return fail(why);
+    GuardedGpu hw(kGpu);
+    if (!hw.Init(&why)) return fail(why);
+    auto load = std::make_unique<Stress>();
+    if (!load->Init()) return fail("stress init failed: " + load->Error());
+    const GpuControl& gpu = hw.control();
+    Config cfg = load_config();
+    if (!cfg.profile) return fail("there is no saved tune to tune the fans for");
+    const Profile profile = *cfg.profile;
+    const int limit = objectives_for(profile.preset).max_temp_c;
+    const int min_pct = fan_min_for(cfg, hw.GpuUuid(), gpu.fan_min_pct);
+    // Every way out: the fans go back to the driver. The app's own fan curve
+    // driver takes them from there.
+    struct FansBack {
+        const GpuControl& gpu;
+        ~FansBack() { if (gpu.set_fan_auto) gpu.set_fan_auto(); }
+    } fans_back{gpu};
+    auto to_stock = [&](const std::string& reason) {
+        const bool stock = gpu.reset_to_stock && gpu.reset_to_stock();
+        return fail(reason + (stock ? " -- card at stock" : " -- reset to stock FAILED, run `gao --reset`"));
+    };
+    if (!apply_profile(gpu, profile, &why)) return fail("the tune could not be applied for the fan tune: " + why);
+
+    const KeepAwake keep_awake;
+    std::optional<FanDriver> fans;   // drives the curve under test during the final run
+    const Probe probe = [&](double seconds, int max_temp, double stall_below) {
+        auto read = [&] {
+            const Telemetry t = gpu.read();
+            if (fans) fans->tick(t.temp_c, t.power_w, std::chrono::steady_clock::now());
+            return t;
+        };
+        return run_stability([&] { return load->Batch(); }, read, seconds, max_temp, hooks.aborted, stall_below);
+    };
+    FanTuneIo io;
+    io.probe = probe;
+    io.aborted = hooks.aborted;
+    io.log = hooks.log;
+    io.measuring = hooks.measuring;
+    const bool crashed = !guarded([&] {
+        out.fan = tune_fan(gpu, io, limit, start_pct, min_pct);
+        if (hooks.aborted && hooks.aborted()) return;
+        // The tuned curve, or the profile's own when the tune gave none.
+        const FanCurve curve = out.fan.ok ? out.fan.curve : active_fan_curve(cfg).value_or(default_curve(profile.preset));
+        // The tune left the fans on a speed set by hand. The curve driver
+        // would take a speed it did not set itself for another program's and
+        // step aside: it starts from driver control.
+        if (gpu.set_fan_auto) gpu.set_fan_auto();
+        if (gpu.set_fan_pct) fans.emplace(gpu, curve, limit, min_pct);
+        log("  final test: " + std::to_string(static_cast<int>(kLongRunS)) + " s with everything applied");
+        if (hooks.measuring) hooks.measuring("Final test: everything together", kLongRunS);
+        out.final = probe(kLongRunS, limit, 0.0);
+        if (hooks.measuring) hooks.measuring("", 0);
+        if (fans) fans->release();
+        fans.reset();
+    });
+    if (crashed) {
+        (void)load.release();
+        return to_stock("access violation while the fans were tuned");
+    }
+    if ((hooks.aborted && hooks.aborted()) || out.final.verdict == Verdict::Aborted) return to_stock("aborted");
+    if (out.final.seconds > 0 && out.final.verdict != Verdict::Stable) {
+        // With the fans this quiet (or at all) the whole did not hold five
+        // minutes. The tune passed its own soaks with the fans it had then:
+        // it stays, the tuned curve does not. After a driver reset the card
+        // is at stock and the tune is put back.
+        out.note = std::string("the final test ended ") + verdict_name(out.final.verdict) + "; the tuned fan curve is not kept";
+        log("  " + out.note);
+        out.fan.ok = false;
+        const bool lost = out.final.verdict == Verdict::DeviceLost || out.final.verdict == Verdict::Stalled ||
+                          out.final.verdict == Verdict::NoTelemetry;
+        if (lost && !(gpu.recover && gpu.recover() && apply_profile(gpu, profile, &why)))
+            return to_stock("the tune could not be put back after a driver reset in the final test");
+        return out;
+    }
+    if (!out.fan.ok) {
+        out.note = "the fans were not tuned (" + out.fan.reason + "); the profile's own curve is kept";
+        return out;
+    }
+    cfg = load_config();   // only the curve is this step's to change
+    if (cfg.profile) {
+        cfg.profile->fan_curve = out.fan.curve;
+        cfg.fan_curve.reset();
+        cfg.fan_control = true;
+        if (!save_config(cfg)) out.note = "the tuned fan curve could not be saved";
+    }
+    return out;
+}
+
+}
+
+AllInOneOutcome run_all_in_one(const OptimizeHooks& hooks) {
+    AllInOneOutcome out;
+    auto log = [&](const std::string& m) { if (hooks.log) hooks.log(m); };
+    auto stop = [&](const std::string& why) { out.error = why; return out; };
+    auto aborted = [&] { return hooks.aborted && hooks.aborted(); };
+    if (!is_elevated()) return stop("tuning changes clocks, the voltage/frequency curve and the fans and needs administrator rights");
+    // Held across the steps (each takes it again, on this thread), so that
+    // the watchdog does not put a half-made tune back in between.
+    const TuningLock lock;
+    if (!lock.owned()) return stop("another optimize is already running (in the app or on the command line)");
+
+    log("step 1 of 5: the card at stock, five minutes");
+    const StockOutcome stock = measure_stock(hooks);
+    if (!stock.error.empty()) return stop(stock.error);
+    out.stock = stock.result;
+    char line[400];
+    std::snprintf(line, sizeof(line), "  stock: %s  score=%.0f it/s  clock=%d MHz  peak=%d C  fan=%s  power=%d W", verdict_name(out.stock.verdict),
+                  out.stock.score, out.stock.avg_core_mhz, out.stock.peak_temp_c, reading(out.stock.end_fan_pct, " %").c_str(),
+                  out.stock.avg_power_w);
+    log(line);
+    if (out.stock.verdict == Verdict::Aborted) return stop("aborted");
+    if (out.stock.verdict != Verdict::Stable)
+        return stop(std::string("the card is not stable at stock (") + verdict_name(out.stock.verdict) + ")");
+    out.ran = true;
+
+    log("step 2 of 5: the overclock");
+    out.overclock = run_optimize(Preset::AllInOne, hooks);
+    if (!out.overclock.ran) return stop(out.overclock.error);
+    if (!out.overclock.result.ok) return stop("the overclock: " + out.overclock.result.reason);
+    if (!out.overclock.saved) return stop("the overclock could not be saved: " + out.overclock.save_note);
+    out.now = out.overclock.result.soak;
+
+    log("step 3 of 5: the undervolt on top of it, at a clock between stock and the overclock");
+    UndervoltOnTune how;
+    how.measured = out.overclock.result.soak;
+    how.save_as = Preset::AllInOne;
+    const int stock_mhz = out.stock.avg_core_mhz, oc_mhz = out.overclock.result.soak.avg_core_mhz;
+    if (oc_mhz > stock_mhz && stock_mhz > 0) how.clock_khz = (stock_mhz + oc_mhz) / 2 * 1000;
+    out.undervolt = run_undervolt(hooks, true, how);
+    if (aborted()) return stop("aborted");
+    if (out.undervolt.ran && out.undervolt.result.ok && out.undervolt.saved) {
+        out.now = out.undervolt.result.after;
+    } else {
+        // The card is at stock now; the saved overclock goes back on in the fan step.
+        out.undervolt_note = !out.undervolt.ran         ? out.undervolt.error
+                             : !out.undervolt.result.ok ? out.undervolt.result.reason
+                                                        : out.undervolt.save_note;
+        log("  no undervolt (" + out.undervolt_note + "): the overclock stays as it is");
+    }
+
+    log("step 4 of 5: the quietest fan speed that holds the temperature; step 5: the final test");
+    const FanStepOutcome fan = fan_step(hooks, out.now.end_fan_pct > 0 ? out.now.end_fan_pct : 70);
+    if (!fan.error.empty()) return stop(fan.error);
+    out.fan = fan.fan;
+    out.fan_note = fan.note;
+    if (fan.final.seconds > 0 && fan.final.verdict == Verdict::Stable) {
+        // The same settings ran five minutes just before (the soak of the
+        // step that found them). A final test that scores clearly less at
+        // the same clock was not slowed by the tune: another program had
+        // the card or the processor. On the reference card an emulator
+        // taking 11 % of the graphics card cost 6 % (hardware check 75).
+        const StabilityResult before = out.now;
+        out.now = fan.final;
+        if (before.score > 0 && out.now.score < 0.97 * before.score && out.now.avg_core_mhz >= before.avg_core_mhz - 30) {
+            std::snprintf(line, sizeof(line),
+                          "the final test scored %.0f it/s where the same settings scored %.0f a few minutes earlier, at the same "
+                          "clock: another program was using the graphics card or the processor. Close other programs and "
+                          "run again for numbers that compare",
+                          out.now.score, before.score);
+            out.disturbed = line;
+            log(std::string("  note: ") + line);
+        }
+    }
+    const Config cfg = load_config();
+    if (!cfg.profile) return stop("the saved tune could not be read back");
+    out.profile = *cfg.profile;
+    out.ok = true;
+    return out;
 }
 
 }

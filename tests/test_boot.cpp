@@ -357,7 +357,7 @@ TEST_CASE("an undervolt profile is refused before anything is written when it ca
         CHECK(card.offset_writes == 0);
         CHECK(card.curve_writes == 0);
     };
-    for (const UndervoltTune bad : {UndervoltTune{850000, 2400000, 0}, UndervoltTune{850000, 2400000, 900000},
+    for (const UndervoltTune bad : {UndervoltTune{850000, 2400000, -15000}, UndervoltTune{850000, 2400000, 900000},
                                     UndervoltTune{0, 2400000, 150000}, UndervoltTune{850000, -1, 150000}}) {
         CurveCard card;
         Profile p = undervolt_profile();

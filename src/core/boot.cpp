@@ -66,7 +66,7 @@ bool apply_profile(const GpuControl& gpu, const Profile& p, std::string* why, bo
     }
     if (p.undervolt) {
         const UndervoltTune& u = *p.undervolt;
-        const char* refused = u.volt_uv <= 0 || u.freq_khz <= 0 || u.raise_khz <= 0 || u.raise_khz > kVfMaxRaiseKhz
+        const char* refused = u.volt_uv <= 0 || u.freq_khz <= 0 || u.raise_khz < 0 || u.raise_khz > kVfMaxRaiseKhz
                                   ? "profile values out of range; nothing applied"
                               : !gpu.read_vf_curve || !gpu.write_vf_offsets
                                   ? "this card or driver does not offer the voltage/frequency curve; nothing applied"

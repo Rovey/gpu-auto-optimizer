@@ -37,7 +37,7 @@ TEST_CASE("max performance pushes every ceiling to its highest value") {
 }
 
 TEST_CASE("preset names round-trip and unknown names are rejected") {
-    for (Preset p : {Preset::BestOfMyGpu, Preset::Quiet, Preset::CoolAndEfficient, Preset::MaxPerformance, Preset::Undervolt})
+    for (Preset p : {Preset::BestOfMyGpu, Preset::Quiet, Preset::CoolAndEfficient, Preset::MaxPerformance, Preset::Undervolt, Preset::AllInOne})
         CHECK(preset_from_name(preset_name(p)) == p);
     CHECK(std::string(preset_name(Preset::BestOfMyGpu)) == "best");
     CHECK(std::string(preset_name(Preset::CoolAndEfficient)) == "cool");
@@ -54,4 +54,14 @@ TEST_CASE("the undervolt preset keeps the clocks and the power limit at stock") 
     CHECK(o.perf_push == doctest::Approx(objectives_for(Preset::BestOfMyGpu).perf_push));
     CHECK(o.max_temp_c == objectives_for(Preset::BestOfMyGpu).max_temp_c);
     CHECK(std::string(preset_name(Preset::Undervolt)) == "undervolt");
+}
+
+TEST_CASE("all in one searches its clocks as the default preset does") {
+    const Objectives all = objectives_for(Preset::AllInOne), best = objectives_for(Preset::BestOfMyGpu);
+    CHECK(all.max_temp_c == best.max_temp_c);
+    CHECK(all.perf_push == doctest::Approx(best.perf_push));
+    CHECK(all.core_oc);
+    CHECK(all.mem_oc);
+    CHECK(all.power);
+    CHECK(std::string(preset_name(Preset::AllInOne)) == "all");
 }

@@ -22,6 +22,7 @@
 
 GPU Auto Optimizer tunes the **power limit** and the **core and memory clock offsets** of an NVIDIA card. It stress-tests every candidate setting and keeps the highest one that computes correct results, then backs off by a safety margin. You pick a goal and press one button; a run takes about a quarter of an hour. It can also **undervolt**: keep the speed the card has at stock and find the lowest voltage that holds it.
 
+- **All in one:** one button that overclocks, undervolts on top of that and tunes the fans, and then shows what the card did at stock next to what it does now.
 - **Four clock profiles and an undervolt:** Best of my GPU, Cool & efficient, Quiet and Max performance, or the same speed on less voltage.
 - **You see what it does:** during a run the window draws the card's voltage/frequency curve as the run writes it, over the card's own.
 - **Verified, not trusted:** every value written to the driver is read back and checked, and a failed apply ends at stock.
@@ -82,7 +83,7 @@ Both columns are five minutes of full load, so the card is heated through on bot
 
 1. Download `GpuAutoOptimizer-<version>-win-x64.zip` from the [latest release](https://github.com/Rovey/gpu-auto-optimizer/releases/latest) and unzip it anywhere.
 2. Start **`GpuAutoOptimizer.exe`**.
-3. Open **Optimize**, pick a profile and press **Optimize GPU**. The app asks for administrator rights, because it changes clocks and power limits.
+3. Open **Optimize** and press **Optimize GPU**: **All in one** is selected, and you can pick another profile first. Close games and other programs that use the graphics card before you do. The app asks for administrator rights, because it changes clocks and power limits.
 4. When the run is done, turn on **Apply at logon** to keep the result after a restart.
 
 > [!NOTE]
@@ -106,7 +107,8 @@ Turning on **Apply at logon** copies the app to `%ProgramFiles%\GpuAutoOptimizer
 
 | Profile | Goal | Temperature limit | Tunes |
 |---|---|---|---|
-| **Best of my GPU** (default) | Highest confirmed clocks with a safety margin, most power the card allows | 75 °C | power, core, memory |
+| **All in one** (default) | More speed than stock on less power: the overclock below, an undervolt on top of it at a clock half-way back to stock, and the quietest fan curve that holds the temperature | 75 °C | power, core, memory, the voltage/frequency curve, fans |
+| **Best of my GPU** | Highest confirmed clocks with a safety margin, most power the card allows | 75 °C | power, core, memory |
 | **Cool & efficient** | Lowest power limit that costs under 2 % speed; clocks stay stock | 65 °C | power |
 | **Quiet** | Milder clocks and the lowest power limit that costs under 2 % speed | 80 °C | power, core, memory |
 | **Max performance** | Highest confirmed clocks minus one step, highest power limit | 83 °C | power, core, memory |
@@ -137,6 +139,7 @@ flowchart LR
 - **Each edge is confirmed.** The value a search ends on gets a 30 s probe, and a lower value is tried if it does not hold. The safety margin is applied to the confirmed value, and the result as a whole must pass the 300 s soak.
 - **A driver reset ends that clock's search.** On a card the search can push past its edge, a search resets the driver: the screen goes black for a moment. The run then reconnects to the driver, sets the card to stock, leaves it without load for 20 seconds and checks with a short probe at stock that it computes normally again. After that the search tries no new values for that clock: it keeps the last value that passed and confirms four steps below it. Each clock has its own search, so a reset in the memory search does not keep the core from being searched; a run can therefore reset the driver twice, once per clock. One reset more than that ends the run at stock with nothing saved, and so does a card that does not come back. Results on real cards are in [docs/hardware-checks.md](docs/hardware-checks.md), checks 51 and 52.
 - **The undervolt search descends.** It measures the card at stock for five minutes, as long as the result is soaked later, so that the two compare: the clock it runs under load, and where on its voltage/frequency curve that clock sits. Then it raises a point one step lower on the curve to that clock and keeps every point above it below that, so the card has no reason to ask for more voltage, and tests that; then the next point down, until one fails. The lowest point that passed gets the 30 s probe, the margin is applied to how far that point was raised, and the result must pass the 300 s soak. No voltage is locked and the points below stay as they are, so idle clocks do not change.
+- **All in one runs the others in a row.** Five minutes at stock to compare with; the overclock of Best of my GPU; an undervolt on top of it; the fan tune; five minutes with everything applied. An overclock and an undervolt do not add up: an overclock moves the whole curve, so at every clock the card already runs on less voltage, and with the same safety margin there is nothing left to take off (on the reference card: 5 W of 201). They are two ends of one line. All in one takes the middle: a clock half-way between stock and the overclock, on the lowest voltage the margin allows for it. The fan tune then sets the fans by hand under that load, lets the temperature settle and goes 5 % lower until the card gets warmer than 5 °C under its limit; the lowest speed that held becomes a point of the fan curve.
 - **Crash journal.** Before a candidate touches the hardware, a `begin` line is flushed to disk. If the machine freezes, the unmatched `begin` becomes a ceiling the next run stays below.
 - **Apply at logon.** A scheduled task starts the app in the tray at logon, which applies the saved profile. It refuses when the driver version or the card changed since tuning, and it stops after three logons in a row that crashed within two minutes.
 - **Tune watchdog.** Every 30 seconds the tray app reads back what the driver reports. It re-applies after a reset, and backs off when another program changed the settings. Four resets within an hour, of the tune or of the driver with the tune applied, are a sign it is not stable: the card is set to stock and the tune is no longer re-applied.
@@ -148,7 +151,9 @@ flowchart LR
 | Command | What it does |
 |---|---|
 | `gao --optimize best\|quiet\|cool\|max [--fan-curve silent\|normal\|cool\|aggressive]` | Runs the search; exit code 0 when saved, 2 when applied but not saved |
+| `gao --optimize all` | All in one: stock measured, overclock, undervolt on top, fan tune, final test; about 35 minutes |
 | `gao --undervolt` | Runs the undervolt search; saved like `--optimize`, in place of a saved overclock |
+| `gao --undervolt --on-overclock` | The undervolt searched on top of the saved overclock and saved into it |
 | `gao --apply` | Re-applies the saved profile |
 | `gao --reset` | Returns to stock clocks and the default power limit |
 | `gao --boot on\|off` | Turns apply-at-logon on or off |

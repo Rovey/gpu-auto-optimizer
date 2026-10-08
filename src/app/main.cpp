@@ -337,6 +337,46 @@ static int undervolt(bool on_overclock) {
     return out.saved ? 0 : 2;   // 2: found and applied, but --apply and boot-apply cannot use it
 }
 
+// The all-in-one run: stock, overclock, undervolt on top, fans, final test.
+static int all_in_one() {
+    gao::app::OptimizeHooks hooks;
+    hooks.aborted = [] { return g_abort.load(); };
+    hooks.log = [](const std::string& msg) { std::printf("  %s\n", msg.c_str()); };
+    hooks.active_gpu = [](const gao::GpuControl* gpu) {
+        g_gpu = gpu;
+        SetConsoleCtrlHandler(OnConsoleCtrl, gpu ? TRUE : FALSE);
+    };
+    // The measuring steps have no clock candidate applied, but they run for
+    // minutes: Ctrl+C must stop them too, and end at stock.
+    SetConsoleCtrlHandler(OnConsoleCtrl, TRUE);
+    const gao::app::AllInOneOutcome out = gao::app::run_all_in_one(hooks);
+    if (!out.ok) {
+        std::printf("RESULT: not applied -- %s\n", out.error.c_str());
+        return 1;
+    }
+    const gao::Profile& p = out.profile;
+    std::printf("RESULT: power %d %%, core +%d MHz, mem +%d MHz", p.power_pct, p.core_mhz, p.mem_mhz);
+    if (p.undervolt) std::printf(", %d MHz at %d mV", p.undervolt->freq_khz / 1000, p.undervolt->volt_uv / 1000);
+    if (out.fan.ok) std::printf(", fans %d %% at %d C", out.fan.hold_pct, out.fan.hold_temp_c);
+    std::printf("\n");
+    if (!out.undervolt_note.empty()) std::printf("  no undervolt: %s\n", out.undervolt_note.c_str());
+    if (!out.fan_note.empty()) std::printf("  fans: %s\n", out.fan_note.c_str());
+    if (!out.disturbed.empty()) std::printf("  not clean: %s\n", out.disturbed.c_str());
+    const auto line = [](const char* name, const gao::StabilityResult& s) {
+        std::printf("  %s score=%.0f it/s  core=%d MHz  mem=%d MHz  peak=%d C  fan=%s  power=%d W  (%.0f s)\n", name, s.score,
+                    s.avg_core_mhz, s.avg_mem_mhz, s.peak_temp_c, gao::reading(s.end_fan_pct, " %").c_str(), s.avg_power_w, s.seconds);
+    };
+    line("stock:", out.stock);
+    line("now:  ", out.now);
+    if (out.stock.score > 0 && out.stock.avg_power_w > 0)
+        std::printf("  that is %+.1f %% score and %+.1f %% power against stock\n", (out.now.score / out.stock.score - 1) * 100,
+                    (static_cast<double>(out.now.avg_power_w) / out.stock.avg_power_w - 1) * 100);
+    std::printf("Saved: `gao --apply` re-applies it, `gao --boot on` applies it at every logon.\n");
+    if (const std::string note = gao::app::update_logon_copy(); !note.empty()) std::printf("%s\n", note.c_str());
+    std::printf("Applied until reboot. `gao --reset` returns to stock.\n");
+    return 0;
+}
+
 static int apply() {
     if (!gao::app::is_elevated()) { std::printf("--apply needs an elevated (administrator) shell\n"); return 1; }
     std::string why;
@@ -569,11 +609,12 @@ int main(int argc, char** argv) {
         gao::Preset preset = gao::Preset::BestOfMyGpu;
         if (argc > 2) {
             const std::string p = argv[2];
+            if (p == "all") return all_in_one();
             if (p == "best") preset = gao::Preset::BestOfMyGpu;
             else if (p == "quiet") preset = gao::Preset::Quiet;
             else if (p == "cool") preset = gao::Preset::CoolAndEfficient;
             else if (p == "max") preset = gao::Preset::MaxPerformance;
-            else { std::printf("--optimize expects best, quiet, cool or max, got '%s'\n", argv[2]); return 1; }
+            else { std::printf("--optimize expects all, best, quiet, cool or max, got '%s'\n", argv[2]); return 1; }
         }
         std::optional<gao::FanCurve> fan_curve;
         if (argc > 3) {
@@ -589,6 +630,8 @@ int main(int argc, char** argv) {
                 "              changes no setting; exit 0 = both STABLE, rebuilt and a clean first batch, 1 = anything else,\n"
                 "              never --stress's 2 / 3)\n"
                 "            | --optimize [best|quiet|cool|max [--fan-curve silent|normal|cool|aggressive]]\n"
+                "            | --optimize all (all in one: stock measured, overclock, an undervolt on top of it at a clock\n"
+                "              between the two, the quietest fan curve, and a final test; about 40 minutes)\n"
                 "            | --apply | --boot on|off | --fan auto | --status\n"
                 "            | --curve (prints the voltage/frequency curve; changes nothing)\n"
                 "            | --undervolt [--on-overclock] (the load clock on the lowest stable voltage; saved like --optimize.\n"

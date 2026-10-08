@@ -5,6 +5,7 @@
 #include "core/boot.hpp"
 #include "core/config.hpp"
 #include "core/fan_curve.hpp"
+#include "core/fan_tune.hpp"
 #include "core/objectives.hpp"
 #include "core/search.hpp"
 #include "core/types.hpp"
@@ -98,7 +99,47 @@ struct UndervoltOutcome {
 // (its power limit, core and memory offsets stay applied throughout) and
 // saved into that profile, next to them. Without a saved tune that applies
 // to this card and driver the run does not start.
-UndervoltOutcome run_undervolt(const OptimizeHooks& hooks, bool on_saved_tune = false);
+// how: for a run on the saved tune that is one step of a longer run.
+struct UndervoltOnTune {
+    std::optional<StabilityResult> measured;   // the overclock's own long run: the reference, nothing is measured again
+    int clock_khz = 0;                         // > 0: the clock to keep, below the overclock's (see UndervoltBase)
+    std::optional<Preset> save_as;             // the preset the profile is saved under; empty: as it was
+};
+UndervoltOutcome run_undervolt(const OptimizeHooks& hooks, bool on_saved_tune = false, const UndervoltOnTune& how = {});
+
+struct AllInOneOutcome {
+    bool ran = false;            // false: stopped before anything was tuned; `error` says why
+    std::string error;           // why the run ended without a result; the card is at stock then
+    bool ok = false;             // a result is applied and saved
+    StabilityResult stock;       // five minutes at stock: the "before"
+    OptimizeOutcome overclock;   // step 2
+    UndervoltOutcome undervolt;  // step 3; not ran when it was not reached
+    std::string undervolt_note;  // why the result carries no undervolt, when it does not
+    FanTuneResult fan;           // step 4; !ok: the profile's own fan curve is kept
+    std::string fan_note;        // why, when it is
+    StabilityResult now;         // the last five-minute run with the result applied: the "after"
+    // Set when the final test scored clearly less than the same settings did
+    // minutes before, at the same clock: something else was using the
+    // graphics card or the processor, and `now` is not a clean number.
+    std::string disturbed;
+    Profile profile;             // what was saved, when ok
+};
+
+// One run that does all of it, for a card nobody has tuned before:
+//   1. five minutes at stock, to compare with;
+//   2. the overclock of Best of my GPU (power limit, memory, core);
+//   3. an undervolt on top of it, at a clock half-way between what the card
+//      ran at stock and what it runs with the overclock: the overclock and
+//      the undervolt are two ends of one line (hardware check 74), and this
+//      takes the middle: more speed than stock on less power than stock;
+//   4. the quietest fan speed that holds the temperature target, measured,
+//      and a fan curve through it;
+//   5. five minutes with everything applied, fans on that curve: the result
+//      is only kept whole when this passes.
+// A step that fails keeps what the steps before it found: no undervolt
+// leaves the overclock, no fan tune leaves the profile's own curve. A stop
+// request ends at stock. Needs elevation.
+AllInOneOutcome run_all_in_one(const OptimizeHooks& hooks);
 
 struct BootApplyOutcome {
     bool applied = false;

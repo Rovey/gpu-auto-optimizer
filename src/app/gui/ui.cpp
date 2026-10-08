@@ -42,7 +42,7 @@ enum Icon : unsigned {
     kIconTemp = 0xE9CA, kIconPower = 0xE945, kIconFan = 0xF16A, kIconRefresh = 0xE72C, kIconUndo = 0xE777,
     kIconPlay = 0xF5B0, kIconStop = 0xE71A, kIconClock = 0xE823, kIconStar = 0xE734, kIconQuiet = 0xE992,
     kIconLeaf = 0xEC0A, kIconGauge = 0xEC4A, kIconShield = 0xEA18, kIconList = 0xE8FD, kIconBack = 0xE72B,
-    kIconDownload = 0xE896,
+    kIconDownload = 0xE896, kIconStarFilled = 0xE735,
 };
 
 // UTF-8 for a code point in the Basic Multilingual Plane's private use area.
@@ -93,6 +93,11 @@ constexpr PresetInfo kPresets[] = {
     {Preset::MaxPerformance, kIconGauge, "Max performance",
      "Highest confirmed clocks minus one step and the highest power limit."},
 };
+// The one that does it all, shown first and across the full width.
+constexpr PresetInfo kAllInOne = {Preset::AllInOne, kIconStarFilled, "All in one",
+                                  "Overclock, then an undervolt on top of it, then the quietest fan curve that holds the "
+                                  "temperature: more speed than stock on less power, tested as a whole. One click, about 40 "
+                                  "minutes."};
 // Not a clock search, and shown apart from the four above: the speed the
 // card has at stock, on the lowest voltage that holds it.
 constexpr PresetInfo kUndervolt = {Preset::Undervolt, kIconPower, "Undervolt",
@@ -101,6 +106,7 @@ constexpr PresetInfo kUndervolt = {Preset::Undervolt, kIconPower, "Undervolt",
 
 const char* title_of(Preset preset) {
     if (preset == kUndervolt.preset) return kUndervolt.title;
+    if (preset == kAllInOne.preset) return kAllInOne.title;
     for (const PresetInfo& p : kPresets)
         if (p.preset == preset) return p.title;
     return preset_name(preset);
@@ -281,9 +287,10 @@ void preset_card(UiState& s, const PresetInfo& p, float w, float h) {
     ImGui::PopID();
 }
 
-// The four clock profiles side by side and the undervolt below them, across
-// the full width: it is the other kind of tune.
+// All in one first, across the full width; the four clock profiles side by
+// side; and the undervolt below them, the other kind of tune.
 void preset_cards(UiState& s) {
+    preset_card(s, kAllInOne, ImGui::GetContentRegionAvail().x, 0);
     const float gap = ImGui::GetStyle().ItemSpacing.x;
     const float w = (ImGui::GetContentRegionAvail().x - gap * 3) / 4;
     for (size_t i = 0; i < std::size(kPresets); ++i) {
@@ -726,12 +733,13 @@ void choose(UiState& s, const UiActions& act) {
     begin_card("choose");
     heading("Choose a profile");
     dim("Each profile searches for the highest stable settings and applies a safety margin.");
-    const bool undervolt = s.preset == Preset::Undervolt;
+    const bool undervolt = s.preset == Preset::Undervolt, all = s.preset == Preset::AllInOne;
     ImGui::Spacing();
     preset_cards(s);
     ImGui::Spacing();
-    // The undervolt search leaves the fans to the NVIDIA driver and tests no curve.
-    ImGui::BeginDisabled(undervolt);
+    // The undervolt search leaves the fans to the NVIDIA driver and tests no
+    // curve; the all-in-one run measures its own.
+    ImGui::BeginDisabled(undervolt || all);
     ImGui::AlignTextToFramePadding();
     ImGui::TextUnformatted("Fan curve during the run");
     ImGui::SameLine(0, em());
@@ -748,10 +756,12 @@ void choose(UiState& s, const UiActions& act) {
     if (go) s.elevated ? act.optimize(s.preset) : act.restart_elevated();
     ImGui::SameLine(0, em() * 1.5f);
     ImGui::BeginGroup();
-    ImGui::TextUnformatted((ic(kIconClock) + (undervolt ? "  About 13 minutes of full GPU load."
-                                                        : "  About 15 minutes of full GPU load."))
+    ImGui::TextUnformatted((ic(kIconClock) + (all ? "  About 40 minutes of full GPU load."
+                                              : undervolt ? "  About 13 minutes of full GPU load."
+                                                          : "  About 15 minutes of full GPU load."))
                                .c_str());
     dim("Abort restores stock at any time. A setting that crashes the machine is never tried again.");
+    dim("Close games and other programs that use the graphics card first: they change what the run measures.");
     ImGui::EndGroup();
     end_card();
 }
@@ -1005,18 +1015,52 @@ bool undervolt_result(const app::UndervoltOutcome& o) {
     return true;
 }
 
+// The all-in-one run: what the card runs now, next to what it ran at stock.
+bool all_in_one_result(const app::AllInOneOutcome& o) {
+    if (!o.ok) {
+        heading(o.ran ? "Not applied" : "Not started");
+        wrapped(kBad, o.error);
+        if (o.ran) wrapped(kText, "The card is at stock.");
+        return false;
+    }
+    const Profile& p = o.profile;
+    heading("Done");
+    wrapped(kGood, "Applied: core " + offset(p.core_mhz) + ", memory " + offset(p.mem_mhz) + ", power limit " + std::to_string(p.power_pct) +
+                       " %" + (p.undervolt ? ", " + undervolt_text(*p.undervolt) : std::string()));
+    if (o.fan.ok)
+        wrapped(kGood, "Fans: " + std::to_string(o.fan.hold_pct) + " % keeps the card at " + std::to_string(o.fan.hold_temp_c) +
+                           " \xC2\xB0""C under full load; the fan curve goes through that point.");
+    if (!o.undervolt_note.empty()) wrapped(kWarn, "No undervolt on top of the overclock: " + o.undervolt_note + ".");
+    if (!o.fan_note.empty()) wrapped(kWarn, "Fans: " + o.fan_note + ".");
+    if (!o.disturbed.empty()) wrapped(kWarn, "The numbers below are not clean: " + o.disturbed + ".");
+    ImGui::Spacing();
+    comparison(o.stock, o.now, [&](auto row) {
+        row("Score", score_text(o.stock.score), against(o.stock.score, o.now.score, "it/s"));
+        row("Core clock", reading(o.stock.avg_core_mhz, " MHz"), reading(o.now.avg_core_mhz, " MHz"));
+        row("Memory clock", reading(o.stock.avg_mem_mhz, " MHz"), reading(o.now.avg_mem_mhz, " MHz"));
+        row("Peak temperature", reading(o.stock.peak_temp_c, " \xC2\xB0""C"), reading(o.now.peak_temp_c, " \xC2\xB0""C"));
+        row("Fan speed at the end", reading(o.stock.end_fan_pct, " %"), reading(o.now.end_fan_pct, " %"));
+        row("Power", reading(o.stock.avg_power_w, " W"),
+            o.stock.avg_power_w > 0 && o.now.avg_power_w >= 0 ? against(o.stock.avg_power_w, o.now.avg_power_w, "W")
+                                                              : reading(o.now.avg_power_w, " W"));
+    });
+    return true;
+}
+
 void results(UiState& s, const OptimizeWorker::Snapshot& run, const UiActions& act) {
     if (!run.ended()) {
         s.screen = Screen::Choose;
         return;
     }
     begin_card("results");
-    const bool applied = run.undervolt ? undervolt_result(*run.undervolt) : optimize_result(*run.outcome);
+    const bool applied = run.all_in_one  ? all_in_one_result(*run.all_in_one)
+                         : run.undervolt ? undervolt_result(*run.undervolt)
+                                         : optimize_result(*run.outcome);
     if (applied) {
-        const bool saved = run.undervolt ? run.undervolt->saved : run.outcome->saved;
+        const bool saved = run.all_in_one ? run.all_in_one->ok : run.undervolt ? run.undervolt->saved : run.outcome->saved;
         ImGui::Spacing();
         if (saved) wrapped(kText, "Saved. It stays applied until reboot; turn on apply at logon to keep it.");
-        else wrapped(kWarn, "Not saved: " + (run.undervolt ? run.undervolt->save_note : run.outcome->save_note));
+        else wrapped(kWarn, "Not saved: " + (run.undervolt ? run.undervolt->save_note : run.outcome ? run.outcome->save_note : std::string()));
         if (saved && !s.boot_on && primary_button("Apply at every logon")) act.set_boot(true);
         if (saved && !s.boot_on) ImGui::SameLine();
         if (ImGui::Button(with_icon(kIconUndo, "Revert to stock").c_str())) act.revert_to_stock();

@@ -93,8 +93,8 @@ TEST_CASE("tune_fan: a speed is judged when the temperature has settled, not bef
     const auto r = tune_fan(card.gpu(), card.io(), 75, 65, 30);
     REQUIRE(r.ok);
     CHECK(r.hold_pct == 50);
-    // Every look is 15 s; no speed got fewer than three unless it was clearly too warm.
-    CHECK(card.probes >= 3 * 4);
+    // Every look is 15 s; no speed got fewer than four unless it was clearly too warm.
+    CHECK(card.probes >= 4 * 4);
     CHECK(std::find(card.measuring.begin(), card.measuring.end(), "Fan speed 65 %: waiting for the temperature to settle") != card.measuring.end());
     CHECK(card.measuring.back().empty());
 }
