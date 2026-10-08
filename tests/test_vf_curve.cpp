@@ -465,3 +465,57 @@ TEST_CASE("an anchor that is the top point of the curve has nothing above it to 
     REQUIRE(r.ok);
     CHECK(card.at_stock());
 }
+
+TEST_CASE("a flat top over a core offset: the offset stays on the points below the anchor") {
+    // An overclock is the same offset on every point of this one table; the
+    // undervolt on top of it reshapes the part from the anchor up.
+    FakeCurve card;
+    std::fill(card.raw.begin(), card.raw.end(), 60000);   // core +60 MHz
+    const auto r = apply_flat_top(card.gpu(), 8, 2760000, kVfTailDropKhz, 60000);
+    REQUIRE(r.ok);
+    for (std::size_t i = 0; i < 8; ++i) CHECK(card.raw[i] == 60000);
+    CHECK(card.freq(8) == 2760000);
+    for (std::size_t i = 8; i < 16; ++i) CHECK(card.reads(i) == 2760000);
+    for (std::size_t i = 9; i < 16; ++i) CHECK(card.freq(i) == 2760000 - kVfTailDropKhz);
+    CHECK(card.runs_at() == 8);
+    CHECK(curve_state(*card.gpu().read_vf_curve(), card.volt_uv[8], 60000) == CurveState::FlatTop);
+    CHECK(curve_state(*card.gpu().read_vf_curve(), card.volt_uv[8]) == CurveState::Other);   // not a flat top over stock
+}
+
+TEST_CASE("a flat top over a core offset levels a curve that carries something else first") {
+    FakeCurve card;                       // at stock: the offset is not on the card yet
+    card.raw[12] = 15000;                 // and a stray one
+    const auto r = apply_flat_top(card.gpu(), 8, 2760000, kVfTailDropKhz, 60000);
+    REQUIRE(r.ok);
+    for (std::size_t i = 0; i < 8; ++i) CHECK(card.raw[i] == 60000);
+    CHECK(card.freq(8) == 2760000);
+}
+
+TEST_CASE("the target of a flat top over a core offset counts from the offset curve, the raise from the built-in one") {
+    FakeCurve card;
+    // The top of the built-in curve is 3000 MHz; with +60 the card runs 3060 by itself.
+    CHECK(apply_flat_top(card.gpu(), 14, 3060000, kVfTailDropKhz, 60000).ok);
+    FakeCurve above;
+    const auto r = apply_flat_top(above.gpu(), 14, 3075000, kVfTailDropKhz, 60000);
+    CHECK_FALSE(r.ok);
+    CHECK(r.why.find("above anything the card runs") != std::string::npos);
+    // The largest raise this program writes is counted over the built-in curve: offset and flat top together.
+    FakeCurve far;   // slot 4 runs 1900 MHz built in; 2380 is +420 over the offset curve, +480 over the built-in one: allowed
+    CHECK(apply_flat_top(far.gpu(), 4, 2380000, kVfTailDropKhz, 60000).ok);
+    FakeCurve too_far;   // 2420: +460 over the offset curve, +520 over the built-in one
+    const auto t = apply_flat_top(too_far.gpu(), 4, 2420000, kVfTailDropKhz, 60000);
+    CHECK_FALSE(t.ok);
+    CHECK(t.why.find("larger than this program writes") != std::string::npos);
+}
+
+TEST_CASE("curve_state over a core offset: the flat top, the bare offset, stock") {
+    FakeCurve card;
+    const int anchor_uv = card.volt_uv[8];
+    std::fill(card.raw.begin(), card.raw.end(), 60000);
+    CHECK(curve_state(*card.gpu().read_vf_curve(), anchor_uv, 60000) == CurveState::Other);   // the offset alone: no flat top
+    REQUIRE(apply_flat_top(card.gpu(), 8, 2760000, kVfTailDropKhz, 60000).ok);
+    CHECK(curve_state(*card.gpu().read_vf_curve(), anchor_uv, 60000) == CurveState::FlatTop);
+    CHECK(curve_state(*card.gpu().read_vf_curve(), anchor_uv, 45000) == CurveState::Other);   // over another offset
+    std::fill(card.raw.begin(), card.raw.end(), 0);
+    CHECK(curve_state(*card.gpu().read_vf_curve(), anchor_uv, 60000) == CurveState::Stock);    // a driver reset took it all
+}

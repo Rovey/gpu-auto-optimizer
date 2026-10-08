@@ -449,7 +449,7 @@ std::optional<gao::CurveState> read_curve_state(const gao::Config& cfg) {
     if (!cfg.profile || !cfg.profile->undervolt || !g.gpu.read_vf_curve) return std::nullopt;
     const auto points = g.gpu.read_vf_curve();
     if (!points) return std::nullopt;
-    return gao::curve_state(*points, cfg.profile->undervolt->volt_uv);
+    return gao::curve_state(*points, cfg.profile->undervolt->volt_uv, cfg.profile->core_mhz * 1000);
 }
 
 void refresh_status(bool with_task) {

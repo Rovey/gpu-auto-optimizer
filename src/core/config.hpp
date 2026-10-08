@@ -12,7 +12,7 @@ namespace gao {
 struct UndervoltTune {
     int volt_uv = 0;     // the curve point the flat top is anchored at
     int freq_khz = 0;    // the clock that point and every point above it run
-    int raise_khz = 0;   // how far that lifted the anchor above its built-in frequency when it was tested
+    int raise_khz = 0;   // how far the anchor ran above its built-in frequency when it was tested, a core offset under it included
     bool operator==(const UndervoltTune&) const = default;
 };
 
@@ -26,7 +26,7 @@ struct Profile {
     std::string gpu;        // NVML UUID of the card it was tested on
     std::string saved_at;   // local time, "YYYY-MM-DD HH:MM"
     std::optional<FanCurve> fan_curve;   // the curve the tune was tested with; nullopt: tuned before fan control
-    std::optional<UndervoltTune> undervolt;   // set: the tune is a flat top, not a core offset
+    std::optional<UndervoltTune> undervolt;   // set: a flat top on the curve, over core_mhz when that is not 0
 };
 
 // Everything that has to survive a reboot. Freeze ceilings are not here:

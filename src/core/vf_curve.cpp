@@ -59,13 +59,13 @@ void put_vf_raw_offset(unsigned char* control, int index, int raw) {
     std::memcpy(control + kVfEntries + static_cast<std::size_t>(index) * kVfControlEntry + kVfControlOffset, &raw, sizeof(raw));
 }
 
-CurveState curve_state(const std::vector<VfPoint>& curve, int anchor_uv) {
+CurveState curve_state(const std::vector<VfPoint>& curve, int anchor_uv, int base_raw) {
     if (curve.empty()) return CurveState::Other;
     if (at_stock(curve)) return CurveState::Stock;
     bool anchored = false;
     for (const VfPoint& p : curve) {
-        if (p.volt_uv < anchor_uv && p.raw_offset != 0) return CurveState::Other;
-        if (p.volt_uv == anchor_uv) anchored = p.raw_offset > 0;
+        if (p.volt_uv < anchor_uv && p.raw_offset != base_raw) return CurveState::Other;
+        if (p.volt_uv == anchor_uv) anchored = p.raw_offset > base_raw;
     }
     return anchored ? CurveState::FlatTop : CurveState::Other;
 }
@@ -90,17 +90,32 @@ bool has_shape(const std::vector<VfPoint>& curve) {
 }
 }
 
-bool clear_vf_curve(const GpuControl& gpu, std::string* why) {
+namespace {
+// Every point on the same offset, judged by reading back. Writes nothing
+// when the curve already is there.
+bool level_vf_curve(const GpuControl& gpu, int raw, std::string* why) {
     auto fail = [&](const char* m) { if (why) *why = m; return false; };
-    if (!gpu.read_vf_curve || !gpu.write_vf_offsets) return true;   // nothing this program could have written
+    auto level = [raw](const std::vector<VfPoint>& c) {
+        return std::all_of(c.begin(), c.end(), [raw](const VfPoint& p) { return p.raw_offset == raw; });
+    };
     auto curve = gpu.read_vf_curve();
     if (!curve) return fail("the curve could not be read");
-    if (at_stock(*curve)) return true;
-    const bool accepted = zero_curve(gpu, *curve);
+    if (level(*curve)) return true;
+    std::vector<VfOffset> offsets;
+    for (const VfPoint& p : *curve) offsets.push_back({p.index, raw});
+    const bool accepted = gpu.write_vf_offsets(offsets);
     curve = gpu.read_vf_curve();
     if (!curve) return fail(accepted ? "the curve could not be read back" : "writing the curve failed");
-    if (!at_stock(*curve)) return fail(accepted ? "the curve did not go back to stock" : "writing the curve failed");
+    if (!level(*curve)) return fail(!accepted ? "writing the curve failed"
+                                    : raw == 0 ? "the curve did not go back to stock"
+                                               : "the curve did not take the core offset on every point");
     return true;
+}
+}
+
+bool clear_vf_curve(const GpuControl& gpu, std::string* why) {
+    if (!gpu.read_vf_curve || !gpu.write_vf_offsets) return true;   // nothing this program could have written
+    return level_vf_curve(gpu, 0, why);
 }
 
 bool remove_vf_shape(const GpuControl& gpu, std::string* why) {
@@ -114,7 +129,7 @@ bool remove_vf_shape(const GpuControl& gpu, std::string* why) {
     return false;
 }
 
-VfApplyResult apply_flat_top(const GpuControl& gpu, int anchor_index, int freq_khz, int tail_drop_khz) {
+VfApplyResult apply_flat_top(const GpuControl& gpu, int anchor_index, int freq_khz, int tail_drop_khz, int base_raw) {
     VfApplyResult r;
     auto refuse = [&](const std::string& why) { r.why = why; r.at_stock = true; return r; };   // nothing was written
     // After a write: the card must not keep half a curve.
@@ -125,19 +140,27 @@ VfApplyResult apply_flat_top(const GpuControl& gpu, int anchor_index, int freq_k
         return r;
     };
     if (!gpu.read_vf_curve || !gpu.write_vf_offsets) return refuse("this card or driver does not offer the voltage/frequency curve");
+    // A refusal after the levelling: with a base offset the curve was (or may have been) written, so it is cleared.
+    auto stop = [&](const std::string& m) { return base_raw == 0 ? refuse(m + "; nothing was written") : fail(m); };
 
+    // Whatever is on the curve goes first: every point on the base offset.
+    // After a failed write here the curve may carry part of it: cleared.
     std::string why;
-    if (!clear_vf_curve(gpu, &why)) return refuse(why + "; nothing was written");
+    if (!level_vf_curve(gpu, base_raw, &why)) return base_raw == 0 ? refuse(why + "; nothing was written") : fail(why);
     auto curve = gpu.read_vf_curve();
-    if (!curve || curve->empty()) return refuse("the curve could not be read; nothing was written");
+    if (!curve || curve->empty()) return stop("the curve could not be read");
     const VfPoint* anchor = find(*curve, anchor_index);
-    if (!anchor) return refuse("that point is not on the curve; nothing was written");
+    if (!anchor) return stop("that point is not on the curve");
     const int top_khz = std::max_element(curve->begin(), curve->end(), [](const VfPoint& a, const VfPoint& b) {
                             return a.freq_khz < b.freq_khz;
                         })->freq_khz;
-    if (freq_khz < anchor->freq_khz) return refuse("the point already runs more than the target; nothing was written");
-    if (freq_khz > top_khz) return refuse("the target is above anything the card runs by itself; nothing was written");
-    if (freq_khz - anchor->freq_khz > kVfMaxRaiseKhz) return refuse("the raise is larger than this program writes; nothing was written");
+    if (freq_khz < anchor->freq_khz) return stop("the point already runs more than the target");
+    if (freq_khz > top_khz) return stop("the target is above anything the card runs by itself");
+    // Counted over the built-in curve: the base offset and the flat top together.
+    if (freq_khz - anchor->freq_khz + base_raw > kVfMaxRaiseKhz) {
+        const char* m = "the raise is larger than this program writes";
+        return base_raw == 0 ? refuse(std::string(m) + "; nothing was written") : fail(m);
+    }
 
     // The plan: the slots from the anchor's voltage up, each to the target.
     const int anchor_uv = anchor->volt_uv;
@@ -149,11 +172,12 @@ VfApplyResult apply_flat_top(const GpuControl& gpu, int anchor_index, int freq_k
     for (const VfPoint& p : *curve)
         if (p.volt_uv < anchor_uv) below.push_back(p.index);
 
-    // What the plan asks of each point, from this read at stock, and with it
-    // the most that will ever be written there.
+    // What the plan asks of each point, from this read with only the base
+    // offset on the curve, and with it the most that will ever be written
+    // there.
     auto limit_raw = [&](int index) {
-        const VfPoint* built_in = find(*curve, index);
-        return std::max(0, freq_khz - (built_in ? built_in->freq_khz : freq_khz)) + kVfSlackKhz;
+        const VfPoint* start = find(*curve, index);
+        return base_raw + std::max(0, freq_khz - (start ? start->freq_khz : freq_khz)) + kVfSlackKhz;
     };
     // The step the card's clock moves in (15 MHz on the reference card), read
     // off the curve itself. The half step of the first round is kept on it,
@@ -200,7 +224,7 @@ VfApplyResult apply_flat_top(const GpuControl& gpu, int anchor_index, int freq_k
         for (int index : below) {
             const VfPoint* is = find(*after, index);
             if (!is) return fail("a point disappeared from the curve");
-            if (is->raw_offset != 0)
+            if (is->raw_offset != base_raw)
                 return fail("a point below the anchor got an offset (slot " + std::to_string(index) + ": " +
                             std::to_string(is->raw_offset) + ")");
         }
@@ -232,7 +256,7 @@ VfApplyResult apply_flat_top(const GpuControl& gpu, int anchor_index, int freq_k
             if (!final_read) return fail("the curve could not be read back");
             for (const VfPoint& p : *final_read) {
                 if (p.volt_uv < anchor_uv) {
-                    if (p.raw_offset != 0) return fail("a point below the anchor got an offset (slot " + std::to_string(p.index) + ")");
+                    if (p.raw_offset != base_raw) return fail("a point below the anchor got an offset (slot " + std::to_string(p.index) + ")");
                     continue;
                 }
                 if (p.index == anchor_index ? std::abs(p.freq_khz - freq_khz) > kVfToleranceKhz

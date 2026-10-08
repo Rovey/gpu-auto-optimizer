@@ -357,13 +357,6 @@ TEST_CASE("an undervolt profile is refused before anything is written when it ca
         CHECK(card.offset_writes == 0);
         CHECK(card.curve_writes == 0);
     };
-    {
-        CurveCard card;   // a core offset and a flat top are one table
-        Profile p = undervolt_profile();
-        p.core_mhz = 60;
-        refused(p, card.gpu(), card);
-        CHECK(why.find("cannot be combined") != std::string::npos);
-    }
     for (const UndervoltTune bad : {UndervoltTune{850000, 2400000, 0}, UndervoltTune{850000, 2400000, 900000},
                                     UndervoltTune{0, 2400000, 150000}, UndervoltTune{850000, -1, 150000}}) {
         CurveCard card;
@@ -402,4 +395,46 @@ TEST_CASE("a profile without an undervolt removes a flat top that is on the card
     REQUIRE(apply_profile(card.gpu(), p, &why));
     CHECK(card.at_stock());
     CHECK(card.mem == 1050);
+}
+
+TEST_CASE("an overclock and an undervolt in one profile: the flat top is written over the core offset") {
+    // As the overclock-then-undervolt run saves it: core +60, and 2460 MHz at
+    // 850 mV. That point runs 2250 built in and 2310 with the offset: the flat
+    // top lifts it another 150, 210 over the built-in curve.
+    Profile p = undervolt_profile();
+    p.core_mhz = 60;
+    p.mem_mhz = 500;
+    p.power_pct = 105;
+    p.undervolt = UndervoltTune{850000, 2460000, 210000};
+    CurveCard card;
+    std::string why;
+    REQUIRE(apply_profile(card.gpu(), p, &why));
+    CHECK(card.core == 60);
+    CHECK(card.mem == 500);
+    CHECK(card.power == 105);
+    for (std::size_t i = 0; i < 15; ++i) CHECK(card.raw[i] == 60000);   // the overclock, below the anchor
+    CHECK(card.freq(15) == 2460000);
+    for (std::size_t i = 16; i < card.raw.size(); ++i) CHECK(card.freq(i) < 2460000);
+    // Applied again over itself, and over a card that kept the offset but lost the flat top.
+    REQUIRE(apply_profile(card.gpu(), p, &why));
+    CHECK(card.freq(15) == 2460000);
+    std::fill(card.raw.begin(), card.raw.end(), 60000);
+    REQUIRE(apply_profile(card.gpu(), p, &why));
+    CHECK(card.freq(15) == 2460000);
+    for (std::size_t i = 0; i < 15; ++i) CHECK(card.raw[i] == 60000);
+}
+
+TEST_CASE("the raise of an undervolt over a core offset is checked against the built-in curve before a clock is written") {
+    Profile p = undervolt_profile();
+    p.core_mhz = 60;
+    p.undervolt = UndervoltTune{850000, 2460000, 210000};
+    CurveCard card;
+    for (int& f : card.base_khz) f -= 60000;   // the built-in curve reads 60 MHz lower: the point would run 270 over it, tested 210
+    std::string why;
+    bool clean = false;
+    CHECK_FALSE(apply_profile(card.gpu(), p, &why, &clean));
+    CHECK(why.find("would be raised by 270 MHz; the undervolt was tested with 210 MHz") != std::string::npos);
+    CHECK(clean);
+    CHECK(card.at_stock());
+    CHECK(card.core == 0);   // the reset; the overclock was never written
 }

@@ -82,7 +82,14 @@ struct VfApplyResult {
 // point above it runs more; the points below keep the built-in curve. It is
 // written flat first, every point from the anchor up on freq_khz and read
 // back there, and then the points above the anchor are stored tail_drop_khz
-// lower in one more write (0: left flat). The target must
+// lower in one more write (0: left flat).
+//
+// base_raw: the offset every point carries before the flat top, and the
+// points below the anchor keep: 0 for an undervolt at stock, a core offset
+// in kHz for an undervolt on top of an overclock. The two are one table on
+// the card (hardware check 65), so the overclock cannot be "applied first"
+// and left alone: it is part of the shape. A curve that does not carry
+// exactly base_raw on every point is levelled to it first. The target must
 // lie between the anchor's own frequency and the highest the card runs by
 // itself (more is an overclock, not an undervolt).
 //
@@ -102,7 +109,8 @@ struct VfApplyResult {
 //
 // A curve that is not at stock is cleared first. Any failure clears the
 // curve again.
-VfApplyResult apply_flat_top(const GpuControl& gpu, int anchor_index, int freq_khz, int tail_drop_khz = kVfTailDropKhz);
+VfApplyResult apply_flat_top(const GpuControl& gpu, int anchor_index, int freq_khz, int tail_drop_khz = kVfTailDropKhz,
+                             int base_raw = 0);
 
 // Every offset back to zero. Judged by reading the curve back, not by the
 // driver's return code. True without writing when the curve already is at
@@ -120,9 +128,10 @@ bool remove_vf_shape(const GpuControl& gpu, std::string* why);
 // by the offsets alone, never by frequencies: the built-in curve moves with
 // temperature. FlatTop: no point below the anchor has an offset and the
 // anchor is raised. Other: anything else that is not stock, a plain core
-// offset (the same on every point) included.
+// offset (the same on every point) included. base_raw: the offset the
+// points below the anchor carry when the flat top sits on a core offset.
 enum class CurveState { Stock, FlatTop, Other };
-CurveState curve_state(const std::vector<VfPoint>& curve, int anchor_uv);
+CurveState curve_state(const std::vector<VfPoint>& curve, int anchor_uv, int base_raw = 0);
 
 // The slot of the lowest-voltage point that runs at least freq_khz: where
 // the card reaches that frequency by itself. -1 when no point does.
