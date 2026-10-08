@@ -42,6 +42,7 @@ StabilityResult run_stability(const std::function<StressBatch()>& batch,
         if (!t.ok) { r.verdict = Verdict::NoTelemetry; break; }
         r.peak_temp_c = std::max(r.peak_temp_c, t.temp_c);
         r.end_fan_pct = t.fan_pct;
+        r.end_temp_c = t.temp_c;
         power.add(t.power_w, batch_s);
         core.add(t.core_mhz, batch_s);
         mem.add(t.mem_mhz, batch_s);
