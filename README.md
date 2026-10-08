@@ -54,6 +54,30 @@ The search raised each clock until the card computed a wrong value (core +225 MH
 > [!NOTE]
 > The score is the app's own stress test, a DirectX 11 compute load. Games gain a different amount, and every card has its own limits. The log of this run is in [docs/hardware-checks.md](docs/hardware-checks.md) (check 52, fourth run).
 
+## Or the same speed on 20 % less power
+
+<div align="center">
+
+<img src="docs/images/undervolt-result.svg" width="860" alt="Measured on the reference RTX 4070: power under load falls from 195 to 155 watts, 20 % less, after one run of Undervolt, at 99.6 % of the stress-test score. The card reaches its clock at 990 mV instead of 1100 mV, runs at 59 °C instead of 67 °C, and its fans at 64 % instead of 72 %.">
+
+</div>
+
+One run of **Undervolt** on the same card. Clocks and power limit stay stock; the card reaches the same clock on less voltage:
+
+| | Stock | After one click |
+|---|---|---|
+| Power under load | 195 W | **155 W (−20.5 %)** |
+| Temperature | 67 °C | 59 °C |
+| Fan speed | 72 % | 64 % |
+| Stress-test score | 5732 it/s | 5708 it/s (−0.4 %) |
+| Core clock under load | 2788 MHz | 2778 MHz |
+| Voltage the card reaches that clock at | 1100 mV | 990 mV |
+
+Both columns are five minutes of full load, so the card is heated through on both sides and the temperatures compare; the fans were left to the NVIDIA driver's own curve. The search lowered the voltage one curve point at a time until the card computed a wrong value (940 mV), confirmed the lowest value that held for 30 s (950 mV) and applied it with the safety margin (990 mV). The result then had to pass the five-minute soak before it was saved. The whole run took 12 minutes.
+
+> [!NOTE]
+> An undervolt is saved in place of an overclock, not next to it, so this is the other choice, not an extra. Every card has its own limits. The log of this run is in [docs/hardware-checks.md](docs/hardware-checks.md) (check 72).
+
 ## Quick start
 
 1. Download `GpuAutoOptimizer-<version>-win-x64.zip` from the [latest release](https://github.com/Rovey/gpu-auto-optimizer/releases/latest) and unzip it anywhere.
@@ -90,7 +114,7 @@ Turning on **Apply at logon** copies the app to `%ProgramFiles%\GpuAutoOptimizer
 
 The safety margin: the search finds the highest stable offset and applies a fraction of it (70 % for Best of my GPU), always at least one step below the edge.
 
-The undervolt is saved in place of an overclock, not next to it: on the card a core offset and the curve are one table. On the reference RTX 4070, both measured for five minutes with the card heated through: 195 W, 67 °C and 72 % fan speed at stock; 155 W (20 % less), 59 °C and 64 % fan speed with the undervolt, at 99.6 % of the stress-test score. The card's built-in curve moves with temperature, so the points above the one the card runs on are stored a little lower than it: a warm card then gives up one 15 MHz clock step instead of going to a higher voltage, which had cost about 12 W.
+The undervolt is saved in place of an overclock, not next to it: on the card a core offset and the curve are one table. The card's built-in curve moves with temperature, so the points above the one the card runs on are stored a little lower than it: a warm card then gives up one 15 MHz clock step instead of going to a higher voltage, which had cost about 12 W. During a run the window draws the curve as the run writes it:
 
 <div align="center">
 <img src="docs/images/undervolt-run.png" width="860" alt="An undervolt run: the curve on the card, cut off flat at the stock clock, over the card's own curve, with the probes below">
