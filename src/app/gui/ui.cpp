@@ -216,7 +216,15 @@ void tile(const char* id, Icon icon, const char* label, const std::string& value
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(ImGui::GetStyle().ItemSpacing.x, em() * 0.15f));
     ImGui::BeginGroup();
     dim(label);
-    text_bold(value.c_str(), 1.3f);
+    // A value that is wider than the tile is drawn smaller, down to the
+    // label's own size, so that it is never cut off.
+    float scale = 1.3f;
+    ImGui::PushFont(g_bold, base() * scale);
+    const float need = ImGui::CalcTextSize(value.c_str()).x;
+    ImGui::PopFont();
+    const float room = ImGui::GetContentRegionAvail().x - em() * 0.3f;
+    if (need > room && need > 0) scale = std::max(1.0f, scale * room / need);
+    text_bold(value.c_str(), scale);
     ImGui::EndGroup();
     ImGui::PopStyleVar();
     ImGui::EndChild();

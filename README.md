@@ -98,7 +98,7 @@ Both columns are five minutes of full load, so the card is heated through on bot
 | Core clock under load | 2789 MHz | 2835 MHz |
 | Memory clock under load | 10495 MHz | 12000 MHz |
 
-A little faster, on less power, with slower fans. The card is warmer because the fans are allowed to be: the fan tune aims for 70 °C, 5 °C under the profile's limit, and found that 52 % holds it. With the NVIDIA driver's own fan curve the same settings ran at 63 °C on 176 W. The run took 34 minutes.
+A little faster, on less power, with slower fans. The card is warmer because the fans are allowed to be: the fan tune aims for 70 °C, 5 °C under the profile's limit, and found that 52 % holds it. With the NVIDIA driver's own fan curve the same settings ran at 63 °C on 176 W. The run took 34 minutes. A second run gave 0.9 % more score on 10.8 % less power, with the fans at 55 %.
 
 The gains are smaller than those of the two sections above, and that is the point of it. An overclock and an undervolt do not add up: an overclock moves the whole voltage/frequency curve, so at every clock the card already runs on less voltage, and with the same safety margin there is nothing left to take off. They are two ends of one line. All in one takes the middle, where the card beats stock on both counts; **Best of my GPU** and **Undervolt** are the ends.
 

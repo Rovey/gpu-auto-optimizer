@@ -417,5 +417,8 @@ TEST_CASE("every owner of the fans has its label") {
     CHECK(std::string(fan_owner_label(FanOwner::Curve)) == " (curve)");
     CHECK(std::string(fan_owner_label(FanOwner::Other)) == " (other program)");
     CHECK(std::string(fan_owner_label(FanOwner::Run)) == " (run)");
-    CHECK(std::string(fan_owner_label(FanOwner::Measuring)) == " (measuring)");
+    CHECK(std::string(fan_owner_label(FanOwner::Measuring)) == " (tuning)");
+    // The label shares a tile with the speed: none much longer than the one that is known to fit.
+    for (FanOwner o : {FanOwner::Driver, FanOwner::Curve, FanOwner::Run, FanOwner::Measuring})
+        CHECK(std::string(fan_owner_label(o)).size() <= std::string(" (driver)").size());
 }

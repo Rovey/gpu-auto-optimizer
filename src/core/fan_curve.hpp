@@ -106,7 +106,8 @@ struct FanState {
 // (run_tunes_fans), by its measurement.
 enum class FanOwner { Unknown, Driver, Curve, Other, Run, Measuring };
 FanOwner fan_owner(FanMode app_mode, bool app_controls, bool run_active, bool run_tunes_fans, std::optional<bool> manual);
-const char* fan_owner_label(FanOwner owner);   // "", " (driver)", " (curve)", " (other program)", " (run)", " (measuring)"
+// Short on purpose: it shares a tile with the speed ("(measuring)" was cut off there).
+const char* fan_owner_label(FanOwner owner);   // "", " (driver)", " (curve)", " (other program)", " (run)", " (tuning)"
 
 // Writes a FanController's decisions through GpuControl, once a second.
 // Writes only on a change of 2 % or more (or to reach 100 %), re-applies after

@@ -215,7 +215,7 @@ const char* fan_owner_label(FanOwner owner) {
         case FanOwner::Curve: return " (curve)";
         case FanOwner::Other: return " (other program)";
         case FanOwner::Run: return " (run)";
-        case FanOwner::Measuring: return " (measuring)";
+        case FanOwner::Measuring: return " (tuning)";
         case FanOwner::Unknown: break;
     }
     return "";
