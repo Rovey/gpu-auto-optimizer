@@ -274,10 +274,13 @@ static int optimize(gao::Preset preset, const std::optional<gao::FanCurve>& fan_
     std::printf("RESULT: power %d %%, core +%d MHz (confirmed +%d), mem +%d MHz (confirmed +%d)\n",
                 r.power_pct, r.core_mhz, r.core_confirmed, r.mem_mhz, r.mem_confirmed);
     if (r.driver_resets > 0) std::printf("  driver resets during this run: %d\n", r.driver_resets);
-    std::printf("  before: score=%.0f it/s  core=%d MHz  mem=%d MHz  peak=%d C  power=%d W\n",
-                r.baseline.score, r.baseline.avg_core_mhz, r.baseline.avg_mem_mhz, r.baseline.peak_temp_c, r.baseline.avg_power_w);
-    std::printf("  after:  score=%.0f it/s  core=%d MHz  mem=%d MHz  peak=%d C  power=%d W\n",
-                r.soak.score, r.soak.avg_core_mhz, r.soak.avg_mem_mhz, r.soak.peak_temp_c, r.soak.avg_power_w);
+    // The two runs differ in length: the temperature and the fan speed of the short one are not those of a warm card.
+    std::printf("  before: score=%.0f it/s  core=%d MHz  mem=%d MHz  peak=%d C  fan=%s  power=%d W  (%.0f s)\n",
+                r.baseline.score, r.baseline.avg_core_mhz, r.baseline.avg_mem_mhz, r.baseline.peak_temp_c,
+                gao::reading(r.baseline.end_fan_pct, " %").c_str(), r.baseline.avg_power_w, r.baseline.seconds);
+    std::printf("  after:  score=%.0f it/s  core=%d MHz  mem=%d MHz  peak=%d C  fan=%s  power=%d W  (%.0f s)\n",
+                r.soak.score, r.soak.avg_core_mhz, r.soak.avg_mem_mhz, r.soak.peak_temp_c,
+                gao::reading(r.soak.end_fan_pct, " %").c_str(), r.soak.avg_power_w, r.soak.seconds);
     if (out.saved) {
         std::printf("Saved: `gao --apply` re-applies it, `gao --boot on` applies it at every logon.\n");
         if (const std::string note = gao::app::update_logon_copy(); !note.empty()) std::printf("%s\n", note.c_str());
@@ -311,10 +314,12 @@ static int undervolt() {
     std::printf("RESULT: %d MHz at %d mV instead of %d mV (lowest stable %d mV, confirmed %d mV)\n", r.freq_khz / 1000,
                 r.applied_uv / 1000, r.stock_uv / 1000, r.edge_uv / 1000, r.confirmed_uv / 1000);
     if (r.driver_resets > 0) std::printf("  driver resets during this run: %d\n", r.driver_resets);
-    std::printf("  before: score=%.0f it/s  core=%d MHz  peak=%d C  power=%d W\n", r.baseline.score, r.baseline.avg_core_mhz,
-                r.baseline.peak_temp_c, r.baseline.avg_power_w);
-    std::printf("  after:  score=%.0f it/s  core=%d MHz  peak=%d C  power=%d W\n", r.after.score, r.after.avg_core_mhz,
-                r.after.peak_temp_c, r.after.avg_power_w);
+    std::printf("  before: score=%.0f it/s  core=%d MHz  peak=%d C  fan=%s  power=%d W  (%.0f s)\n", r.baseline.score,
+                r.baseline.avg_core_mhz, r.baseline.peak_temp_c, gao::reading(r.baseline.end_fan_pct, " %").c_str(),
+                r.baseline.avg_power_w, r.baseline.seconds);
+    std::printf("  after:  score=%.0f it/s  core=%d MHz  peak=%d C  fan=%s  power=%d W  (%.0f s)\n", r.after.score,
+                r.after.avg_core_mhz, r.after.peak_temp_c, gao::reading(r.after.end_fan_pct, " %").c_str(),
+                r.after.avg_power_w, r.after.seconds);
     if (out.saved) {
         std::printf("Saved: `gao --apply` re-applies it, `gao --boot on` applies it at every logon.\n");
         if (const std::string note = gao::app::update_logon_copy(); !note.empty()) std::printf("%s\n", note.c_str());

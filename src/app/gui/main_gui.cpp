@@ -480,6 +480,8 @@ void hw_lost();   // below, with the other hardware helpers
 
 void act_optimize(gao::Preset preset) {
     fan_release();   // the search drives the fans itself
+    g.ui.run_curve.clear();
+    g.ui.run_stock.clear();
     const auto fan = g.ui.optimize_fan ? std::optional<gao::FanCurve>(gao::fan_preset_curve(*g.ui.optimize_fan)) : std::nullopt;
     g.worker->start(preset, fan);   // the watchdog skips while it runs
 }
@@ -809,6 +811,14 @@ void on_telemetry() {
             notify("Another program (Afterburner, NVIDIA App...) set the fan speed. Leaving the fans alone.");
     }
     if (g.gpu.read_applied) g.ui.applied = g.gpu.read_applied();
+    // What a run of ours is doing to the curve, for its picture on the run
+    // screen. A read only; a failed one keeps the last picture.
+    if (g.worker->running() && g.gpu.read_vf_curve) {
+        if (auto curve = g.gpu.read_vf_curve(); curve && !curve->empty()) {
+            if (gao::curve_state(*curve, 0) == gao::CurveState::Stock) g.ui.run_stock = *curve;
+            g.ui.run_curve = std::move(*curve);
+        }
+    }
     wchar_t tip[128];
     const gao::Telemetry& t = g.ui.telemetry;
     swprintf_s(tip, L"GPU Auto Optimizer\n%d C, %d MHz%s", t.temp_c, t.core_mhz, g.watch ? L", tune kept applied" : L"");

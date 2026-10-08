@@ -699,6 +699,96 @@ void choose(UiState& s, const UiActions& act) {
     end_card();
 }
 
+// The voltage/frequency curve a run is writing (UiState::run_curve) over the
+// card's own (run_stock): higher means faster at that voltage. An overclock
+// lifts the whole line; an undervolt lifts the part left of where the card
+// ran and cuts the top off flat. The dot (live: during the run) is where the
+// card runs now: the lowest voltage at which the curve reaches the clock it
+// reports.
+void curve_card(const UiState& s, const char* caption, bool live) {
+    if (s.run_curve.size() < 2) return;   // no run yet, or this card or driver does not offer the curve
+    begin_card("curve");
+    heading("Voltage/frequency curve");
+    wrapped(kDim, caption);
+    const float w = ImGui::GetContentRegionAvail().x, h = em() * 13;
+    const ImVec2 p0 = ImGui::GetCursorScreenPos();
+    ImGui::Dummy(ImVec2(w, h));
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    dl->AddRectFilled(p0, ImVec2(p0.x + w, p0.y + h), ImGui::GetColorU32(kInner), em() * 0.35f);
+
+    float v_lo = s.run_curve.front().volt_uv / 1000.0f, v_hi = v_lo;
+    float f_lo = s.run_curve.front().freq_khz / 1000.0f, f_hi = f_lo;
+    for (const std::vector<VfPoint>* curve : {&s.run_stock, &s.run_curve})
+        for (const VfPoint& pt : *curve) {
+            v_lo = std::min(v_lo, pt.volt_uv / 1000.0f);
+            v_hi = std::max(v_hi, pt.volt_uv / 1000.0f);
+            f_lo = std::min(f_lo, pt.freq_khz / 1000.0f);
+            f_hi = std::max(f_hi, pt.freq_khz / 1000.0f);
+        }
+    if (v_hi <= v_lo || f_hi <= f_lo) {
+        end_card();
+        return;
+    }
+    const float pad = (f_hi - f_lo) * 0.06f;
+    f_lo -= pad;
+    f_hi += pad;
+    // Room for the axis labels on the left and below.
+    const ImVec2 a(p0.x + em() * 4.6f, p0.y + em() * 0.7f), b(p0.x + w - em() * 1.0f, p0.y + h - em() * 1.9f);
+    auto at = [&](float mv, float mhz) {
+        return ImVec2(a.x + (mv - v_lo) / (v_hi - v_lo) * (b.x - a.x), b.y - (mhz - f_lo) / (f_hi - f_lo) * (b.y - a.y));
+    };
+    const ImU32 grid = ImGui::GetColorU32(kBorder), label = ImGui::GetColorU32(kDim);
+    char text[48];
+    for (int mhz = (static_cast<int>(f_lo) / 500 + 1) * 500; mhz < f_hi; mhz += 500) {
+        const float y = at(v_lo, static_cast<float>(mhz)).y;
+        dl->AddLine(ImVec2(a.x, y), ImVec2(b.x, y), grid);
+        std::snprintf(text, sizeof(text), "%d MHz", mhz);
+        dl->AddText(ImVec2(a.x - ImGui::CalcTextSize(text).x - em() * 0.5f, y - em() * 0.5f), label, text);
+    }
+    for (int mv = (static_cast<int>(v_lo) / 100 + 1) * 100; mv < v_hi; mv += 100) {
+        const float x = at(static_cast<float>(mv), f_lo).x;
+        dl->AddLine(ImVec2(x, a.y), ImVec2(x, b.y), grid);
+        std::snprintf(text, sizeof(text), "%d mV", mv);
+        dl->AddText(ImVec2(x - ImGui::CalcTextSize(text).x / 2, b.y + em() * 0.35f), label, text);
+    }
+    auto line = [&](const std::vector<VfPoint>& curve, const ImVec4& colour, float thickness) {
+        std::vector<ImVec2> points;
+        for (const VfPoint& pt : curve) points.push_back(at(pt.volt_uv / 1000.0f, pt.freq_khz / 1000.0f));
+        if (points.size() > 1)
+            dl->AddPolyline(points.data(), static_cast<int>(points.size()), ImGui::GetColorU32(colour), ImDrawFlags_None, thickness);
+    };
+    line(s.run_stock, kDim, em() * 0.09f);
+    line(s.run_curve, kAccentBright, em() * 0.16f);
+
+    // Where the card is now. Nothing while it idles below the curve.
+    std::string now;
+    const int now_khz = s.telemetry.core_mhz * 1000;
+    if (live && now_khz >= s.run_curve.front().freq_khz - kVfToleranceKhz) {
+        for (const VfPoint& pt : s.run_curve) {
+            if (pt.freq_khz < now_khz - kVfToleranceKhz) continue;
+            const ImVec2 dot = at(pt.volt_uv / 1000.0f, pt.freq_khz / 1000.0f);
+            dl->AddCircleFilled(dot, em() * 0.38f, ImGui::GetColorU32(kGood));
+            dl->AddCircle(dot, em() * 0.38f, ImGui::GetColorU32(kBg), 0, em() * 0.1f);
+            now = "Now: " + std::to_string(s.telemetry.core_mhz) + " MHz, which this curve reaches at " +
+                  std::to_string(pt.volt_uv / 1000) + " mV";
+            break;
+        }
+    }
+    // The legend, top left, where neither curve runs.
+    float y = a.y + em() * 0.2f;
+    auto legend = [&](const ImVec4& colour, const std::string& name, bool is_dot) {
+        const float x = a.x + em() * 0.8f;
+        if (is_dot) dl->AddCircleFilled(ImVec2(x + em() * 0.7f, y + em() * 0.55f), em() * 0.3f, ImGui::GetColorU32(colour));
+        else dl->AddLine(ImVec2(x, y + em() * 0.55f), ImVec2(x + em() * 1.4f, y + em() * 0.55f), ImGui::GetColorU32(colour), em() * 0.16f);
+        dl->AddText(ImVec2(x + em() * 2.0f, y), ImGui::GetColorU32(kText), name.c_str());
+        y += em() * 1.35f;
+    };
+    legend(kAccentBright, "The curve on the card", false);
+    if (!s.run_stock.empty()) legend(kDim, "The card's own curve (stock)", false);
+    if (!now.empty()) legend(kGood, now, true);
+    end_card();
+}
+
 void run_screen(UiState& s, const OptimizeWorker::Snapshot& run, const UiActions& act) {
     begin_card("run");
     text_bold(s.preset == Preset::Undervolt ? "Finding the undervolt"
@@ -722,6 +812,8 @@ void run_screen(UiState& s, const OptimizeWorker::Snapshot& run, const UiActions
     plot("##power", s.power_history, 0, static_cast<float>(std::max(s.telemetry.power_limit_w, 1)), overlay, w);
     end_card();
 
+    curve_card(s, "What the run writes to the card, read back every second. Higher is faster at that voltage.", true);
+
     begin_card("probes");
     heading("Probes");
     ImGui::PushStyleColor(ImGuiCol_ChildBg, kInner);
@@ -735,15 +827,25 @@ void run_screen(UiState& s, const OptimizeWorker::Snapshot& run, const UiActions
     if (!run.running && run.ended()) s.screen = Screen::Results;
 }
 
+std::string duration_text(double seconds) {
+    char buf[32];
+    if (seconds < 90) std::snprintf(buf, sizeof(buf), "%.0f s", seconds);
+    else std::snprintf(buf, sizeof(buf), "%.0f min", seconds / 60);
+    return buf;
+}
+
 // A before/after table; `rows` fills it through `row(name, before, after)`.
+// The two runs it compares differ in length, and it says so: a card is not
+// heated through after half a minute, so the temperature and the fan speed
+// of the short run read lower than they would on a warm card.
 template <typename Rows>
-void comparison(Rows rows) {
+void comparison(const StabilityResult& before, const StabilityResult& after, Rows rows) {
     if (!ImGui::BeginTable("cmp", 3, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_BordersOuter |
                                          ImGuiTableFlags_SizingStretchSame | ImGuiTableFlags_PadOuterX))
         return;
     ImGui::TableSetupColumn("");
-    ImGui::TableSetupColumn("Before (stock)");
-    ImGui::TableSetupColumn("After");
+    ImGui::TableSetupColumn(("Before (stock, " + duration_text(before.seconds) + ")").c_str());
+    ImGui::TableSetupColumn(("After (" + duration_text(after.seconds) + ")").c_str());
     ImGui::TableHeadersRow();
     rows([](const char* name, const std::string& a, const std::string& b) {
         ImGui::TableNextRow(ImGuiTableRowFlags_None, em() * 1.6f);
@@ -752,6 +854,10 @@ void comparison(Rows rows) {
         ImGui::TableNextColumn(); ImGui::TextUnformatted(b.c_str());
     });
     ImGui::EndTable();
+    if (after.seconds > 3 * before.seconds)
+        wrapped(kDim, "The stock run lasted " + duration_text(before.seconds) +
+                          ", too short to heat the card through: its temperature and fan speed read lower than they would after " +
+                          duration_text(after.seconds) + ". Score, clock and power compare directly.");
 }
 
 std::string score_text(double score) {
@@ -788,11 +894,12 @@ bool optimize_result(const app::OptimizeOutcome& o) {
                   r.core_confirmed, r.mem_confirmed);
     wrapped(kDim, line);
     ImGui::Spacing();
-    comparison([&](auto row) {
+    comparison(r.baseline, r.soak, [&](auto row) {
         row("Score", score_text(r.baseline.score), against(r.baseline.score, r.soak.score, "it/s"));
         row("Core clock", reading(r.baseline.avg_core_mhz, " MHz"), reading(r.soak.avg_core_mhz, " MHz"));
         row("Memory clock", reading(r.baseline.avg_mem_mhz, " MHz"), reading(r.soak.avg_mem_mhz, " MHz"));
         row("Peak temperature", reading(r.baseline.peak_temp_c, " \xC2\xB0""C"), reading(r.soak.peak_temp_c, " \xC2\xB0""C"));
+        row("Fan speed at the end", reading(r.baseline.end_fan_pct, " %"), reading(r.soak.end_fan_pct, " %"));
         row("Power", reading(r.baseline.avg_power_w, " W"), reading(r.soak.avg_power_w, " W"));
     });
     return true;
@@ -820,11 +927,12 @@ bool undervolt_result(const app::UndervoltOutcome& o) {
                   r.edge_uv / 1000, r.confirmed_uv / 1000);
     wrapped(kDim, line);
     ImGui::Spacing();
-    comparison([&](auto row) {
+    comparison(r.baseline, r.after, [&](auto row) {
         row("Score", score_text(r.baseline.score), against(r.baseline.score, r.after.score, "it/s"));
         row("Core clock", reading(r.baseline.avg_core_mhz, " MHz"), reading(r.after.avg_core_mhz, " MHz"));
         row("Voltage for that clock", std::to_string(r.stock_uv / 1000) + " mV", std::to_string(r.applied_uv / 1000) + " mV");
         row("Peak temperature", reading(r.baseline.peak_temp_c, " \xC2\xB0""C"), reading(r.after.peak_temp_c, " \xC2\xB0""C"));
+        row("Fan speed at the end", reading(r.baseline.end_fan_pct, " %"), reading(r.after.end_fan_pct, " %"));
         row("Power", reading(r.baseline.avg_power_w, " W"),
             r.baseline.avg_power_w > 0 && r.after.avg_power_w >= 0 ? against(r.baseline.avg_power_w, r.after.avg_power_w, "W")
                                                                    : reading(r.after.avg_power_w, " W"));
@@ -851,6 +959,7 @@ void results(UiState& s, const OptimizeWorker::Snapshot& run, const UiActions& a
     }
     if (ImGui::Button(with_icon(kIconBack, "Back").c_str())) s.screen = Screen::Choose;
     end_card();
+    if (applied) curve_card(s, "As the run left it. Higher is faster at that voltage.", false);
 }
 
 void optimize_page(UiState& s, const OptimizeWorker::Snapshot& run, const UiActions& act) {

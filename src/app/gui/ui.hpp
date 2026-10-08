@@ -56,6 +56,12 @@ struct UiState {
     int fan_max_temp_c = 75;
     FanState fan_state;
     std::optional<FanPreset> optimize_fan;   // fan curve for the next run; empty: the profile's own
+    // The voltage/frequency curve during a run from this window, read back
+    // once a second: as the run last left it, and as it last read at stock.
+    // Both stay after the run, for its result screen. Empty: no run yet, or
+    // the card does not offer the curve.
+    std::vector<VfPoint> run_curve;
+    std::vector<VfPoint> run_stock;
 
     std::string update_version;   // a newer release that can be installed ("0.3.2"); empty: none known
     bool update_busy = false;     // it is being downloaded and installed
