@@ -4,6 +4,7 @@
 #include "core/stability.hpp"
 #include "core/types.hpp"
 #include <functional>
+#include <optional>
 #include <string>
 
 namespace gao {
@@ -46,6 +47,21 @@ inline constexpr int kUvSoakAttempts = 3;
 inline constexpr int kUvClockSlackKhz = 45000;
 inline constexpr double kUvScoreKeep = 0.9;
 
+// The overclock an undervolt is searched on top of: "overclock first, then
+// undervolt that". The search sets it after every reset to stock, keeps the
+// clock the card runs with it, and writes its flat top over the core
+// offset, which stays on the points below the anchor (the two are one
+// table on the card). Every raise is counted over the built-in curve,
+// offset included: for the journal, for the margin and for the result.
+struct UndervoltBase {
+    int power_pct = 100;
+    int core_mhz = 0;
+    int mem_mhz = 0;
+    // The overclock's own long run under load (its soak), when the caller
+    // has one: it is the reference then, and nothing is measured again.
+    std::optional<StabilityResult> measured;
+};
+
 struct UndervoltIo {
     Probe probe;                                    // one stress run, as in the clock search
     std::function<bool()> aborted;
@@ -75,6 +91,7 @@ struct UndervoltResult {
 
 // Leaves the undervolt applied when ok. perf_push: as in Objectives, how much
 // of the confirmed raise is kept.
-UndervoltResult find_undervolt(const GpuControl& gpu, Journal& journal, const UndervoltIo& io, int max_temp_c, float perf_push);
+UndervoltResult find_undervolt(const GpuControl& gpu, Journal& journal, const UndervoltIo& io, int max_temp_c, float perf_push,
+                               const UndervoltBase& base = {});
 
 }

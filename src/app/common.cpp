@@ -334,7 +334,7 @@ OptimizeOutcome run_optimize(Preset preset, const OptimizeHooks& hooks, const st
     return out;
 }
 
-UndervoltOutcome run_undervolt(const OptimizeHooks& hooks) {
+UndervoltOutcome run_undervolt(const OptimizeHooks& hooks, bool on_saved_tune) {
     UndervoltOutcome out;
     auto log = [&](const std::string& m) { if (hooks.log) hooks.log(m); };
     auto fail = [&](const std::string& why) { out.error = why; return out; };
@@ -384,11 +384,27 @@ UndervoltOutcome run_undervolt(const OptimizeHooks& hooks) {
         return false;
     };
 
+    // The overclock the undervolt goes on top of, when asked for: the saved
+    // tune, if it is this card's and this driver's (strikes only gate the
+    // logon apply).
+    UndervoltBase base;
+    std::optional<Profile> over;
+    if (on_saved_tune) {
+        Config cfg = load_config();
+        cfg.boot_strikes = 0;
+        const std::string driver_now = hw.DriverVersion();
+        const BootDecision d = decide_boot(cfg, driver_now, hw.GpuUuid());
+        if (d != BootDecision::Apply) return fail("no saved tune to undervolt: " + decision_text(d, cfg, driver_now));
+        over = cfg.profile;
+        base = UndervoltBase{over->power_pct, over->core_mhz, over->mem_mhz, std::nullopt};
+        log("on top of the saved tune: power " + std::to_string(base.power_pct) + " %, core +" + std::to_string(base.core_mhz) +
+            " MHz, mem +" + std::to_string(base.mem_mhz) + " MHz");
+    }
     const Objectives obj = objectives_for(Preset::Undervolt);
     if (hooks.active_gpu) hooks.active_gpu(&gpu);
     bool crashed = false;
     try {
-        crashed = !guarded([&] { out.result = find_undervolt(gpu, journal, io, obj.max_temp_c, obj.perf_push); });
+        crashed = !guarded([&] { out.result = find_undervolt(gpu, journal, io, obj.max_temp_c, obj.perf_push, base); });
     } catch (...) {   // never leave a candidate applied, whatever went wrong
         if (hooks.active_gpu) hooks.active_gpu(nullptr);
         if (gpu.reset_to_stock) gpu.reset_to_stock();
@@ -423,6 +439,10 @@ UndervoltOutcome run_undervolt(const OptimizeHooks& hooks) {
     // the fans followed before stays theirs: an undervolt only makes the
     // card cooler than the tune that curve was tested with.
     if (cfg.profile) p.fan_curve = cfg.profile->fan_curve;
+    if (over) {   // the overclock it was searched on keeps everything it had; the undervolt joins it
+        p = *over;
+        p.saved_at = now_text();
+    }
     p.undervolt = UndervoltTune{out.result.applied_uv, out.result.freq_khz, out.result.raise_khz};
     cfg.profile = p;
     cfg.boot_strikes = 0;   // strikes belong to the profile they were earned by

@@ -94,7 +94,11 @@ struct UndervoltOutcome {
 // replaces a saved overclock: a core offset and a flat top are one table on
 // the card (hardware check 65). Needs elevation. The NVIDIA driver keeps the
 // fans during the search.
-UndervoltOutcome run_undervolt(const OptimizeHooks& hooks);
+// on_saved_tune: the undervolt is searched on top of the saved overclock
+// (its power limit, core and memory offsets stay applied throughout) and
+// saved into that profile, next to them. Without a saved tune that applies
+// to this card and driver the run does not start.
+UndervoltOutcome run_undervolt(const OptimizeHooks& hooks, bool on_saved_tune = false);
 
 struct BootApplyOutcome {
     bool applied = false;

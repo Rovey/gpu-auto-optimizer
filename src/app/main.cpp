@@ -298,8 +298,8 @@ static int optimize(gao::Preset preset, const std::optional<gao::FanCurve>& fan_
     return out.saved ? 0 : 2;   // 2: tuned and applied, but --apply and boot-apply cannot use it
 }
 
-// Finds the undervolt, leaves it applied and saves it as the profile.
-static int undervolt() {
+// Finds the undervolt, leaves it applied and saves it as the profile; on_overclock: on top of the saved tune, into it.
+static int undervolt(bool on_overclock) {
     gao::app::OptimizeHooks hooks;
     hooks.aborted = [] { return g_abort.load(); };
     hooks.log = [](const std::string& msg) { std::printf("  %s\n", msg.c_str()); };
@@ -309,7 +309,7 @@ static int undervolt() {
     };
     // A running tray app holds off for the whole run (the tuning lock), as
     // for --optimize, and afterwards finds the profile this run saved.
-    const auto out = gao::app::run_undervolt(hooks);
+    const auto out = gao::app::run_undervolt(hooks, on_overclock);
     if (!out.ran) { std::printf("%s\n", out.error.c_str()); return 1; }
     const gao::UndervoltResult& r = out.result;
     if (!r.ok) {
@@ -547,7 +547,11 @@ int main(int argc, char** argv) {
     }
     if (argc > 1 && std::strcmp(argv[1], "--status") == 0) return status();
     if (argc > 1 && std::strcmp(argv[1], "--curve") == 0) return curve();
-    if (argc > 1 && std::strcmp(argv[1], "--undervolt") == 0) return undervolt();
+    if (argc > 1 && std::strcmp(argv[1], "--undervolt") == 0) {
+        const bool on_overclock = argc > 2 && std::strcmp(argv[2], "--on-overclock") == 0;
+        if (argc > 2 && !on_overclock) { std::printf("--undervolt accepts --on-overclock, got '%s'\n", argv[2]); return 1; }
+        return undervolt(on_overclock);
+    }
     if (argc > 1 && std::strcmp(argv[1], "--curve-flatten") == 0) {
         int mv = 0, mhz = 0, drop = gao::kVfTailDropKhz / 1000, core = 0;
         if (argc < 4 || !ParseIntArg(argv[2], &mv) || !ParseIntArg(argv[3], &mhz) ||
@@ -587,8 +591,9 @@ int main(int argc, char** argv) {
                 "            | --optimize [best|quiet|cool|max [--fan-curve silent|normal|cool|aggressive]]\n"
                 "            | --apply | --boot on|off | --fan auto | --status\n"
                 "            | --curve (prints the voltage/frequency curve; changes nothing)\n"
-                "            | --undervolt (the stock load clock on the lowest stable voltage; saved like --optimize,\n"
-                "              and it replaces a saved overclock)\n"
+                "            | --undervolt [--on-overclock] (the load clock on the lowest stable voltage; saved like --optimize.\n"
+                "              Alone it replaces a saved overclock; with --on-overclock it is searched on top of the\n"
+                "              saved tune and saved into it)\n"
                 "            | --curve-flatten <mV> <MHz> [<MHz>] (the point at <mV> runs <MHz> and no point above it more;\n"
                 "              the third number is how much lower those are stored, 0 for exactly flat; --reset undoes it)\n"
                 "            | --update (installs the latest release into this folder, if there is a newer one)]\n");

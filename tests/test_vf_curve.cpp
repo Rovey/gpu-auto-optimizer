@@ -519,3 +519,20 @@ TEST_CASE("curve_state over a core offset: the flat top, the bare offset, stock"
     std::fill(card.raw.begin(), card.raw.end(), 0);
     CHECK(curve_state(*card.gpu().read_vf_curve(), anchor_uv, 60000) == CurveState::Stock);    // a driver reset took it all
 }
+
+TEST_CASE("curve_state: a flat top whose anchor needed no raise of its own is still a flat top") {
+    // The offset curve already ran the target at the anchor; only the points
+    // above it were cut off. Hardware check 74 ended on exactly this.
+    FakeCurve card;
+    std::fill(card.raw.begin(), card.raw.end(), 60000);
+    const int target = card.freq(8);   // what slot 8 runs with the offset alone
+    REQUIRE(apply_flat_top(card.gpu(), 8, target, kVfTailDropKhz, 60000).ok);
+    CHECK(card.raw[8] == 60000);
+    CHECK(card.raw[9] < 60000);
+    CHECK(curve_state(*card.gpu().read_vf_curve(), card.volt_uv[8], 60000) == CurveState::FlatTop);
+    // The bare offset is not one, and neither is an anchor stored below the offset.
+    std::fill(card.raw.begin(), card.raw.end(), 60000);
+    CHECK(curve_state(*card.gpu().read_vf_curve(), card.volt_uv[8], 60000) == CurveState::Other);
+    card.raw[8] = 45000;
+    CHECK(curve_state(*card.gpu().read_vf_curve(), card.volt_uv[8], 60000) == CurveState::Other);
+}

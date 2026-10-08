@@ -44,12 +44,16 @@ struct UvCard {
             raw.push_back(0);
         }
     }
+    int core = 0, mem = 0, power = 100;   // the overclock, as the offset and power setters left it
+    UndervoltBase base;                   // what go() hands the search
     int freq(std::size_t i) const { return base_khz[i] + raw[i]; }
     bool at_stock() const { return std::all_of(raw.begin(), raw.end(), [](int v) { return v == 0; }); }
+    // No shape on the curve: stock, or a core offset alone (the same on every point).
+    bool level() const { return std::all_of(raw.begin(), raw.end(), [this](int v) { return v == raw.front(); }); }
     // Where the card runs under load: at stock the power limit decides; with
     // a curve it takes the lowest voltage that gives the most frequency.
     std::size_t operating_point() const {
-        if (at_stock()) {
+        if (level()) {   // the same point as at stock: a core offset moves the clock, not the voltage
             for (std::size_t i = 0; i < base_khz.size(); ++i)
                 if (base_khz[i] >= stock_load_khz) return i;
             return base_khz.size() - 1;
@@ -90,10 +94,21 @@ struct UvCard {
             if (dead) return false;
             ++resets_to_stock;
             std::fill(raw.begin(), raw.end(), 0);
+            core = mem = 0;
+            power = 100;
             return true;
         };
+        // One table: a core offset is the same offset on every point.
+        g.set_core_offset = [this](int mhz) {
+            if (dead) return false;
+            core = mhz;
+            std::fill(raw.begin(), raw.end(), mhz * 1000);
+            return true;
+        };
+        g.set_mem_offset = [this](int mhz) { if (dead) return false; mem = mhz; return true; };
+        g.set_power_limit = [this](int pct) { if (dead) return false; power = pct; return true; };
         if (with_recover)
-            g.recover = [this] { ++recovers; dead = false; std::fill(raw.begin(), raw.end(), 0); return true; };
+            g.recover = [this] { ++recovers; dead = false; std::fill(raw.begin(), raw.end(), 0); core = mem = 0; power = 100; return true; };
         return g;
     }
     StabilityResult probe(double seconds) {
@@ -104,7 +119,7 @@ struct UvCard {
         if (probes == abort_at_probe) { aborted_now = true; s.verdict = Verdict::Aborted; return s; }
         const std::size_t op = operating_point();
         // At stock the power limit holds the clock between two points of the curve.
-        const int f = at_stock() ? stock_load_khz : slow ? freq(op) - 105000 : freq(op);
+        const int f = level() ? stock_load_khz + raw.front() : slow ? freq(op) - 105000 : freq(op);
         const int raise = freq(op) - base_khz[op];
         probe_raise_mhz.push_back(raise / 1000);
         const double v = volt_uv[op] / static_cast<double>(volt_uv[stock_point()]);
@@ -118,6 +133,8 @@ struct UvCard {
             --losses_left;
             dead = true;   // the driver reset: the card is at stock and the connections are gone
             std::fill(raw.begin(), raw.end(), 0);
+            core = mem = 0;
+            power = 100;
             s.verdict = Verdict::DeviceLost;
             return s;
         }
@@ -134,7 +151,7 @@ struct UvCard {
         io.measuring = [this](const std::string& what, double seconds) {
             measuring.push_back(what + "|" + std::to_string(static_cast<int>(seconds)));
         };
-        return find_undervolt(gpu(), j, io, 75, 0.7f);
+        return find_undervolt(gpu(), j, io, 75, 0.7f, base);
     }
     bool logged(const std::string& what) const {
         for (const auto& m : log) if (m.find(what) != std::string::npos) return true;
@@ -147,7 +164,7 @@ struct UvCard {
     }
     // Raise (MHz) at the point the curve is anchored on now; 0 at stock.
     int applied_raise_mhz() const {
-        if (at_stock()) return 0;
+        if (level()) return raw.front() / 1000;
         const std::size_t op = operating_point();
         return (freq(op) - base_khz[op]) / 1000;
     }
@@ -413,4 +430,89 @@ TEST_CASE("find_undervolt: every long measurement is announced with its length, 
     stopped.abort_at_probe = 1;
     CHECK_FALSE(stopped.go().ok);
     CHECK(stopped.measuring == std::vector<std::string>{"Measuring the card at stock|300", "|0"});
+}
+
+TEST_CASE("find_undervolt over an overclock: the overclocked clock on less voltage, the offset kept below the anchor") {
+    // What every guide teaches: overclock first, then undervolt that. On the
+    // card the two are one table, so the search writes them as one shape.
+    UvCard card;
+    card.base = UndervoltBase{105, 60, 800, std::nullopt};
+    const auto r = card.go();
+    REQUIRE(r.ok);
+    // The clock to keep is the one the card runs with the overclock: 60 MHz above the 2745 of stock.
+    CHECK(r.freq_khz == 2805000);
+    CHECK(card.core == 60);
+    CHECK(card.mem == 800);
+    CHECK(card.power == 105);
+    const auto anchor = static_cast<std::size_t>(std::find(card.volt_uv.begin(), card.volt_uv.end(), r.applied_uv) - card.volt_uv.begin());
+    for (std::size_t i = 0; i < anchor; ++i) CHECK(card.raw[i] == 60000);   // the overclock, untouched below the anchor
+    CHECK(card.freq(anchor) == 2805000);
+    CHECK(r.applied_uv < r.stock_uv);
+    // The raise is counted over the built-in curve, offset included: that is what the silicon is asked for.
+    CHECK(r.raise_khz == card.freq(anchor) - card.base_khz[anchor]);
+    CHECK(r.raise_khz > 60000);
+    CHECK(std::count_if(card.probe_raise_mhz.begin(), card.probe_raise_mhz.end(), [](int v) { return v > 210; }) == 1);   // the one that found the edge
+    const int confirmed_raise = (r.freq_khz - card.base_khz[static_cast<std::size_t>(
+                                     std::find(card.volt_uv.begin(), card.volt_uv.end(), r.confirmed_uv) - card.volt_uv.begin())]) / 1000;
+    CHECK(r.raise_khz / 1000 <= apply_margin(confirmed_raise, 15, 0.7f));
+    // The journal names the whole raise too, so a freeze caps later runs whatever their overclock.
+    CHECK(card.count("\"uv\":60}") == 0);
+    CHECK(card.count("\"begin\"") == card.count("\"complete\""));
+    CHECK(card.logged("with the overclock"));
+}
+
+TEST_CASE("find_undervolt over an overclock: its own five-minute run is the reference, nothing is measured twice") {
+    UvCard card;
+    StabilityResult soak;
+    soak.verdict = Verdict::Stable;
+    soak.seconds = 300;
+    soak.score = 5900;
+    soak.avg_core_mhz = 2820;   // the overclock run's soak
+    soak.avg_power_w = 199;
+    card.base = UndervoltBase{100, 60, 0, soak};
+    const auto r = card.go();
+    REQUIRE(r.ok);
+    CHECK(card.probe_seconds.front() == kUvProbeS);   // straight to the first candidate
+    CHECK(r.baseline.score == 5900);
+    CHECK(r.freq_khz == 2805000);
+    CHECK(card.measuring.front() == "Confirming the lowest voltage|30");
+}
+
+TEST_CASE("find_undervolt over an overclock: after a driver reset the overclock is set again before the next candidate") {
+    UvCard card;
+    card.base = UndervoltBase{100, 60, 0, std::nullopt};
+    card.edge_khz = card.long_edge_khz = 300000;   // room above the overclock: the reset costs four points of it
+    card.lost_above_khz = 270000;
+    const auto r = card.go();
+    INFO(r.reason);
+    REQUIRE(r.ok);
+    CHECK(card.recovers == 1);
+    CHECK(card.core == 60);
+    const auto anchor = static_cast<std::size_t>(std::find(card.volt_uv.begin(), card.volt_uv.end(), r.applied_uv) - card.volt_uv.begin());
+    for (std::size_t i = 0; i < anchor; ++i) CHECK(card.raw[i] == 60000);
+}
+
+TEST_CASE("find_undervolt over an overclock: every failure ends at stock, the overclock gone with it") {
+    UvCard card;
+    card.base = UndervoltBase{105, 60, 800, std::nullopt};
+    card.abort_at_probe = 6;
+    const auto r = card.go();
+    CHECK_FALSE(r.ok);
+    CHECK(r.stock_restored);
+    CHECK(card.at_stock());
+    CHECK(card.core == 0);
+    CHECK(card.mem == 0);
+    CHECK(card.power == 100);
+}
+
+TEST_CASE("find_undervolt over an overclock that leaves no room: nothing is kept, the card ends at stock") {
+    // The edge is 75 MHz over the built-in curve and the overclock takes 60 of
+    // it: 70 % of what holds is less than the overclock itself.
+    UvCard card;
+    card.edge_khz = card.long_edge_khz = 75000;
+    card.base = UndervoltBase{100, 60, 0, std::nullopt};
+    const auto r = card.go();
+    CHECK_FALSE(r.ok);
+    CHECK(r.reason == "nothing was left of the undervolt after the safety margin");
+    CHECK(card.at_stock());
 }

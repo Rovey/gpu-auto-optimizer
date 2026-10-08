@@ -62,12 +62,23 @@ void put_vf_raw_offset(unsigned char* control, int index, int raw) {
 CurveState curve_state(const std::vector<VfPoint>& curve, int anchor_uv, int base_raw) {
     if (curve.empty()) return CurveState::Other;
     if (at_stock(curve)) return CurveState::Stock;
-    bool anchored = false;
+    // A flat top: the base offset on every point below the anchor, and the
+    // anchor raised above it. Or, when the anchor already ran the target with
+    // the base offset alone and needed no raise of its own: the anchor on the
+    // base offset and every point above it at or below that, some lower.
+    bool has_anchor = false, raised_above = false, lowered_above = false;
+    int anchor_raw = 0;
     for (const VfPoint& p : curve) {
         if (p.volt_uv < anchor_uv && p.raw_offset != base_raw) return CurveState::Other;
-        if (p.volt_uv == anchor_uv) anchored = p.raw_offset > base_raw;
+        if (p.volt_uv == anchor_uv) { has_anchor = true; anchor_raw = p.raw_offset; }
+        if (p.volt_uv > anchor_uv) {
+            raised_above = raised_above || p.raw_offset > base_raw;
+            lowered_above = lowered_above || p.raw_offset < base_raw;
+        }
     }
-    return anchored ? CurveState::FlatTop : CurveState::Other;
+    if (!has_anchor) return CurveState::Other;
+    if (anchor_raw > base_raw) return CurveState::FlatTop;
+    return anchor_raw == base_raw && lowered_above && !raised_above ? CurveState::FlatTop : CurveState::Other;
 }
 
 int stock_point_for(const std::vector<VfPoint>& curve, int freq_khz) {

@@ -24,11 +24,22 @@ std::string describe(const char* verdict, const StabilityResult& s) {
 
 }
 
-UndervoltResult find_undervolt(const GpuControl& gpu, Journal& journal, const UndervoltIo& io, int max_temp_c, float perf_push) {
+UndervoltResult find_undervolt(const GpuControl& gpu, Journal& journal, const UndervoltIo& io, int max_temp_c, float perf_push,
+                               const UndervoltBase& base) {
     UndervoltResult r;
     auto log = [&](const std::string& m) { if (io.log) io.log("  " + m); };
     auto aborted = [&] { return io.aborted && io.aborted(); };
     auto to_stock = [&] { return gpu.reset_to_stock && gpu.reset_to_stock(); };
+    const bool overclocked = base.power_pct != 100 || base.core_mhz != 0 || base.mem_mhz != 0;
+    const char* at_base = overclocked ? "with the overclock" : "at stock";
+    // The overclock the search runs on top of, set on a card that is at
+    // stock. Each setter verifies by read-back. True without one.
+    auto set_base = [&] {
+        if (base.power_pct != 100 && !(gpu.set_power_limit && gpu.set_power_limit(base.power_pct))) return false;
+        if (base.core_mhz != 0 && !(gpu.set_core_offset && gpu.set_core_offset(base.core_mhz))) return false;
+        if (base.mem_mhz != 0 && !(gpu.set_mem_offset && gpu.set_mem_offset(base.mem_mhz))) return false;
+        return true;
+    };
     // A probe, announced when it is long enough to be worth a countdown.
     auto probe = [&](const char* what, double seconds, double stall_below) {
         const bool announced = what && seconds >= kUvConfirmS && io.measuring;
@@ -60,18 +71,25 @@ UndervoltResult find_undervolt(const GpuControl& gpu, Journal& journal, const Un
             return finish_fail("the curve did not go back to stock");
     }
 
-    log("baseline: " + std::to_string(static_cast<int>(kUvBaselineS)) + " s at stock");
-    r.baseline = probe("Measuring the card at stock", kUvBaselineS, 0.0);
-    log("baseline: " + describe(verdict_name(r.baseline.verdict), r.baseline));
+    if (!set_base()) return finish_fail("could not set the overclock the undervolt is searched on");
+
+    if (base.measured) {
+        r.baseline = *base.measured;
+        log("baseline: the overclock's own run: " + describe(verdict_name(r.baseline.verdict), r.baseline));
+    } else {
+        log("baseline: " + std::to_string(static_cast<int>(kUvBaselineS)) + " s " + at_base);
+        r.baseline = probe(overclocked ? "Measuring the card with the overclock" : "Measuring the card at stock", kUvBaselineS, 0.0);
+        log("baseline: " + describe(verdict_name(r.baseline.verdict), r.baseline));
+    }
     if (r.baseline.verdict == Verdict::Aborted) return finish_fail("aborted");
     if (r.baseline.verdict != Verdict::Stable)
-        return finish_fail(std::string("the card is not stable at stock (") + verdict_name(r.baseline.verdict) + ")");
+        return finish_fail(std::string("the card is not stable ") + at_base + " (" + verdict_name(r.baseline.verdict) + ")");
     if (r.baseline.avg_core_mhz <= 0 || r.baseline.score <= 0) return finish_fail("the card did not report its clock under load");
     // Read now, with the card warm from the baseline: the built-in curve can
     // sit a step lower hot than cold, and the candidates are counted on it.
     const auto stock = gpu.read_vf_curve();
     if (!stock || stock->empty()) return finish_fail("the curve could not be read");
-    const std::vector<VfPoint>& curve = *stock;   // the built-in curve, lowest voltage first
+    const std::vector<VfPoint>& curve = *stock;   // the built-in curve plus the core offset, lowest voltage first
 
     // The clock to keep: the highest point of the curve that is not above
     // what the card ran. Its own position on the curve is where the descent
@@ -85,10 +103,13 @@ UndervoltResult find_undervolt(const GpuControl& gpu, Journal& journal, const Un
     int own = 0;   // the lowest-voltage point that reaches the target by itself
     while (curve[static_cast<std::size_t>(own)].freq_khz < r.freq_khz) ++own;
     r.stock_uv = curve[static_cast<std::size_t>(own)].volt_uv;
-    auto raise_mhz = [&](int pos) { return (r.freq_khz - curve[static_cast<std::size_t>(pos)].freq_khz) / 1000; };
+    // What a candidate adds at its anchor, and what that point then runs
+    // above its built-in frequency: the core offset is part of that.
+    auto extra_mhz = [&](int pos) { return (r.freq_khz - curve[static_cast<std::size_t>(pos)].freq_khz) / 1000; };
+    auto raise_mhz = [&](int pos) { return extra_mhz(pos) + base.core_mhz; };
     auto mv = [&](int pos) { return curve[static_cast<std::size_t>(pos)].volt_uv / 1000; };
     log("target: " + std::to_string(r.freq_khz / 1000) + " MHz, which the card reaches at " + std::to_string(r.stock_uv / 1000) +
-        " mV by itself");
+        (overclocked ? " mV with the overclock" : " mV by itself"));
 
     const int ceiling = journal.ceilings().uv_mhz;
     if (ceiling != INT_MAX)
@@ -103,7 +124,8 @@ UndervoltResult find_undervolt(const GpuControl& gpu, Journal& journal, const Un
         if (aborted()) { stopped = "aborted"; return Step::Stop; }
         const int id = journal.begin(std::nullopt, std::nullopt, raise_mhz(pos));
         if (id < 0) { stopped = "could not write the journal"; return Step::Stop; }
-        const VfApplyResult written = apply_flat_top(gpu, curve[static_cast<std::size_t>(pos)].index, r.freq_khz);
+        const VfApplyResult written = apply_flat_top(gpu, curve[static_cast<std::size_t>(pos)].index, r.freq_khz, kVfTailDropKhz,
+                                                     base.core_mhz * 1000);
         if (!written.ok) {
             // Not a verdict on the candidate's stability: the card did not
             // take this curve. With the curve back at stock that only means
@@ -129,13 +151,14 @@ UndervoltResult find_undervolt(const GpuControl& gpu, Journal& journal, const Un
         if (is_reset_verdict(last.verdict)) return Step::Reset;
         return pass ? Step::Pass : Step::Fail;
     };
-    // After a driver reset: reconnect, stock, rest, and a short probe at stock
-    // that must compute normally again. False: `stopped` says why the run ends.
+    // After a driver reset: reconnect, stock, the overclock again, rest, and a
+    // short probe that must compute normally again. False: `stopped` says why the run ends.
     auto recovered = [&]() -> bool {
         if (++r.driver_resets >= 2) { stopped = "the driver reset twice"; return false; }
         log("the driver was reset; reconnecting");
         if (!gpu.recover || !gpu.recover()) { stopped = "the driver did not come back after a reset"; return false; }
         if (!to_stock()) { stopped = "could not set the card to stock while recovering"; return false; }
+        if (!set_base()) { stopped = "could not set the overclock again after a driver reset"; return false; }
         if (io.rest) {
             log("resting " + std::to_string(static_cast<int>(kRestAfterResetS)) + " s before the card is loaded again");
             if (!io.rest(kRestAfterResetS)) { stopped = "aborted"; return false; }
@@ -156,7 +179,7 @@ UndervoltResult find_undervolt(const GpuControl& gpu, Journal& journal, const Un
     int edge = -1;
     bool reset = false;
     for (int pos = own - 1; pos >= 0; --pos) {
-        if (raise_mhz(pos) <= 0) continue;                       // the same clock at this voltage already
+        if (extra_mhz(pos) <= 0) continue;                       // the same clock at this voltage already
         if (raise_mhz(pos) * 1000 > kVfMaxRaiseKhz || raise_mhz(pos) >= ceiling) break;
         const Step step = candidate(pos, kUvProbeS, "");
         if (step == Step::Pass) { edge = pos; continue; }
@@ -187,7 +210,7 @@ UndervoltResult find_undervolt(const GpuControl& gpu, Journal& journal, const Un
     const int kept_mhz = apply_margin(raise_mhz(confirmed), kStepMhz, perf_push);
     int applied = -1;
     for (int p = confirmed; p < own; ++p)
-        if (raise_mhz(p) > 0 && raise_mhz(p) <= kept_mhz) { applied = p; break; }
+        if (extra_mhz(p) > 0 && raise_mhz(p) <= kept_mhz) { applied = p; break; }
     if (applied < 0) return finish_fail("nothing was left of the undervolt after the safety margin");
     log("undervolt: lowest stable " + std::to_string(mv(edge)) + " mV, confirmed " + std::to_string(mv(confirmed)) + " mV, applying " +
         std::to_string(mv(applied)) + " mV (+" + std::to_string(raise_mhz(applied)) + " MHz at that point)");
