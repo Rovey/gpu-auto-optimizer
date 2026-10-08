@@ -138,10 +138,13 @@ VfApplyResult apply_flat_top(const GpuControl& gpu, int anchor_index, int freq_k
     std::vector<int> tail;
     for (const VfPoint& p : *curve)
         if (p.volt_uv >= anchor_uv) tail.push_back(p.index);
-    // The built-in frequencies of the points below, to see that they stay.
-    std::vector<std::pair<int, int>> below;
-    for (const VfPoint& p : *curve)
-        if (p.volt_uv < anchor_uv) below.emplace_back(p.index, p.freq_khz);
+    // The points below the anchor, to see that they stay untouched, and the
+    // nearest of them as a yardstick: it is written nothing, and what the
+    // card's temperature does to it, it does to the anchor next to it.
+    std::vector<int> below;
+    int neighbour = -1;
+    for (const VfPoint& p : *curve)   // lowest voltage first
+        if (p.volt_uv < anchor_uv) { below.push_back(p.index); neighbour = p.index; }
 
     // What the plan asks of each point, from this read at stock, and with it
     // the most that will ever be written there.
@@ -187,9 +190,16 @@ VfApplyResult apply_flat_top(const GpuControl& gpu, int anchor_index, int freq_k
             const int error = is->freq_khz - freq_khz;
             if (o.index == anchor_index ? std::abs(error) > kVfToleranceKhz : error > kVfToleranceKhz) reached = false;
         }
-        for (const auto& [index, base] : below) {
+        // Untouched means: still without an offset. Their frequencies are not
+        // compared: the built-in curve itself moves with temperature (45 MHz
+        // between cold and warm on the reference card, up at low voltages and
+        // down at high ones).
+        for (int index : below) {
             const VfPoint* is = find(*after, index);
-            if (!is || std::abs(is->freq_khz - base) > kVfSlackKhz) return fail("a point below the anchor moved");
+            if (!is) return fail("a point disappeared from the curve");
+            if (is->raw_offset != 0)
+                return fail("a point below the anchor got an offset (slot " + std::to_string(index) + ": " +
+                            std::to_string(is->raw_offset) + ")");
         }
         if (reached) {
             r.ok = true;
@@ -203,9 +213,16 @@ VfApplyResult apply_flat_top(const GpuControl& gpu, int anchor_index, int freq_k
             const VfPoint* was = find(before, anchor_index);
             const VfPoint* is = find(*after, anchor_index);
             const int asked_khz = find_raw(offsets, anchor_index) - was->raw_offset;
+            // Measured against the neighbour below, so that a built-in curve
+            // that moved between the two reads does not count as the anchor's
+            // doing.
+            int moved_khz = is->freq_khz - was->freq_khz;
+            if (const VfPoint* ref_was = find(before, neighbour), *ref_is = find(*after, neighbour); ref_was && ref_is)
+                moved_khz -= ref_is->freq_khz - ref_was->freq_khz;
             if (asked_khz >= 3 * grid_khz && asked_khz >= 3 * kVfToleranceKhz &&
-                std::abs((is->freq_khz - was->freq_khz) - asked_khz) > grid_khz + kVfToleranceKhz)
-                return fail("the card did not move the curve by what was written");
+                std::abs(moved_khz - asked_khz) > grid_khz + kVfToleranceKhz)
+                return fail("the card did not move the curve by what was written (asked " + std::to_string(asked_khz / 1000) +
+                            " MHz, moved " + std::to_string(moved_khz / 1000) + ")");
         }
         before = *after;
     }

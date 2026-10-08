@@ -30,6 +30,10 @@ struct FakeCurve {
     int writes_allowed = -1;     // >= 0: this many writes succeed, the rest fail
     bool read_ok = true;
     int drift_khz = 0;           // added to every built-in frequency from the first write on
+    // From the first write on the built-in curve tilts, as the reference
+    // card's does between cold and warm: the lowest point gains this much,
+    // slot 8 nothing, the points above lose (hardware check 63, first run).
+    int tilt_khz = 0;
     int writes = 0;
     int max_freq_seen = 0;       // the highest frequency any point ever read back as
 
@@ -46,7 +50,7 @@ struct FakeCurve {
         base_khz[1] = 1605000;
     }
     int freq(std::size_t i) const {
-        long long f = base_khz[i] + (writes ? drift_khz : 0);
+        long long f = base_khz[i] + (writes ? drift_khz + tilt_khz * (8 - static_cast<int>(i)) / 8 : 0);
         if (live) f += std::llround(raw[i] / raw_per_khz);
         if (bin_khz > 0) f = (f + (round_nearest ? bin_khz / 2 : 0)) / bin_khz * bin_khz;
         return static_cast<int>(f);
@@ -127,7 +131,7 @@ TEST_CASE("a card that stores offsets in other units is refused, never overshot"
     half.raw_per_khz = 2.0;
     const auto r = apply_flat_top(half.gpu(), 8, 2700000);
     CHECK_FALSE(r.ok);
-    CHECK(r.why == "the card did not move the curve by what was written -- curve at stock");
+    CHECK(r.why == "the card did not move the curve by what was written (asked 200 MHz, moved 100) -- curve at stock");
     CHECK(half.at_stock());
     CHECK(half.writes == 2);   // the half step, and the clean-up: the full step was never written
 
@@ -357,3 +361,29 @@ TEST_CASE("remove_vf_shape: a flat top is zeroed, a plain core offset is left to
     CHECK(remove_vf_shape(none, &why));
 }
 
+TEST_CASE("a built-in curve that tilts with temperature between two reads does not fail the write") {
+    // Seen on the reference card: 45 MHz between cold and warm, up at low
+    // voltages and down at high ones. The points below the anchor then read
+    // differently although nothing was written to them.
+    FakeCurve card;
+    card.tilt_khz = 40000;
+    const auto r = apply_flat_top(card.gpu(), 8, 2700000);
+    REQUIRE(r.ok);
+    CHECK(std::abs(card.freq(8) - 2700000) <= kVfToleranceKhz);
+    for (std::size_t i = 8; i < 16; ++i) CHECK(card.freq(i) <= 2700000 + kVfToleranceKhz);
+    for (std::size_t i = 0; i < 8; ++i) CHECK(card.raw[i] == 0);   // untouched: that is what "stays stock" means
+}
+
+TEST_CASE("an offset that appears on a point below the anchor ends the write") {
+    FakeCurve card;
+    GpuControl gpu = card.gpu();
+    const auto write = gpu.write_vf_offsets;
+    gpu.write_vf_offsets = [&](const std::vector<VfOffset>& offsets) {   // a driver that drags a lower point along
+        const bool ok = write(offsets);
+        card.raw[5] = 15000;
+        return ok;
+    };
+    const auto r = apply_flat_top(gpu, 8, 2700000);
+    CHECK_FALSE(r.ok);
+    CHECK(r.why.find("a point below the anchor got an offset (slot 5") == 0);
+}

@@ -31,10 +31,12 @@ namespace gao {
 inline constexpr double kUvBaselineS = 30, kUvProbeS = 3, kUvConfirmS = 30, kUvSoakS = 300;
 inline constexpr int kUvConfirmTries = 3;
 inline constexpr int kUvSoakAttempts = 3;
-// A candidate must run the target clock, give or take two steps of the
-// card's 15 MHz grid, and keep this share of the stock score. One that
-// computes right but slower took the curve without running it ("SLOW").
-inline constexpr int kUvClockSlackKhz = 30000;
+// A candidate must run the target clock within what the built-in curve moves
+// with temperature (45 MHz between cold and warm on the reference card: a
+// flat top written on a cooler card runs that much lower once it is hot), and
+// keep this share of the stock score. One that computes right but slower
+// took the curve without running it ("SLOW").
+inline constexpr int kUvClockSlackKhz = 45000;
 inline constexpr double kUvScoreKeep = 0.97;
 
 struct UndervoltIo {
