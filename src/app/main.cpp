@@ -108,9 +108,10 @@ static int curve() {
     return 0;
 }
 
-// Writes a flat top by hand: the point at or just above <mv> and every point
-// above it run <mhz>. For the hardware checks; `gao --reset` undoes it.
-static int curve_flatten(int mv, int mhz) {
+// Writes a flat top by hand: the point at or just above <mv> runs <mhz> and
+// no point above it runs more; those are stored <tail_drop_mhz> lower (0: a
+// top that is exactly flat). For the hardware checks; `gao --reset` undoes it.
+static int curve_flatten(int mv, int mhz, int tail_drop_mhz) {
     const gao::app::TuningLock lock;
     if (!lock.owned()) { std::printf("another optimize is already running (in the app or on the command line)\n"); return 1; }
     // A running tray app would take the missing core offset for a driver
@@ -128,7 +129,7 @@ static int curve_flatten(int mv, int mhz) {
     for (const gao::VfPoint& p : *before)   // lowest voltage first
         if (p.volt_uv >= mv * 1000) { anchor = p.index; break; }
     if (anchor < 0) { std::printf("no curve point at or above %d mV\n", mv); return 1; }
-    const gao::VfApplyResult r = gao::apply_flat_top(gpu, anchor, mhz * 1000);
+    const gao::VfApplyResult r = gao::apply_flat_top(gpu, anchor, mhz * 1000, tail_drop_mhz * 1000);
     if (const auto after = gpu.read_vf_curve()) print_curve(*after);
     if (!r.ok) { std::printf("not applied: %s\n", r.why.c_str()); return 1; }
     std::printf("flat top applied: slot %d runs %d MHz, in %d write rounds -- OK\n", anchor, mhz, r.passes);
@@ -542,12 +543,14 @@ int main(int argc, char** argv) {
     if (argc > 1 && std::strcmp(argv[1], "--curve") == 0) return curve();
     if (argc > 1 && std::strcmp(argv[1], "--undervolt") == 0) return undervolt();
     if (argc > 1 && std::strcmp(argv[1], "--curve-flatten") == 0) {
-        int mv = 0, mhz = 0;
-        if (argc < 4 || !ParseIntArg(argv[2], &mv) || !ParseIntArg(argv[3], &mhz)) {
-            std::printf("--curve-flatten expects <mV> <MHz>\n");
+        int mv = 0, mhz = 0, drop = gao::kVfTailDropKhz / 1000;
+        if (argc < 4 || !ParseIntArg(argv[2], &mv) || !ParseIntArg(argv[3], &mhz) ||
+            (argc > 4 && (!ParseIntArg(argv[4], &drop) || drop < 0 || drop > 200))) {
+            std::printf("--curve-flatten expects <mV> <MHz> [<MHz the points above it are stored lower, 0-200; default %d>]\n",
+                        gao::kVfTailDropKhz / 1000);
             return 1;
         }
-        return curve_flatten(mv, mhz);
+        return curve_flatten(mv, mhz, drop);
     }
     if (argc > 1 && std::strcmp(argv[1], "--update") == 0) return update();
     if (argc > 1 && std::strcmp(argv[1], "--optimize") == 0) {
@@ -578,7 +581,8 @@ int main(int argc, char** argv) {
                 "            | --curve (prints the voltage/frequency curve; changes nothing)\n"
                 "            | --undervolt (the stock load clock on the lowest stable voltage; saved like --optimize,\n"
                 "              and it replaces a saved overclock)\n"
-                "            | --curve-flatten <mV> <MHz> (the point at <mV> and all above it run <MHz>; --reset undoes it)\n"
+                "            | --curve-flatten <mV> <MHz> [<MHz>] (the point at <mV> runs <MHz> and no point above it more;\n"
+                "              the third number is how much lower those are stored, 0 for exactly flat; --reset undoes it)\n"
                 "            | --update (installs the latest release into this folder, if there is a newer one)]\n");
     return argc > 1 ? 1 : 0;
 }

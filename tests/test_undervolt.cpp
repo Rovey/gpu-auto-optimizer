@@ -70,7 +70,12 @@ struct UvCard {
         g.read_vf_curve = [this]() -> std::optional<std::vector<VfPoint>> {
             if (dead) return std::nullopt;
             std::vector<VfPoint> out;
-            for (std::size_t i = 0; i < raw.size(); ++i) out.push_back({static_cast<int>(i), volt_uv[i], freq(i), raw[i]});
+            // Every point reads the most that it or any point below it runs (hardware check 72).
+            int most = 0;
+            for (std::size_t i = 0; i < raw.size(); ++i) {
+                most = std::max(most, freq(i));
+                out.push_back({static_cast<int>(i), volt_uv[i], most, raw[i]});
+            }
             return out;
         };
         g.write_vf_offsets = [this](const std::vector<VfOffset>& offsets) {

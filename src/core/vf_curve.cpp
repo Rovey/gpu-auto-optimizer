@@ -114,7 +114,7 @@ bool remove_vf_shape(const GpuControl& gpu, std::string* why) {
     return false;
 }
 
-VfApplyResult apply_flat_top(const GpuControl& gpu, int anchor_index, int freq_khz) {
+VfApplyResult apply_flat_top(const GpuControl& gpu, int anchor_index, int freq_khz, int tail_drop_khz) {
     VfApplyResult r;
     auto refuse = [&](const std::string& why) { r.why = why; r.at_stock = true; return r; };   // nothing was written
     // After a write: the card must not keep half a curve.
@@ -205,6 +205,45 @@ VfApplyResult apply_flat_top(const GpuControl& gpu, int anchor_index, int freq_k
                             std::to_string(is->raw_offset) + ")");
         }
         if (reached) {
+            if (tail_drop_khz <= 0) {
+                r.ok = true;
+                return r;
+            }
+            // The top is flat, as read back. Now the points above the
+            // anchor go lower than it, in one write of their offsets. What
+            // the card reads back for them does not follow: it reports
+            // for every point the most that it or any point below it
+            // runs (hardware check 72), so they keep reading the anchor's
+            // frequency. What can be checked is that the offsets were
+            // stored, that the anchor still is on the target and that
+            // nothing reads above it.
+            std::vector<VfOffset> lowered;
+            for (int index : tail) {
+                const VfPoint* is = find(*after, index);
+                if (!is) return fail("a point disappeared from the curve");
+                if (index != anchor_index) lowered.push_back({index, is->raw_offset - tail_drop_khz});
+            }
+            if (lowered.empty()) {   // the anchor is the top point
+                r.ok = true;
+                return r;
+            }
+            if (!gpu.write_vf_offsets(lowered)) return fail("writing the curve failed");
+            const auto final_read = gpu.read_vf_curve();
+            if (!final_read) return fail("the curve could not be read back");
+            for (const VfPoint& p : *final_read) {
+                if (p.volt_uv < anchor_uv) {
+                    if (p.raw_offset != 0) return fail("a point below the anchor got an offset (slot " + std::to_string(p.index) + ")");
+                    continue;
+                }
+                if (p.index == anchor_index ? std::abs(p.freq_khz - freq_khz) > kVfToleranceKhz
+                                            : p.freq_khz - freq_khz > kVfToleranceKhz)
+                    return fail("lowering the points above the anchor moved the top off the target");
+            }
+            for (const VfOffset& o : lowered) {
+                const VfPoint* is = find(*final_read, o.index);
+                if (!is || std::abs(is->raw_offset - o.raw) > kVfToleranceKhz)
+                    return fail("the card did not store the lowered points above the anchor");
+            }
             r.ok = true;
             return r;
         }
