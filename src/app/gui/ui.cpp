@@ -205,10 +205,14 @@ void tile(const char* id, Icon icon, const char* label, const std::string& value
     ImGui::PopFont();
     ImGui::SameLine(0, em() * 0.8f);
     ImGui::SetCursorPosY((h - content_h) / 2);
+    // Label and value as one block, as tall as content_h says: with the
+    // style's own line spacing between them the value hung at the bottom.
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(ImGui::GetStyle().ItemSpacing.x, em() * 0.15f));
     ImGui::BeginGroup();
     dim(label);
     text_bold(value.c_str(), 1.3f);
     ImGui::EndGroup();
+    ImGui::PopStyleVar();
     ImGui::EndChild();
 }
 
