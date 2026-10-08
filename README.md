@@ -54,7 +54,7 @@ The search raised each clock until the card computed a wrong value (core +225 MH
 > [!NOTE]
 > The score is the app's own stress test, a DirectX 11 compute load. Games gain a different amount, and every card has its own limits. The log of this run is in [docs/hardware-checks.md](docs/hardware-checks.md) (check 52, fourth run).
 
-## Or the same speed on 20 % less power
+## Or almost the same speed on 20 % less power
 
 <div align="center">
 

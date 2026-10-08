@@ -56,6 +56,28 @@ std::string with_icon(unsigned cp, const char* text) { return ic(cp) + "   " + t
 float em() { return ImGui::GetFontSize(); }
 float base() { return ImGui::GetStyle().FontSizeBase; }
 
+// The fan icon is drawn, not a glyph: the icon fonts of Windows have no fan
+// (kIconFan's code point is a ring of dots). A casing ring, a hub and three
+// swept blades inside a circle of `radius` around `c`.
+void draw_fan(ImDrawList* dl, const ImVec2& c, float radius, ImU32 colour) {
+    constexpr float kTurn = 6.2831853f;
+    constexpr int kOutline = 20;   // points around one blade
+    dl->AddCircle(c, radius * 0.92f, colour, 0, std::max(1.0f, radius * 0.12f));
+    for (int k = 0; k < 3; ++k) {
+        // A blade: an ellipse half-way out on its spoke, leaning 52 degrees into the turn.
+        const float spoke = kTurn * static_cast<float>(k) / 3 - kTurn / 4, lean = spoke + 0.9076f;
+        const ImVec2 mid(c.x + radius * 0.50f * std::cos(spoke), c.y + radius * 0.50f * std::sin(spoke));
+        ImVec2 outline[kOutline];
+        for (int i = 0; i < kOutline; ++i) {
+            const float t = kTurn * static_cast<float>(i) / kOutline;
+            const float x = radius * 0.34f * std::cos(t), y = radius * 0.21f * std::sin(t);
+            outline[i] = ImVec2(mid.x + x * std::cos(lean) - y * std::sin(lean), mid.y + x * std::sin(lean) + y * std::cos(lean));
+        }
+        dl->AddConvexPolyFilled(outline, kOutline, colour);
+    }
+    dl->AddCircleFilled(c, radius * 0.20f, colour);
+}
+
 struct PresetInfo {
     Preset preset;
     Icon icon;
@@ -171,7 +193,14 @@ void tile(const char* id, Icon icon, const char* label, const std::string& value
     ImGui::SetCursorPos(ImVec2(em() * 0.9f, (h - content_h) / 2 + em() * 0.3f));
     ImGui::PushFont(nullptr, base() * 1.8f);
     ImGui::PushStyleColor(ImGuiCol_Text, kAccentBright);
-    ImGui::TextUnformatted(ic(icon).c_str());
+    if (icon == kIconFan) {   // drawn, in the box a glyph of this size would take
+        const ImVec2 at = ImGui::GetCursorScreenPos();
+        const float size = ImGui::GetFontSize();
+        ImGui::Dummy(ImVec2(size, size));
+        draw_fan(ImGui::GetWindowDrawList(), ImVec2(at.x + size / 2, at.y + size / 2), size * 0.5f, ImGui::GetColorU32(kAccentBright));
+    } else {
+        ImGui::TextUnformatted(ic(icon).c_str());
+    }
     ImGui::PopStyleColor();
     ImGui::PopFont();
     ImGui::SameLine(0, em() * 0.8f);
@@ -202,7 +231,27 @@ void telemetry_tiles(const UiState& s) {
     tile("fan", kIconFan, "Fan speed", reading(t.fan_pct, " %") + mode, w, h);
 }
 
+// An icon in a square badge, centred by the glyph's own outline and not by
+// its advance: the glyphs of the icon font differ in width and in where
+// they sit in their cell, which next to a title reads as uneven spacing.
+void icon_badge(Icon icon, float side, const ImVec4& fill, const ImVec4& edge, const ImVec4& ink) {
+    const ImVec2 at = ImGui::GetCursorScreenPos();
+    ImGui::Dummy(ImVec2(side, side));
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImVec2 corner(at.x + side, at.y + side);
+    dl->AddRectFilled(at, corner, ImGui::GetColorU32(fill), side * 0.28f);
+    dl->AddRect(at, corner, ImGui::GetColorU32(edge), side * 0.28f);
+    ImGui::PushFont(nullptr, side * 0.5f);
+    ImVec2 pen(at.x + side * 0.25f, at.y + side * 0.25f);   // a glyph the font does not have: roughly centred
+    if (const ImFontGlyph* glyph = ImGui::GetFontBaked()->FindGlyph(static_cast<ImWchar>(icon)))
+        pen = ImVec2(at.x + (side - glyph->X0 - glyph->X1) / 2, at.y + (side - glyph->Y0 - glyph->Y1) / 2);
+    dl->AddText(ImVec2(std::floor(pen.x + 0.5f), std::floor(pen.y + 0.5f)), ImGui::GetColorU32(ink), ic(icon).c_str());
+    ImGui::PopFont();
+}
+
 // One profile as a card; clicking it selects it. h 0: as tall as its contents.
+// The selected card says so with its border and its badge; there is no
+// radio button next to them saying it a third time.
 void preset_card(UiState& s, const PresetInfo& p, float w, float h) {
     ImGui::PushID(static_cast<int>(p.preset));
     const bool selected = s.preset == p.preset;
@@ -216,12 +265,10 @@ void preset_card(UiState& s, const PresetInfo& p, float w, float h) {
                       ImGuiWindowFlags_NoScrollbar);
     ImGui::PopStyleVar(2);
     ImGui::PopStyleColor(2);
-    if (ImGui::RadioButton("##pick", selected)) s.preset = p.preset;
-    ImGui::SameLine();
-    ImGui::PushStyleColor(ImGuiCol_Text, selected ? kAccentBright : kDim);
-    ImGui::TextUnformatted(ic(p.icon).c_str());
-    ImGui::PopStyleColor();
-    ImGui::SameLine();
+    const float badge = em() * 2.1f;
+    icon_badge(p.icon, badge, selected ? kAccent : kCard, selected ? kAccentBright : kBorder, selected ? kText : kDim);
+    ImGui::SameLine(0, em() * 0.7f);
+    ImGui::SetCursorPosY(ImGui::GetCursorPosY() + (badge - em() * 1.05f) / 2 - em() * 0.08f);   // level with the badge
     text_bold(p.title, 1.05f);
     wrapped(kDim, std::string(p.summary) + " Up to " + std::to_string(objectives_for(p.preset).max_temp_c) +
                       " \xC2\xB0""C.");
@@ -236,7 +283,7 @@ void preset_cards(UiState& s) {
     const float gap = ImGui::GetStyle().ItemSpacing.x;
     const float w = (ImGui::GetContentRegionAvail().x - gap * 3) / 4;
     for (size_t i = 0; i < std::size(kPresets); ++i) {
-        preset_card(s, kPresets[i], w, em() * 7.6f);
+        preset_card(s, kPresets[i], w, em() * 8.3f);
         if (i + 1 < std::size(kPresets)) ImGui::SameLine();
     }
     preset_card(s, kUndervolt, ImGui::GetContentRegionAvail().x, 0);   // as tall as its text, at any width
@@ -1022,7 +1069,8 @@ void nav_item(UiState& s, Page page, Icon icon, const char* label) {
     if (selected || hovered)
         dl->AddRectFilled(p, ImVec2(p.x + size.x, p.y + size.y), ImGui::GetColorU32(selected ? kAccent : kInner), em() * 0.35f);
     const float y = p.y + (size.y - em()) / 2;
-    dl->AddText(ImVec2(p.x + em() * 0.9f, y), ImGui::GetColorU32(kText), ic(icon).c_str());
+    if (icon == kIconFan) draw_fan(dl, ImVec2(p.x + em() * 1.4f, y + em() * 0.5f), em() * 0.55f, ImGui::GetColorU32(kText));
+    else dl->AddText(ImVec2(p.x + em() * 0.9f, y), ImGui::GetColorU32(kText), ic(icon).c_str());
     dl->AddText(ImVec2(p.x + em() * 2.6f, y), ImGui::GetColorU32(kText), label);
 }
 
