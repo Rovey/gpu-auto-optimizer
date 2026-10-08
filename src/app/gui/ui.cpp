@@ -2,6 +2,7 @@
 #include "core/boot.hpp"
 #include "core/objectives.hpp"
 #include "core/version.hpp"
+#include "core/watchdog.hpp"
 #include "imgui.h"
 #include <algorithm>
 #include <cmath>
@@ -70,14 +71,23 @@ constexpr PresetInfo kPresets[] = {
     {Preset::MaxPerformance, kIconGauge, "Max performance",
      "Highest confirmed clocks minus one step and the highest power limit."},
 };
+// Not a clock search, and shown apart from the four above: the speed the
+// card has at stock, on the lowest voltage that holds it.
+constexpr PresetInfo kUndervolt = {Preset::Undervolt, kIconPower, "Undervolt",
+                                   "The same speed on less voltage: less power, less heat and quieter fans. Clocks and the "
+                                   "power limit stay stock. It replaces a saved overclock."};
 
 const char* title_of(Preset preset) {
+    if (preset == kUndervolt.preset) return kUndervolt.title;
     for (const PresetInfo& p : kPresets)
         if (p.preset == preset) return p.title;
     return preset_name(preset);
 }
 
 std::string offset(int mhz) { return (mhz >= 0 ? "+" : "") + std::to_string(mhz) + " MHz"; }
+std::string undervolt_text(const UndervoltTune& u) {
+    return std::to_string(u.freq_khz / 1000) + " MHz at " + std::to_string(u.volt_uv / 1000) + " mV";
+}
 
 // ------------------------------------------------------------------ widgets
 
@@ -186,37 +196,44 @@ void telemetry_tiles(const UiState& s) {
     tile("fan", kIconFan, "Fan speed", reading(t.fan_pct, " %") + mode, w, h);
 }
 
-// The four presets side by side; clicking one selects it.
+// One profile as a card; clicking it selects it. h 0: as tall as its contents.
+void preset_card(UiState& s, const PresetInfo& p, float w, float h) {
+    ImGui::PushID(static_cast<int>(p.preset));
+    const bool selected = s.preset == p.preset;
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, selected ? kSelectedBg : kInner);
+    ImGui::PushStyleColor(ImGuiCol_Border, selected ? kAccentBright : kBorder);
+    ImGui::PushStyleVar(ImGuiStyleVar_ChildBorderSize, selected ? 2.0f : 1.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(em() * 0.8f, em() * 0.7f));
+    ImGui::BeginChild("preset", ImVec2(w, h),
+                      ImGuiChildFlags_Borders | ImGuiChildFlags_AlwaysUseWindowPadding |
+                          (h == 0 ? ImGuiChildFlags_AutoResizeY : ImGuiChildFlags_None),
+                      ImGuiWindowFlags_NoScrollbar);
+    ImGui::PopStyleVar(2);
+    ImGui::PopStyleColor(2);
+    if (ImGui::RadioButton("##pick", selected)) s.preset = p.preset;
+    ImGui::SameLine();
+    ImGui::PushStyleColor(ImGuiCol_Text, selected ? kAccentBright : kDim);
+    ImGui::TextUnformatted(ic(p.icon).c_str());
+    ImGui::PopStyleColor();
+    ImGui::SameLine();
+    text_bold(p.title, 1.05f);
+    wrapped(kDim, std::string(p.summary) + " Up to " + std::to_string(objectives_for(p.preset).max_temp_c) +
+                      " \xC2\xB0""C.");
+    ImGui::EndChild();
+    if (ImGui::IsItemClicked()) s.preset = p.preset;
+    ImGui::PopID();
+}
+
+// The four clock profiles side by side and the undervolt below them, across
+// the full width: it is the other kind of tune.
 void preset_cards(UiState& s) {
     const float gap = ImGui::GetStyle().ItemSpacing.x;
-    const float w = (ImGui::GetContentRegionAvail().x - gap * 3) / 4, h = em() * 7.6f;
-    int i = 0;
-    for (const PresetInfo& p : kPresets) {
-        ImGui::PushID(i);
-        const bool selected = s.preset == p.preset;
-        ImGui::PushStyleColor(ImGuiCol_ChildBg, selected ? kSelectedBg : kInner);
-        ImGui::PushStyleColor(ImGuiCol_Border, selected ? kAccentBright : kBorder);
-        ImGui::PushStyleVar(ImGuiStyleVar_ChildBorderSize, selected ? 2.0f : 1.0f);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(em() * 0.8f, em() * 0.7f));
-        ImGui::BeginChild("preset", ImVec2(w, h), ImGuiChildFlags_Borders | ImGuiChildFlags_AlwaysUseWindowPadding,
-                          ImGuiWindowFlags_NoScrollbar);
-        ImGui::PopStyleVar(2);
-        ImGui::PopStyleColor(2);
-        if (ImGui::RadioButton("##pick", selected)) s.preset = p.preset;
-        ImGui::SameLine();
-        ImGui::PushStyleColor(ImGuiCol_Text, selected ? kAccentBright : kDim);
-        ImGui::TextUnformatted(ic(p.icon).c_str());
-        ImGui::PopStyleColor();
-        ImGui::SameLine();
-        text_bold(p.title, 1.05f);
-        wrapped(kDim, std::string(p.summary) + " Up to " + std::to_string(objectives_for(p.preset).max_temp_c) +
-                          " \xC2\xB0""C.");
-        ImGui::EndChild();
-        if (ImGui::IsItemClicked()) s.preset = p.preset;
-        if (i < 3) ImGui::SameLine();
-        ImGui::PopID();
-        ++i;
+    const float w = (ImGui::GetContentRegionAvail().x - gap * 3) / 4;
+    for (size_t i = 0; i < std::size(kPresets); ++i) {
+        preset_card(s, kPresets[i], w, em() * 7.6f);
+        if (i + 1 < std::size(kPresets)) ImGui::SameLine();
     }
+    preset_card(s, kUndervolt, ImGui::GetContentRegionAvail().x, 0);   // as tall as its text, at any width
 }
 
 // ------------------------------------------------------------------ dashboard
@@ -256,6 +273,7 @@ void tuning_card(const UiState& s, const UiActions& act) {
     heading("Current tuning");
     const float gap = ImGui::GetStyle().ItemSpacing.x;
     int rows = s.applied ? 5 : 2;
+    if (s.applied && s.profile && s.profile->undervolt) ++rows;
     if (s.profile && (!s.profile_driver_ok || !s.profile_gpu_ok)) ++rows;
     if (s.strikes > 0) ++rows;
     const float row_h = em() + ImGui::GetStyle().CellPadding.y * 2;
@@ -268,12 +286,20 @@ void tuning_card(const UiState& s, const UiActions& act) {
         ImGui::TableSetupColumn("value", ImGuiTableColumnFlags_WidthStretch);
         if (s.applied) {
             const AppliedState& a = *s.applied;
-            const bool stock = a.core_mhz == 0 && a.mem_mhz == 0 && a.power_pct >= 99 && a.power_pct <= 101;
-            const bool ours = s.profile && a.core_mhz == s.profile->core_mhz && a.mem_mhz == s.profile->mem_mhz &&
-                              a.power_pct >= s.profile->power_pct - 1 && a.power_pct <= s.profile->power_pct + 1;
+            // With an undervolt saved the curve has its say too: the offsets read +0 under a flat top.
+            const bool undervolt = s.profile && s.profile->undervolt;
+            const bool stock = a.core_mhz == 0 && a.mem_mhz == 0 && a.power_pct >= 99 && a.power_pct <= 101 &&
+                               (!undervolt || s.curve == CurveState::Stock);
+            const bool ours = s.profile && tune_applied(*s.profile, a, s.curve);
             if (ours) tuning_row("Applied now", std::string(title_of(s.profile->preset)) + " (the saved tune)", kGood);
             else if (stock) tuning_row("Applied now", "Stock");
             else tuning_row("Applied now", "Set by another program", kWarn);
+            if (undervolt)
+                tuning_row("Undervolt", ours ? undervolt_text(*s.profile->undervolt)
+                                         : s.curve == CurveState::Stock ? "Not applied"
+                                         : s.curve ? "Not applied (the curve carries other offsets)"
+                                                   : "Unknown (the curve could not be read)",
+                           ours ? kText : kDim);
             tuning_row("Core clock offset", offset(a.core_mhz));
             tuning_row("Memory clock offset", offset(a.mem_mhz));
             tuning_row("Power limit", std::to_string(a.power_pct) + " %");
@@ -282,8 +308,13 @@ void tuning_card(const UiState& s, const UiActions& act) {
         }
         if (s.profile) {
             const Profile& p = *s.profile;
-            tuning_row("Saved tune", std::string(title_of(p.preset)) + ": " + std::to_string(p.power_pct) + " %, core " +
-                                         offset(p.core_mhz) + ", memory " + offset(p.mem_mhz) + " (" + p.saved_at + ")");
+            std::string tune = std::to_string(p.power_pct) + " %, core " + offset(p.core_mhz) + ", memory " + offset(p.mem_mhz);
+            if (p.undervolt) {   // clocks and power are stock under an undervolt: name only what is not
+                tune = undervolt_text(*p.undervolt);
+                if (p.power_pct != 100) tune += ", " + std::to_string(p.power_pct) + " %";
+                if (p.mem_mhz != 0) tune += ", memory " + offset(p.mem_mhz);
+            }
+            tuning_row("Saved tune", std::string(title_of(p.preset)) + ": " + tune + " (" + p.saved_at + ")");
             if (!s.profile_driver_ok || !s.profile_gpu_ok)
                 tuning_row("", "Tuned on driver " + p.driver + (s.profile_gpu_ok ? "" : " and another card") +
                                    ". Optimize again before relying on it.",
@@ -638,25 +669,31 @@ void choose(UiState& s, const UiActions& act) {
     begin_card("choose");
     heading("Choose a profile");
     dim("Each profile searches for the highest stable settings and applies a safety margin.");
+    const bool undervolt = s.preset == Preset::Undervolt;
     ImGui::Spacing();
     preset_cards(s);
     ImGui::Spacing();
+    // The undervolt search leaves the fans to the NVIDIA driver and tests no curve.
+    ImGui::BeginDisabled(undervolt);
     ImGui::AlignTextToFramePadding();
     ImGui::TextUnformatted("Fan curve during the run");
     ImGui::SameLine(0, em());
     if (ImGui::RadioButton("Profile's own", !s.optimize_fan)) s.optimize_fan.reset();
     ImGui::SameLine(0, em());
     if (const auto p = fan_preset_buttons("run", s.optimize_fan)) s.optimize_fan = p;
+    ImGui::EndDisabled();
     ImGui::Spacing();
     const ImVec2 big(em() * 13, em() * 2.6f);
     ImGui::PushFont(g_bold, base() * 1.15f);
-    const bool go = s.elevated ? primary_button(with_icon(kIconPlay, "Optimize GPU"), big)
+    const bool go = s.elevated ? primary_button(with_icon(kIconPlay, undervolt ? "Undervolt GPU" : "Optimize GPU"), big)
                                : primary_button("Restart as administrator", big);
     ImGui::PopFont();
     if (go) s.elevated ? act.optimize(s.preset) : act.restart_elevated();
     ImGui::SameLine(0, em() * 1.5f);
     ImGui::BeginGroup();
-    ImGui::TextUnformatted((ic(kIconClock) + "  About 15 minutes of full GPU load.").c_str());
+    ImGui::TextUnformatted((ic(kIconClock) + (undervolt ? "  About 8 minutes of full GPU load."
+                                                        : "  About 15 minutes of full GPU load."))
+                               .c_str());
     dim("Abort restores stock at any time. A setting that crashes the machine is never tried again.");
     ImGui::EndGroup();
     end_card();
@@ -664,7 +701,9 @@ void choose(UiState& s, const UiActions& act) {
 
 void run_screen(UiState& s, const OptimizeWorker::Snapshot& run, const UiActions& act) {
     begin_card("run");
-    text_bold((std::string("Optimizing: ") + title_of(s.preset)).c_str(), 1.4f);
+    text_bold(s.preset == Preset::Undervolt ? "Finding the undervolt"
+                                            : (std::string("Optimizing: ") + title_of(s.preset)).c_str(),
+              1.4f);
     if (run.running) {
         const std::string abort = with_icon(kIconStop, "Abort");
         align_right(button_width(abort) + em());
@@ -693,62 +732,120 @@ void run_screen(UiState& s, const OptimizeWorker::Snapshot& run, const UiActions
     if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY()) ImGui::SetScrollHereY(1.0f);
     ImGui::EndChild();
     end_card();
-    if (!run.running && run.outcome) s.screen = Screen::Results;
+    if (!run.running && run.ended()) s.screen = Screen::Results;
 }
 
-void results(UiState& s, const OptimizeWorker::Snapshot& run, const UiActions& act) {
-    if (!run.outcome) {
-        s.screen = Screen::Choose;
+// A before/after table; `rows` fills it through `row(name, before, after)`.
+template <typename Rows>
+void comparison(Rows rows) {
+    if (!ImGui::BeginTable("cmp", 3, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_BordersOuter |
+                                         ImGuiTableFlags_SizingStretchSame | ImGuiTableFlags_PadOuterX))
         return;
-    }
-    const app::OptimizeOutcome& o = *run.outcome;
-    begin_card("results");
+    ImGui::TableSetupColumn("");
+    ImGui::TableSetupColumn("Before (stock)");
+    ImGui::TableSetupColumn("After");
+    ImGui::TableHeadersRow();
+    rows([](const char* name, const std::string& a, const std::string& b) {
+        ImGui::TableNextRow(ImGuiTableRowFlags_None, em() * 1.6f);
+        ImGui::TableNextColumn(); dim(name);
+        ImGui::TableNextColumn(); ImGui::TextUnformatted(a.c_str());
+        ImGui::TableNextColumn(); ImGui::TextUnformatted(b.c_str());
+    });
+    ImGui::EndTable();
+}
+
+std::string score_text(double score) {
+    char buf[32];
+    std::snprintf(buf, sizeof(buf), "%.0f it/s", score);
+    return buf;
+}
+// "5582 it/s (-1.0 %)", or the same for watts.
+std::string against(double before, double after, const char* unit) {
+    char buf[64];
+    std::snprintf(buf, sizeof(buf), "%.0f %s (%+.1f %%)", after, unit, before > 0 ? (after / before - 1) * 100 : 0.0);
+    return buf;
+}
+
+// What a finished run found. True when a result is applied.
+bool optimize_result(const app::OptimizeOutcome& o) {
     if (!o.ran) {
         heading("Not started");
         wrapped(kBad, o.error);
-    } else if (!o.result.ok) {
+        return false;
+    }
+    if (!o.result.ok) {
         heading("Not applied");
         wrapped(kBad, o.result.reason);
         wrapped(kText, o.result.stock_restored ? "The card is back at stock." : "Reset to stock FAILED -- run `gao --reset`.");
-    } else {
-        const OptimizeResult& r = o.result;
-        heading("Done");
-        char line[160];
-        std::snprintf(line, sizeof(line), "Applied: power %d %%, core +%d MHz, memory +%d MHz", r.power_pct, r.core_mhz,
-                      r.mem_mhz);
-        wrapped(kGood, line);
-        std::snprintf(line, sizeof(line), "Confirmed edges: core +%d MHz, memory +%d MHz. The difference is the safety margin.",
-                      r.core_confirmed, r.mem_confirmed);
-        wrapped(kDim, line);
+        return false;
+    }
+    const OptimizeResult& r = o.result;
+    heading("Done");
+    char line[160];
+    std::snprintf(line, sizeof(line), "Applied: power %d %%, core +%d MHz, memory +%d MHz", r.power_pct, r.core_mhz, r.mem_mhz);
+    wrapped(kGood, line);
+    std::snprintf(line, sizeof(line), "Confirmed edges: core +%d MHz, memory +%d MHz. The difference is the safety margin.",
+                  r.core_confirmed, r.mem_confirmed);
+    wrapped(kDim, line);
+    ImGui::Spacing();
+    comparison([&](auto row) {
+        row("Score", score_text(r.baseline.score), against(r.baseline.score, r.soak.score, "it/s"));
+        row("Core clock", reading(r.baseline.avg_core_mhz, " MHz"), reading(r.soak.avg_core_mhz, " MHz"));
+        row("Memory clock", reading(r.baseline.avg_mem_mhz, " MHz"), reading(r.soak.avg_mem_mhz, " MHz"));
+        row("Peak temperature", reading(r.baseline.peak_temp_c, " \xC2\xB0""C"), reading(r.soak.peak_temp_c, " \xC2\xB0""C"));
+        row("Power", reading(r.baseline.avg_power_w, " W"), reading(r.soak.avg_power_w, " W"));
+    });
+    return true;
+}
+
+bool undervolt_result(const app::UndervoltOutcome& o) {
+    if (!o.ran) {
+        heading("Not started");
+        wrapped(kBad, o.error);
+        return false;
+    }
+    if (!o.result.ok) {
+        heading("Not applied");
+        wrapped(kBad, o.result.reason);
+        wrapped(kText, o.result.stock_restored ? "The card is back at stock." : "Reset to stock FAILED -- run `gao --reset`.");
+        return false;
+    }
+    const UndervoltResult& r = o.result;
+    heading("Done");
+    char line[200];
+    std::snprintf(line, sizeof(line), "Applied: %d MHz at %d mV instead of %d mV", r.freq_khz / 1000, r.applied_uv / 1000,
+                  r.stock_uv / 1000);
+    wrapped(kGood, line);
+    std::snprintf(line, sizeof(line), "Lowest stable voltage: %d mV, confirmed %d mV. The difference is the safety margin.",
+                  r.edge_uv / 1000, r.confirmed_uv / 1000);
+    wrapped(kDim, line);
+    ImGui::Spacing();
+    comparison([&](auto row) {
+        row("Score", score_text(r.baseline.score), against(r.baseline.score, r.after.score, "it/s"));
+        row("Core clock", reading(r.baseline.avg_core_mhz, " MHz"), reading(r.after.avg_core_mhz, " MHz"));
+        row("Voltage for that clock", std::to_string(r.stock_uv / 1000) + " mV", std::to_string(r.applied_uv / 1000) + " mV");
+        row("Peak temperature", reading(r.baseline.peak_temp_c, " \xC2\xB0""C"), reading(r.after.peak_temp_c, " \xC2\xB0""C"));
+        row("Power", reading(r.baseline.avg_power_w, " W"),
+            r.baseline.avg_power_w > 0 && r.after.avg_power_w >= 0 ? against(r.baseline.avg_power_w, r.after.avg_power_w, "W")
+                                                                   : reading(r.after.avg_power_w, " W"));
+    });
+    return true;
+}
+
+void results(UiState& s, const OptimizeWorker::Snapshot& run, const UiActions& act) {
+    if (!run.ended()) {
+        s.screen = Screen::Choose;
+        return;
+    }
+    begin_card("results");
+    const bool applied = run.undervolt ? undervolt_result(*run.undervolt) : optimize_result(*run.outcome);
+    if (applied) {
+        const bool saved = run.undervolt ? run.undervolt->saved : run.outcome->saved;
         ImGui::Spacing();
-        if (ImGui::BeginTable("cmp", 3, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_BordersOuter |
-                                            ImGuiTableFlags_SizingStretchSame | ImGuiTableFlags_PadOuterX)) {
-            ImGui::TableSetupColumn("");
-            ImGui::TableSetupColumn("Before (stock)");
-            ImGui::TableSetupColumn("After");
-            ImGui::TableHeadersRow();
-            auto row = [](const char* name, const std::string& a, const std::string& b) {
-                ImGui::TableNextRow(ImGuiTableRowFlags_None, em() * 1.6f);
-                ImGui::TableNextColumn(); dim(name);
-                ImGui::TableNextColumn(); ImGui::TextUnformatted(a.c_str());
-                ImGui::TableNextColumn(); ImGui::TextUnformatted(b.c_str());
-            };
-            const double gain = r.baseline.score > 0 ? (r.soak.score / r.baseline.score - 1) * 100 : 0;
-            char sb[32], sa[48];
-            std::snprintf(sb, sizeof(sb), "%.0f it/s", r.baseline.score);
-            std::snprintf(sa, sizeof(sa), "%.0f it/s (%+.1f %%)", r.soak.score, gain);
-            row("Score", sb, sa);
-            row("Core clock", reading(r.baseline.avg_core_mhz, " MHz"), reading(r.soak.avg_core_mhz, " MHz"));
-            row("Memory clock", reading(r.baseline.avg_mem_mhz, " MHz"), reading(r.soak.avg_mem_mhz, " MHz"));
-            row("Peak temperature", reading(r.baseline.peak_temp_c, " \xC2\xB0""C"), reading(r.soak.peak_temp_c, " \xC2\xB0""C"));
-            row("Power", reading(r.baseline.avg_power_w, " W"), reading(r.soak.avg_power_w, " W"));
-            ImGui::EndTable();
-        }
-        ImGui::Spacing();
-        if (o.saved) wrapped(kText, "Saved. It stays applied until reboot; turn on apply at logon to keep it.");
-        else wrapped(kWarn, "Not saved: " + o.save_note);
-        if (o.saved && !s.boot_on && primary_button("Apply at every logon")) act.set_boot(true);
-        if (o.saved && !s.boot_on) ImGui::SameLine();
+        if (saved) wrapped(kText, "Saved. It stays applied until reboot; turn on apply at logon to keep it.");
+        else wrapped(kWarn, "Not saved: " + (run.undervolt ? run.undervolt->save_note : run.outcome->save_note));
+        if (saved && !s.boot_on && primary_button("Apply at every logon")) act.set_boot(true);
+        if (saved && !s.boot_on) ImGui::SameLine();
         if (ImGui::Button(with_icon(kIconUndo, "Revert to stock").c_str())) act.revert_to_stock();
         ImGui::SameLine();
     }

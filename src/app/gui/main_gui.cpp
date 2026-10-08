@@ -819,8 +819,8 @@ void on_telemetry() {
         const auto snap = g.worker->snapshot();
         // A run that never started left the GPU alone: keep watching as before.
         // One that ran ends either at its saved result or at stock.
-        if (snap.outcome && snap.outcome->ran) {
-            g.watch = snap.outcome->result.ok && snap.outcome->saved;
+        if (snap.ran()) {
+            g.watch = snap.kept();
             g.watchdog = gao::Watchdog();
             g.watch_reset = false;   // the search's own resets are not the result's
         }

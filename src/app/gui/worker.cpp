@@ -14,6 +14,7 @@ bool OptimizeWorker::start(Preset preset, std::optional<FanCurve> fan_curve) {
         std::lock_guard lock(mu_);
         log_.clear();
         outcome_.reset();
+        undervolt_.reset();
     }
     abort_ = false;
     thread_ = std::jthread([this, preset, fan_curve] {
@@ -27,14 +28,18 @@ bool OptimizeWorker::start(Preset preset, std::optional<FanCurve> fan_curve) {
             wake_();
         };
         app::OptimizeOutcome outcome;
+        app::UndervoltOutcome undervolt;
+        const bool is_undervolt = preset == Preset::Undervolt;
         try {
-            outcome = app::run_optimize(preset, hooks, fan_curve);
+            if (is_undervolt) undervolt = app::run_undervolt(hooks);
+            else outcome = app::run_optimize(preset, hooks, fan_curve);
         } catch (const std::exception& e) {   // a thrown exception would otherwise end the process
-            outcome.error = std::string("unexpected error: ") + e.what();
+            (is_undervolt ? undervolt.error : outcome.error) = std::string("unexpected error: ") + e.what();
         }
         {
             std::lock_guard lock(mu_);
-            outcome_ = std::move(outcome);
+            if (is_undervolt) undervolt_ = std::move(undervolt);
+            else outcome_ = std::move(outcome);
         }
         running_ = false;
         wake_();
@@ -44,7 +49,7 @@ bool OptimizeWorker::start(Preset preset, std::optional<FanCurve> fan_curve) {
 
 OptimizeWorker::Snapshot OptimizeWorker::snapshot() const {
     std::lock_guard lock(mu_);
-    return {running_.load(), log_, outcome_};
+    return {running_.load(), log_, outcome_, undervolt_};
 }
 
 }
