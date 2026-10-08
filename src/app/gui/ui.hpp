@@ -3,6 +3,7 @@
 #include "core/fan_curve.hpp"
 #include "core/config.hpp"
 #include "core/types.hpp"
+#include "core/vf_curve.hpp"
 #include <deque>
 #include <functional>
 #include <optional>
@@ -26,7 +27,7 @@ struct Note {
 struct UiState {
     Page page = Page::Dashboard;
     Screen screen = Screen::Choose;
-    Preset preset = Preset::BestOfMyGpu;
+    Preset preset = Preset::AllInOne;   // what the one button does when nothing else is picked
     bool elevated = false;
 
     std::string gpu_name;
@@ -39,6 +40,9 @@ struct UiState {
     bool profile_driver_ok = false;
     bool profile_gpu_ok = false;
     std::optional<AppliedState> applied;
+    // The voltage/frequency curve seen from the saved undervolt. Empty: no
+    // undervolt is saved, or the curve could not be read.
+    std::optional<CurveState> curve;
     bool boot_on = false;
     int strikes = 0;
     std::vector<std::string> boot_log;   // the last lines of boot.log, oldest first
@@ -51,12 +55,28 @@ struct UiState {
     int fan_min_pct = 0;
     int fan_max_temp_c = 75;
     FanState fan_state;
+    // While a run from this window is under way the curve driver above is
+    // released and the run has the fans: what the card reports then (a
+    // speed set by hand or not; empty when it could not be read), and
+    // whether the run is measuring the fans right now.
+    bool run_active = false;
+    bool run_tunes_fans = false;
+    std::optional<bool> fan_manual;
     std::optional<FanPreset> optimize_fan;   // fan curve for the next run; empty: the profile's own
+    // The voltage/frequency curve during a run from this window, read back
+    // once a second: as the run last left it, and as it last read at stock.
+    // Both stay after the run, for its result screen. Empty: no run yet, or
+    // the card does not offer the curve.
+    std::vector<VfPoint> run_curve;
+    std::vector<VfPoint> run_stock;
 
     std::string update_version;   // a newer release that can be installed ("0.3.2"); empty: none known
     bool update_busy = false;     // it is being downloaded and installed
     std::string update_error;     // why the last attempt failed
     bool update_check = true;     // look for a new release when the app starts
+    // One click is to be all of it: a run that ends saved also switches
+    // apply-at-logon on, unless this is unticked on the Optimize page.
+    bool keep_at_logon = true;
 };
 
 struct UiActions {

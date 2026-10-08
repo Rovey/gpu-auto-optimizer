@@ -4,7 +4,10 @@
 
 namespace gao {
 
-enum class Preset { BestOfMyGpu, Quiet, CoolAndEfficient, MaxPerformance };
+// Undervolt is not a clock search: the stock speed on less voltage (core/undervolt.hpp).
+// AllInOne is three runs in a row: the overclock of BestOfMyGpu, an undervolt at a
+// clock between stock and that overclock, and the fan tune (app/common.hpp).
+enum class Preset { BestOfMyGpu, Quiet, CoolAndEfficient, MaxPerformance, Undervolt, AllInOne };
 
 // What the user wants, not what the tuner will do. The search reads these as
 // ceilings; perf_push decides how hard it chases clocks inside them.

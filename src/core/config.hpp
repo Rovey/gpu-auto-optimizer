@@ -6,7 +6,17 @@
 
 namespace gao {
 
-// What --optimize found, as --apply and --boot-apply re-apply it.
+// A flat top on the voltage/frequency curve (core/vf_curve.hpp), as the
+// undervolt search found it. The point is named by its voltage: that is the
+// card's own, where a slot number is the driver's.
+struct UndervoltTune {
+    int volt_uv = 0;     // the curve point the flat top is anchored at
+    int freq_khz = 0;    // the clock that point and every point above it run
+    int raise_khz = 0;   // how far the anchor ran above its built-in frequency when it was tested, a core offset under it included
+    bool operator==(const UndervoltTune&) const = default;
+};
+
+// What --optimize or --undervolt found, as --apply and --boot-apply re-apply it.
 struct Profile {
     Preset preset = Preset::BestOfMyGpu;
     int power_pct = 100;
@@ -16,6 +26,7 @@ struct Profile {
     std::string gpu;        // NVML UUID of the card it was tested on
     std::string saved_at;   // local time, "YYYY-MM-DD HH:MM"
     std::optional<FanCurve> fan_curve;   // the curve the tune was tested with; nullopt: tuned before fan control
+    std::optional<UndervoltTune> undervolt;   // set: a flat top on the curve, over core_mhz when that is not 0
 };
 
 // Everything that has to survive a reboot. Freeze ceilings are not here:
@@ -32,7 +43,9 @@ struct Config {
 
 std::string to_json(const Config& c);
 // Never throws. Bad input yields defaults; a profile with any field missing
-// or mistyped is treated as no profile rather than half a profile.
+// or mistyped is treated as no profile rather than half a profile. That
+// includes its undervolt: one that cannot be read whole, or the undervolt
+// preset without one, would otherwise apply as plain stock and look applied.
 Config from_json(const std::string& text);
 
 // The curve the fans follow: the edited one, else the one the tune was tested

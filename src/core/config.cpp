@@ -45,6 +45,10 @@ std::string to_json(const Config& c) {
             {"saved_at", p.saved_at},
         };
         if (p.fan_curve) j["profile"]["fan_curve"] = curve_json(*p.fan_curve);
+        if (p.undervolt)
+            j["profile"]["undervolt"] = {{"volt_uv", p.undervolt->volt_uv},
+                                         {"freq_khz", p.undervolt->freq_khz},
+                                         {"raise_khz", p.undervolt->raise_khz}};
     }
     if (c.fan_curve) j["fan_curve"] = curve_json(*c.fan_curve);
     j["fan_control"] = c.fan_control;
@@ -95,7 +99,20 @@ Config from_json(const std::string& text) {
     const auto power = num("power_pct"), core = num("core_mhz"), mem = num("mem_mhz");
     const auto driver = str("driver"), gpu = str("gpu"), saved_at = str("saved_at");
     if (!preset || !power || !core || !mem || !driver || !gpu || !saved_at) return c;
+    std::optional<UndervoltTune> undervolt;
+    if (const auto it = pj->find("undervolt"); it != pj->end()) {
+        auto field = [&](const char* key) -> std::optional<int> {
+            const auto f = it->is_object() ? it->find(key) : it->end();
+            if (f == it->end() || !f->is_number_integer()) return std::nullopt;
+            return f->get<int>();
+        };
+        const auto volt = field("volt_uv"), freq = field("freq_khz"), raise = field("raise_khz");
+        if (!volt || !freq || !raise) return c;
+        undervolt = UndervoltTune{*volt, *freq, *raise};
+    }
+    if (*preset == Preset::Undervolt && !undervolt) return c;
     c.profile = Profile{*preset, *power, *core, *mem, *driver, *gpu, *saved_at};
+    c.profile->undervolt = undervolt;
     if (const auto it = pj->find("fan_curve"); it != pj->end()) c.profile->fan_curve = curve_from(*it);
     return c;
 }

@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 300" width="860" height="300" role="img" aria-labelledby="t d" font-family="'Segoe UI', -apple-system, Helvetica, Arial, sans-serif">
+  <title id="t">One click on the reference RTX 4070: 1.6 % more speed on 8 % less power, with the fans at 62 % instead of 73 %</title>
+  <desc id="d">One All in one run, five minutes of full load at stock against five minutes after it. Stress-test score 5728 to 5820 iterations per second, power 196 to 180 watts, fan speed 73 to 62 percent. A second run gave 0.9 percent more score on 10.8 percent less power with the fans at 55 percent. The profiles that go for one thing only: Best of my GPU, 4.5 percent more speed; Undervolt, 20 percent less power and 8 degrees cooler.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#101a2e"/>
+      <stop offset="1" stop-color="#0b111d"/>
+    </linearGradient>
+  </defs>
+  <rect x="1" y="1" width="858" height="298" rx="16" fill="url(#bg)" stroke="#24344f" stroke-width="2"/>
+
+  <text x="40" y="50" fill="#8fa0b8" font-size="13" font-weight="600" letter-spacing="1.6">ONE CLICK, MEASURED ON THE REFERENCE CARD</text>
+
+  <g>
+    <rect x="40" y="72" width="248" height="124" rx="12" fill="#152037" stroke="#24344f"/>
+    <text x="60" y="102" fill="#8fa0b8" font-size="13" font-weight="600" letter-spacing="1.2">SPEED</text>
+    <text x="60" y="150" fill="#ffffff" font-size="44" font-weight="700" letter-spacing="-0.5">+1.6 %</text>
+    <text x="60" y="178" fill="#8fa0b8" font-size="13">5728 to 5820 it/s</text>
+
+    <rect x="306" y="72" width="248" height="124" rx="12" fill="#152037" stroke="#24344f"/>
+    <text x="326" y="102" fill="#8fa0b8" font-size="13" font-weight="600" letter-spacing="1.2">POWER</text>
+    <text x="326" y="150" fill="#34d399" font-size="44" font-weight="700" letter-spacing="-0.5">−8 %</text>
+    <text x="326" y="178" fill="#8fa0b8" font-size="13">196 W to 180 W under full load</text>
+
+    <rect x="572" y="72" width="248" height="124" rx="12" fill="#152037" stroke="#24344f"/>
+    <text x="592" y="102" fill="#8fa0b8" font-size="13" font-weight="600" letter-spacing="1.2">FAN SPEED</text>
+    <text x="592" y="150" fill="#ffffff" font-size="44" font-weight="700" letter-spacing="-0.5">62 %</text>
+    <text x="592" y="178" fill="#8fa0b8" font-size="13">was 73 %, measured for this card</text>
+  </g>
+
+  <text x="40" y="228" fill="#e6edf3" font-size="15">All in one, the default: overclock, undervolt and fan curve in one 34-minute run, tested as a whole.</text>
+  <text x="40" y="252" fill="#8fa0b8" font-size="13">Want all of one thing? Best of my GPU: +4.5 % speed. Undervolt: −20 % power, 8 °C cooler.</text>
+  <text x="40" y="278" fill="#6f8099" font-size="13">NVIDIA GeForce RTX 4070 · five minutes at stock against five minutes after · a second run: +0.9 %, −10.8 %, 55 %</text>
+</svg>

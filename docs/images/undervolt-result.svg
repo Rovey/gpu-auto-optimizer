@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 430" width="860" height="430" role="img" aria-labelledby="t d" font-family="'Segoe UI', -apple-system, Helvetica, Arial, sans-serif">
+  <title id="t">One click: 20 % less power at 99.6 % of the speed on the reference RTX 4070</title>
+  <desc id="d">Power under load 195 watts at stock and 155 watts after one run of the Undervolt profile, both measured for five minutes with the card heated through. The card reaches its clock at 990 millivolts instead of 1100, runs at 59 degrees Celsius instead of 67 and its fans at 64 percent instead of 72. Stress-test score 5708 iterations per second against 5732.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#101a2e"/>
+      <stop offset="1" stop-color="#0b111d"/>
+    </linearGradient>
+  </defs>
+  <rect x="1" y="1" width="858" height="428" rx="16" fill="url(#bg)" stroke="#24344f" stroke-width="2"/>
+
+  <text x="40" y="52" fill="#8fa0b8" font-size="13" font-weight="600" letter-spacing="1.6">MEASURED ON THE REFERENCE CARD</text>
+
+  <text x="38" y="128" fill="#ffffff" font-size="72" font-weight="700" letter-spacing="-1">−20 %</text>
+  <text x="300" y="98" fill="#e6edf3" font-size="27" font-weight="600">power, at 99.6 % of the speed</text>
+  <text x="300" y="126" fill="#8fa0b8" font-size="15">Undervolt · one 12-minute run · safety margin applied · 300 s soak passed</text>
+
+  <!-- Power under load, zero-based bars: 195 and 155 W on a 600 px scale of 200 W -->
+  <text x="40" y="181" fill="#8fa0b8" font-size="14">Stock</text>
+  <rect x="100" y="168" width="585" height="16" rx="4" fill="#4b5b75"/>
+  <text x="701" y="181" fill="#e6edf3" font-size="14" font-weight="600">195 W</text>
+  <text x="40" y="213" fill="#8fa0b8" font-size="14">Tuned</text>
+  <rect x="100" y="200" width="465" height="16" rx="4" fill="#34d399"/>
+  <text x="581" y="213" fill="#e6edf3" font-size="14" font-weight="600">155 W</text>
+
+  <g>
+    <rect x="40" y="246" width="248" height="112" rx="12" fill="#152037" stroke="#24344f"/>
+    <text x="60" y="276" fill="#8fa0b8" font-size="13" font-weight="600" letter-spacing="1.2">VOLTAGE</text>
+    <text x="60" y="315" fill="#ffffff" font-size="30" font-weight="700">990 mV</text>
+    <text x="60" y="340" fill="#8fa0b8" font-size="13">was 1100 mV, lowest stable 950 mV</text>
+
+    <rect x="306" y="246" width="248" height="112" rx="12" fill="#152037" stroke="#24344f"/>
+    <text x="326" y="276" fill="#8fa0b8" font-size="13" font-weight="600" letter-spacing="1.2">TEMPERATURE</text>
+    <text x="326" y="315" fill="#ffffff" font-size="30" font-weight="700">59 °C</text>
+    <text x="326" y="340" fill="#8fa0b8" font-size="13">was 67 °C after five minutes of load</text>
+
+    <rect x="572" y="246" width="248" height="112" rx="12" fill="#152037" stroke="#24344f"/>
+    <text x="592" y="276" fill="#8fa0b8" font-size="13" font-weight="600" letter-spacing="1.2">FAN SPEED</text>
+    <text x="592" y="315" fill="#ffffff" font-size="30" font-weight="700">64 %</text>
+    <text x="592" y="340" fill="#8fa0b8" font-size="13">was 72 %, the driver's own fan curve</text>
+  </g>
+
+  <text x="40" y="396" fill="#6f8099" font-size="13">NVIDIA GeForce RTX 4070 · driver 617.14 · both sides five minutes of the built-in stress test · every card has its own limits</text>
+</svg>

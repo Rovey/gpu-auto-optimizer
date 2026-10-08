@@ -198,4 +198,27 @@ FanState FanDriver::tick(const int temp_c, const int power_w, const std::chrono:
     return state_;
 }
 
+FanOwner fan_owner(FanMode app_mode, bool app_controls, bool run_active, bool run_tunes_fans, std::optional<bool> manual) {
+    if (run_active) {
+        if (!manual) return FanOwner::Unknown;
+        if (!*manual) return FanOwner::Driver;
+        return run_tunes_fans ? FanOwner::Measuring : FanOwner::Run;
+    }
+    if (app_mode == FanMode::Curve) return FanOwner::Curve;
+    if (app_mode == FanMode::Foreign) return FanOwner::Other;
+    return app_controls ? FanOwner::Driver : FanOwner::Unknown;
+}
+
+const char* fan_owner_label(FanOwner owner) {
+    switch (owner) {
+        case FanOwner::Driver: return " (driver)";
+        case FanOwner::Curve: return " (curve)";
+        case FanOwner::Other: return " (other program)";
+        case FanOwner::Run: return " (run)";
+        case FanOwner::Measuring: return " (tuning)";
+        case FanOwner::Unknown: break;
+    }
+    return "";
+}
+
 }

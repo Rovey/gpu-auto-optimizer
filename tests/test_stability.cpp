@@ -177,3 +177,17 @@ TEST_CASE("without a floor a run that computes nothing is not stalled") {
     const auto r = run_stability([] { return StressBatch{0, 0, false, 250}; }, [] { return tel(60); }, 4.0, 85);
     CHECK(r.verdict == Verdict::Stable);
 }
+
+TEST_CASE("the fan speed a run ended on is reported next to its peak temperature") {
+    // A temperature says little without the fan speed it was held with: the
+    // same card reads the same temperature at half the fan speed when it
+    // draws less power.
+    int calls = 0;
+    const auto r = run_stability([&] { ++calls; return good(); },
+                                 [&] { Telemetry t = tel(55 + calls); t.fan_pct = 40 + calls; return t; }, 1.0, 85);
+    CHECK(calls == 4);
+    CHECK(r.peak_temp_c == 59);
+    CHECK(r.end_fan_pct == 44);
+    // A card that does not report its fans.
+    CHECK(run_stability([] { return good(); }, [] { return tel(60); }, 0.5, 85).end_fan_pct == -1);
+}

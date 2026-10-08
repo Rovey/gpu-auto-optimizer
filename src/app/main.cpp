@@ -108,9 +108,12 @@ static int curve() {
     return 0;
 }
 
-// Writes a flat top by hand: the point at or just above <mv> and every point
-// above it run <mhz>. For the hardware checks; `gao --reset` undoes it.
-static int curve_flatten(int mv, int mhz) {
+// Writes a flat top by hand: the point at or just above <mv> runs <mhz> and
+// no point above it runs more; those are stored <tail_drop_mhz> lower (0: a
+// top that is exactly flat). With <core_mhz> the flat top sits on that core
+// offset, which is set first and stays on the points below the anchor. For
+// the hardware checks; `gao --reset` undoes it.
+static int curve_flatten(int mv, int mhz, int tail_drop_mhz, int core_mhz) {
     const gao::app::TuningLock lock;
     if (!lock.owned()) { std::printf("another optimize is already running (in the app or on the command line)\n"); return 1; }
     // A running tray app would take the missing core offset for a driver
@@ -122,13 +125,17 @@ static int curve_flatten(int mv, int mhz) {
     if (!nvml.Init()) { std::printf("NVML init failed: %s\n", nvml.Error().c_str()); return 1; }
     if (!nvapi.Init()) { std::printf("NVAPI init failed: %s\n", nvapi.Error().c_str()); return 1; }
     const gao::GpuControl gpu = gao::make_gpu_control(nvml, nvapi, kGpu);
+    if (core_mhz != 0 && !gpu.set_core_offset(core_mhz)) {
+        std::printf("core offset %+d MHz: %s\n", core_mhz, nvapi.Error().c_str());
+        return 1;
+    }
     const auto before = gpu.read_vf_curve();
     if (!before) { std::printf("curve: unavailable (%s)\n", nvapi.Error().c_str()); return 1; }
     int anchor = -1;
     for (const gao::VfPoint& p : *before)   // lowest voltage first
         if (p.volt_uv >= mv * 1000) { anchor = p.index; break; }
     if (anchor < 0) { std::printf("no curve point at or above %d mV\n", mv); return 1; }
-    const gao::VfApplyResult r = gao::apply_flat_top(gpu, anchor, mhz * 1000);
+    const gao::VfApplyResult r = gao::apply_flat_top(gpu, anchor, mhz * 1000, tail_drop_mhz * 1000, core_mhz * 1000);
     if (const auto after = gpu.read_vf_curve()) print_curve(*after);
     if (!r.ok) { std::printf("not applied: %s\n", r.why.c_str()); return 1; }
     std::printf("flat top applied: slot %d runs %d MHz, in %d write rounds -- OK\n", anchor, mhz, r.passes);
@@ -274,10 +281,13 @@ static int optimize(gao::Preset preset, const std::optional<gao::FanCurve>& fan_
     std::printf("RESULT: power %d %%, core +%d MHz (confirmed +%d), mem +%d MHz (confirmed +%d)\n",
                 r.power_pct, r.core_mhz, r.core_confirmed, r.mem_mhz, r.mem_confirmed);
     if (r.driver_resets > 0) std::printf("  driver resets during this run: %d\n", r.driver_resets);
-    std::printf("  before: score=%.0f it/s  core=%d MHz  mem=%d MHz  peak=%d C  power=%d W\n",
-                r.baseline.score, r.baseline.avg_core_mhz, r.baseline.avg_mem_mhz, r.baseline.peak_temp_c, r.baseline.avg_power_w);
-    std::printf("  after:  score=%.0f it/s  core=%d MHz  mem=%d MHz  peak=%d C  power=%d W\n",
-                r.soak.score, r.soak.avg_core_mhz, r.soak.avg_mem_mhz, r.soak.peak_temp_c, r.soak.avg_power_w);
+    // The two runs differ in length: the temperature and the fan speed of the short one are not those of a warm card.
+    std::printf("  before: score=%.0f it/s  core=%d MHz  mem=%d MHz  peak=%d C  fan=%s  power=%d W  (%.0f s)\n",
+                r.baseline.score, r.baseline.avg_core_mhz, r.baseline.avg_mem_mhz, r.baseline.peak_temp_c,
+                gao::reading(r.baseline.end_fan_pct, " %").c_str(), r.baseline.avg_power_w, r.baseline.seconds);
+    std::printf("  after:  score=%.0f it/s  core=%d MHz  mem=%d MHz  peak=%d C  fan=%s  power=%d W  (%.0f s)\n",
+                r.soak.score, r.soak.avg_core_mhz, r.soak.avg_mem_mhz, r.soak.peak_temp_c,
+                gao::reading(r.soak.end_fan_pct, " %").c_str(), r.soak.avg_power_w, r.soak.seconds);
     if (out.saved) {
         std::printf("Saved: `gao --apply` re-applies it, `gao --boot on` applies it at every logon.\n");
         if (const std::string note = gao::app::update_logon_copy(); !note.empty()) std::printf("%s\n", note.c_str());
@@ -288,8 +298,8 @@ static int optimize(gao::Preset preset, const std::optional<gao::FanCurve>& fan_
     return out.saved ? 0 : 2;   // 2: tuned and applied, but --apply and boot-apply cannot use it
 }
 
-// A first version: finds the undervolt and leaves it applied; nothing is saved.
-static int undervolt() {
+// Finds the undervolt, leaves it applied and saves it as the profile; on_overclock: on top of the saved tune, into it.
+static int undervolt(bool on_overclock) {
     gao::app::OptimizeHooks hooks;
     hooks.aborted = [] { return g_abort.load(); };
     hooks.log = [](const std::string& msg) { std::printf("  %s\n", msg.c_str()); };
@@ -297,10 +307,9 @@ static int undervolt() {
         g_gpu = gpu;
         SetConsoleCtrlHandler(OnConsoleCtrl, gpu ? TRUE : FALSE);
     };
-    // As for --curve-flatten: a running tray app must not write its saved tune
-    // over the result.
-    gao::app::tell_tray(gao::app::TrayNotice::StockByChoice);
-    const auto out = gao::app::run_undervolt(hooks);
+    // A running tray app holds off for the whole run (the tuning lock), as
+    // for --optimize, and afterwards finds the profile this run saved.
+    const auto out = gao::app::run_undervolt(hooks, on_overclock);
     if (!out.ran) { std::printf("%s\n", out.error.c_str()); return 1; }
     const gao::UndervoltResult& r = out.result;
     if (!r.ok) {
@@ -312,11 +321,59 @@ static int undervolt() {
     std::printf("RESULT: %d MHz at %d mV instead of %d mV (lowest stable %d mV, confirmed %d mV)\n", r.freq_khz / 1000,
                 r.applied_uv / 1000, r.stock_uv / 1000, r.edge_uv / 1000, r.confirmed_uv / 1000);
     if (r.driver_resets > 0) std::printf("  driver resets during this run: %d\n", r.driver_resets);
-    std::printf("  before: score=%.0f it/s  core=%d MHz  peak=%d C  power=%d W\n", r.baseline.score, r.baseline.avg_core_mhz,
-                r.baseline.peak_temp_c, r.baseline.avg_power_w);
-    std::printf("  after:  score=%.0f it/s  core=%d MHz  peak=%d C  power=%d W\n", r.after.score, r.after.avg_core_mhz,
-                r.after.peak_temp_c, r.after.avg_power_w);
-    std::printf("Applied until a restart or `gao --reset`. Not saved: this first version does not keep it.\n");
+    std::printf("  before: score=%.0f it/s  core=%d MHz  peak=%d C  fan=%s  power=%d W  (%.0f s)\n", r.baseline.score,
+                r.baseline.avg_core_mhz, r.baseline.peak_temp_c, gao::reading(r.baseline.end_fan_pct, " %").c_str(),
+                r.baseline.avg_power_w, r.baseline.seconds);
+    std::printf("  after:  score=%.0f it/s  core=%d MHz  peak=%d C  fan=%s  power=%d W  (%.0f s)\n", r.after.score,
+                r.after.avg_core_mhz, r.after.peak_temp_c, gao::reading(r.after.end_fan_pct, " %").c_str(),
+                r.after.avg_power_w, r.after.seconds);
+    if (out.saved) {
+        std::printf("Saved: `gao --apply` re-applies it, `gao --boot on` applies it at every logon.\n");
+        if (const std::string note = gao::app::update_logon_copy(); !note.empty()) std::printf("%s\n", note.c_str());
+    } else {
+        std::printf("not saved: %s\n", out.save_note.c_str());
+    }
+    std::printf("Applied until reboot. `gao --reset` returns to stock.\n");
+    return out.saved ? 0 : 2;   // 2: found and applied, but --apply and boot-apply cannot use it
+}
+
+// The all-in-one run: stock, overclock, undervolt on top, fans, final test.
+static int all_in_one() {
+    gao::app::OptimizeHooks hooks;
+    hooks.aborted = [] { return g_abort.load(); };
+    hooks.log = [](const std::string& msg) { std::printf("  %s\n", msg.c_str()); };
+    hooks.active_gpu = [](const gao::GpuControl* gpu) {
+        g_gpu = gpu;
+        SetConsoleCtrlHandler(OnConsoleCtrl, gpu ? TRUE : FALSE);
+    };
+    // The measuring steps have no clock candidate applied, but they run for
+    // minutes: Ctrl+C must stop them too, and end at stock.
+    SetConsoleCtrlHandler(OnConsoleCtrl, TRUE);
+    const gao::app::AllInOneOutcome out = gao::app::run_all_in_one(hooks);
+    if (!out.ok) {
+        std::printf("RESULT: not applied -- %s\n", out.error.c_str());
+        return 1;
+    }
+    const gao::Profile& p = out.profile;
+    std::printf("RESULT: power %d %%, core +%d MHz, mem +%d MHz", p.power_pct, p.core_mhz, p.mem_mhz);
+    if (p.undervolt) std::printf(", %d MHz at %d mV", p.undervolt->freq_khz / 1000, p.undervolt->volt_uv / 1000);
+    if (out.fan.ok) std::printf(", fans %d %% at %d C", out.fan.hold_pct, out.fan.hold_temp_c);
+    std::printf("\n");
+    if (!out.undervolt_note.empty()) std::printf("  no undervolt: %s\n", out.undervolt_note.c_str());
+    if (!out.fan_note.empty()) std::printf("  fans: %s\n", out.fan_note.c_str());
+    if (!out.disturbed.empty()) std::printf("  not clean: %s\n", out.disturbed.c_str());
+    const auto line = [](const char* name, const gao::StabilityResult& s) {
+        std::printf("  %s score=%.0f it/s  core=%d MHz  mem=%d MHz  peak=%d C  fan=%s  power=%d W  (%.0f s)\n", name, s.score,
+                    s.avg_core_mhz, s.avg_mem_mhz, s.peak_temp_c, gao::reading(s.end_fan_pct, " %").c_str(), s.avg_power_w, s.seconds);
+    };
+    line("stock:", out.stock);
+    line("now:  ", out.now);
+    if (out.stock.score > 0 && out.stock.avg_power_w > 0)
+        std::printf("  that is %+.1f %% score and %+.1f %% power against stock\n", (out.now.score / out.stock.score - 1) * 100,
+                    (static_cast<double>(out.now.avg_power_w) / out.stock.avg_power_w - 1) * 100);
+    std::printf("Saved: `gao --apply` re-applies it, `gao --boot on` applies it at every logon.\n");
+    if (const std::string note = gao::app::update_logon_copy(); !note.empty()) std::printf("%s\n", note.c_str());
+    std::printf("Applied until reboot. `gao --reset` returns to stock.\n");
     return 0;
 }
 
@@ -372,6 +429,19 @@ static int status() {
         std::printf("applied:    power %d %%, core %+d MHz, mem %+d MHz\n", applied->power_pct, applied->core_mhz, applied->mem_mhz);
     else
         std::printf("applied:    unknown (could not read the driver)\n");
+    // The offsets above say nothing about a flat top: the curve does.
+    if (cfg.profile && cfg.profile->undervolt) {
+        const auto points = nvapi.ReadVfCurve(kGpu);
+        const char* state = "unknown (the curve could not be read)";
+        if (points) {
+            switch (gao::curve_state(*points, cfg.profile->undervolt->volt_uv, cfg.profile->core_mhz * 1000)) {
+                case gao::CurveState::FlatTop: state = "applied"; break;
+                case gao::CurveState::Stock: state = "not applied (the curve is at stock)"; break;
+                case gao::CurveState::Other: state = "not applied (the curve carries other offsets)"; break;
+            }
+        }
+        std::printf("undervolt:  %s\n", state);
+    }
     if (const auto fan = nvml.ReadFan(kGpu))
         std::printf("fans:       %s\n", fan->manual ? ("manual " + std::to_string(fan->target_pct) + " %").c_str() : "driver control");
     const auto curve = gao::active_fan_curve(cfg);
@@ -517,25 +587,34 @@ int main(int argc, char** argv) {
     }
     if (argc > 1 && std::strcmp(argv[1], "--status") == 0) return status();
     if (argc > 1 && std::strcmp(argv[1], "--curve") == 0) return curve();
-    if (argc > 1 && std::strcmp(argv[1], "--undervolt") == 0) return undervolt();
+    if (argc > 1 && std::strcmp(argv[1], "--undervolt") == 0) {
+        const bool on_overclock = argc > 2 && std::strcmp(argv[2], "--on-overclock") == 0;
+        if (argc > 2 && !on_overclock) { std::printf("--undervolt accepts --on-overclock, got '%s'\n", argv[2]); return 1; }
+        return undervolt(on_overclock);
+    }
     if (argc > 1 && std::strcmp(argv[1], "--curve-flatten") == 0) {
-        int mv = 0, mhz = 0;
-        if (argc < 4 || !ParseIntArg(argv[2], &mv) || !ParseIntArg(argv[3], &mhz)) {
-            std::printf("--curve-flatten expects <mV> <MHz>\n");
+        int mv = 0, mhz = 0, drop = gao::kVfTailDropKhz / 1000, core = 0;
+        if (argc < 4 || !ParseIntArg(argv[2], &mv) || !ParseIntArg(argv[3], &mhz) ||
+            (argc > 4 && (!ParseIntArg(argv[4], &drop) || drop < 0 || drop > 200)) ||
+            (argc > 5 && (!ParseIntArg(argv[5], &core) || core < 0 || core > 1000))) {
+            std::printf("--curve-flatten expects <mV> <MHz> [<MHz the points above it are stored lower, 0-200; default %d> "
+                        "[<core offset in MHz the flat top sits on>]]\n",
+                        gao::kVfTailDropKhz / 1000);
             return 1;
         }
-        return curve_flatten(mv, mhz);
+        return curve_flatten(mv, mhz, drop, core);
     }
     if (argc > 1 && std::strcmp(argv[1], "--update") == 0) return update();
     if (argc > 1 && std::strcmp(argv[1], "--optimize") == 0) {
         gao::Preset preset = gao::Preset::BestOfMyGpu;
         if (argc > 2) {
             const std::string p = argv[2];
+            if (p == "all") return all_in_one();
             if (p == "best") preset = gao::Preset::BestOfMyGpu;
             else if (p == "quiet") preset = gao::Preset::Quiet;
             else if (p == "cool") preset = gao::Preset::CoolAndEfficient;
             else if (p == "max") preset = gao::Preset::MaxPerformance;
-            else { std::printf("--optimize expects best, quiet, cool or max, got '%s'\n", argv[2]); return 1; }
+            else { std::printf("--optimize expects all, best, quiet, cool or max, got '%s'\n", argv[2]); return 1; }
         }
         std::optional<gao::FanCurve> fan_curve;
         if (argc > 3) {
@@ -551,10 +630,15 @@ int main(int argc, char** argv) {
                 "              changes no setting; exit 0 = both STABLE, rebuilt and a clean first batch, 1 = anything else,\n"
                 "              never --stress's 2 / 3)\n"
                 "            | --optimize [best|quiet|cool|max [--fan-curve silent|normal|cool|aggressive]]\n"
+                "            | --optimize all (all in one: stock measured, overclock, an undervolt on top of it at a clock\n"
+                "              between the two, the quietest fan curve, and a final test; about 40 minutes)\n"
                 "            | --apply | --boot on|off | --fan auto | --status\n"
                 "            | --curve (prints the voltage/frequency curve; changes nothing)\n"
-                "            | --undervolt (first version: the stock load clock on the lowest stable voltage; not saved)\n"
-                "            | --curve-flatten <mV> <MHz> (the point at <mV> and all above it run <MHz>; --reset undoes it)\n"
+                "            | --undervolt [--on-overclock] (the load clock on the lowest stable voltage; saved like --optimize.\n"
+                "              Alone it replaces a saved overclock; with --on-overclock it is searched on top of the\n"
+                "              saved tune and saved into it)\n"
+                "            | --curve-flatten <mV> <MHz> [<MHz>] (the point at <mV> runs <MHz> and no point above it more;\n"
+                "              the third number is how much lower those are stored, 0 for exactly flat; --reset undoes it)\n"
                 "            | --update (installs the latest release into this folder, if there is a newer one)]\n");
     return argc > 1 ? 1 : 0;
 }

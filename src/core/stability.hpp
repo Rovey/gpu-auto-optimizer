@@ -22,6 +22,8 @@ struct StabilityResult {
     double score = 0;          // iterations per second over the covered time
     double seconds = 0;        // run time actually covered (sum of batch times)
     int peak_temp_c = -1;
+    int end_temp_c = -1;       // the temperature at the last sample; -1 when none was taken
+    int end_fan_pct = -1;      // the fan speed at the last sample: what the peak temperature was reached with; -1 when unknown
     int avg_power_w = -1;      // -1 when no sample reported the value
     int avg_core_mhz = -1;
     int avg_mem_mhz = -1;

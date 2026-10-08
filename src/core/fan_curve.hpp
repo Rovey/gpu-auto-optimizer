@@ -97,6 +97,18 @@ struct FanState {
     int min_pct = 0;   // the lowest manual speed in use (NVML's, or higher once learned)
 };
 
+// Who has the fans, for the label next to the fan speed. Outside a run the
+// app's own curve driver knows (app_mode; app_controls: fan control is on
+// and the card has it). During a run started from the app that driver is
+// released and knows nothing: what the card reports decides (manual: a
+// speed set by hand; nullopt when it could not be read). A manual speed is
+// the run's then, set by its own curve or, while it tunes the fans
+// (run_tunes_fans), by its measurement.
+enum class FanOwner { Unknown, Driver, Curve, Other, Run, Measuring };
+FanOwner fan_owner(FanMode app_mode, bool app_controls, bool run_active, bool run_tunes_fans, std::optional<bool> manual);
+// Short on purpose: it shares a tile with the speed ("(measuring)" was cut off there).
+const char* fan_owner_label(FanOwner owner);   // "", " (driver)", " (curve)", " (other program)", " (run)", " (tuning)"
+
 // Writes a FanController's decisions through GpuControl, once a second.
 // Writes only on a change of 2 % or more (or to reach 100 %), re-applies after
 // a driver reset, steps aside when another program set the fans, and hands the

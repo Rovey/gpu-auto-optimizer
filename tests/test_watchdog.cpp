@@ -79,3 +79,66 @@ TEST_CASE("a partial reset is still a reset, not another tool") {
     Watchdog u;
     CHECK(u.check(tuned(), AppliedState{0, 900, 105}, true, true, t0) == WatchAction::BackOffForeign);
 }
+
+namespace {
+Profile undervolted() {
+    Profile p;
+    p.preset = Preset::Undervolt;
+    p.undervolt = UndervoltTune{960000, 2745000, 210000};
+    return p;
+}
+}
+
+TEST_CASE("an undervolt is judged by the curve, not by the core offset the driver reports") {
+    // What the offset read-out says while a flat top is on the card is the
+    // driver's business; the curve says whether the flat top is there.
+    Watchdog w;
+    CHECK(w.check(undervolted(), AppliedState{0, 0, 100}, true, true, t0, CurveState::FlatTop) == WatchAction::None);
+    CHECK(w.check(undervolted(), AppliedState{210, 0, 100}, true, true, t0, CurveState::FlatTop) == WatchAction::None);
+    CHECK(tune_applied(undervolted(), AppliedState{210, 0, 100}, CurveState::FlatTop));
+    CHECK_FALSE(tune_applied(undervolted(), kStock, CurveState::Stock));
+    CHECK_FALSE(tune_applied(undervolted(), kStock, std::nullopt));
+    CHECK(tune_applied(tuned(), kOurs, std::nullopt));   // a profile without one needs no curve
+}
+
+TEST_CASE("an undervolt that was reset to stock is re-applied, and given up on the fourth time") {
+    Watchdog w;
+    for (int i = 0; i < 3; ++i)
+        CHECK(w.check(undervolted(), kStock, true, true, t0 + i * 10min, CurveState::Stock) == WatchAction::Reapply);
+    CHECK(w.check(undervolted(), kStock, true, true, t0 + 35min, CurveState::Stock) == WatchAction::GiveUpUnstable);
+    CHECK(w.check(undervolted(), kStock, true, true, t0 + 36min, CurveState::Stock) == WatchAction::None);
+}
+
+TEST_CASE("a curve that is neither the flat top nor stock is another program's") {
+    Watchdog w;
+    CHECK(w.check(undervolted(), kStock, true, true, t0, CurveState::Other) == WatchAction::BackOffForeign);
+    CHECK(w.check(undervolted(), kStock, true, true, t0 + 30s, CurveState::Other) == WatchAction::None);
+}
+
+TEST_CASE("an undervolt whose curve cannot be read is left alone") {
+    Watchdog w;
+    CHECK(w.check(undervolted(), kStock, true, true, t0, std::nullopt) == WatchAction::None);
+}
+
+TEST_CASE("driver resets that leave the tune applied count against it too") {
+    // A tune the driver keeps across a reset is never found at stock; it is
+    // the resets themselves that say it is not stable.
+    Watchdog w;
+    for (int i = 0; i < 3; ++i)
+        CHECK(w.check(undervolted(), kStock, true, true, t0 + i * 10min, CurveState::FlatTop, true) == WatchAction::None);
+    CHECK_FALSE(w.gave_up());
+    CHECK(w.check(undervolted(), kStock, true, true, t0 + 35min, CurveState::FlatTop, true) == WatchAction::GiveUpUnstable);
+    CHECK(w.gave_up());
+    // The same for an overclock, and mixed with resets that did undo it: one count.
+    Watchdog v;
+    CHECK(v.check(tuned(), kOurs, true, true, t0, std::nullopt, true) == WatchAction::None);
+    CHECK(v.check(tuned(), kStock, true, true, t0 + 5min, std::nullopt, true) == WatchAction::Reapply);
+    CHECK(v.check(tuned(), kOurs, true, true, t0 + 10min, std::nullopt, true) == WatchAction::None);
+    CHECK(v.check(tuned(), kOurs, true, true, t0 + 15min, std::nullopt, true) == WatchAction::GiveUpUnstable);
+}
+
+TEST_CASE("a tune that stays applied without a driver reset is never counted") {
+    Watchdog w;
+    for (int i = 0; i < 10; ++i) CHECK(w.check(tuned(), kOurs, true, true, t0 + i * 1min) == WatchAction::None);
+    CHECK_FALSE(w.gave_up());
+}
