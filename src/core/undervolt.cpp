@@ -190,6 +190,7 @@ UndervoltResult find_undervolt(const GpuControl& gpu, Journal& journal, const Un
             r.ok = true;
             r.applied_uv = curve[static_cast<std::size_t>(applied)].volt_uv;
             r.applied_index = curve[static_cast<std::size_t>(applied)].index;
+            r.raise_khz = raise_mhz(applied) * 1000;
             r.after = last;
             return r;
         }

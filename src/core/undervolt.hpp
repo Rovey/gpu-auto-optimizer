@@ -58,6 +58,7 @@ struct UndervoltResult {
     int confirmed_uv = 0;          // the lowest that held the 30 s probe
     int applied_uv = 0;            // what is applied now: confirmed, plus the margin
     int applied_index = -1;        // its slot on the curve
+    int raise_khz = 0;             // how far the applied point runs above its built-in frequency
     int driver_resets = 0;
     StabilityResult baseline;      // 30 s at stock
     StabilityResult after;         // the soak, with the result applied

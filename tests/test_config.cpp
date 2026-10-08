@@ -158,3 +158,35 @@ TEST_CASE("the update check is on unless the file says otherwise") {
     c.update_check = false;
     CHECK_FALSE(from_json(to_json(c)).update_check);
 }
+
+TEST_CASE("an undervolt profile survives a round-trip") {
+    Config c;
+    c.profile = sample();
+    c.profile->preset = Preset::Undervolt;
+    c.profile->power_pct = 100;
+    c.profile->core_mhz = 0;
+    c.profile->mem_mhz = 0;
+    c.profile->undervolt = UndervoltTune{960000, 2745000, 210000};
+    const Config back = from_json(to_json(c));
+    REQUIRE(back.profile.has_value());
+    CHECK(back.profile->preset == Preset::Undervolt);
+    REQUIRE(back.profile->undervolt.has_value());
+    CHECK(back.profile->undervolt->volt_uv == 960000);
+    CHECK(back.profile->undervolt->freq_khz == 2745000);
+    CHECK(back.profile->undervolt->raise_khz == 210000);
+    CHECK(to_json(c).find("\"undervolt\"") != std::string::npos);
+    // A profile without one writes no such key, so a file from an older build reads the same.
+    c.profile = sample();
+    CHECK(to_json(c).find("undervolt") == std::string::npos);
+    CHECK_FALSE(from_json(to_json(c)).profile->undervolt.has_value());
+}
+
+TEST_CASE("an undervolt that cannot be read whole is no profile, never a profile without it") {
+    const std::string head = R"({"profile":{"preset":"undervolt","power_pct":100,"core_mhz":0,"mem_mhz":0,"driver":"x","gpu":"g","saved_at":"y")";
+    CHECK(from_json(head + R"(,"undervolt":{"volt_uv":960000,"freq_khz":2745000,"raise_khz":210000}}})").profile);
+    CHECK_FALSE(from_json(head + R"(,"undervolt":{"volt_uv":960000,"freq_khz":2745000}}})").profile);                     // a field missing
+    CHECK_FALSE(from_json(head + R"(,"undervolt":{"volt_uv":"960000","freq_khz":2745000,"raise_khz":210000}}})").profile);  // a wrong type
+    CHECK_FALSE(from_json(head + R"(,"undervolt":17}})").profile);
+    // The undervolt preset without its curve would apply as plain stock and look applied.
+    CHECK_FALSE(from_json(head + "}}").profile);
+}

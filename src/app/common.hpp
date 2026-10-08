@@ -75,18 +75,22 @@ struct OptimizeOutcome {
 // search, and saving the profile. Needs elevation.
 // fan_curve: the curve to drive the fans with during the run and to save
 // as the tested curve; empty means the profile's own (default_curve).
+// Not for Preset::Undervolt: that is run_undervolt.
 OptimizeOutcome run_optimize(Preset preset, const OptimizeHooks& hooks, const std::optional<FanCurve>& fan_curve = {});
 
 struct UndervoltOutcome {
     bool ran = false;          // false: stopped before the search; `error` says why
     std::string error;
     UndervoltResult result;    // valid when ran
+    bool saved = false;        // the profile was saved for --apply / boot-apply
+    std::string save_note;     // why it was not saved, when !saved
 };
 
-// gao --undervolt from start to end: state folder, drivers, journal, the
-// search (core/undervolt.hpp). Needs elevation. A first version: the result
-// stays applied until a reset or a restart and is not saved to the profile;
-// the NVIDIA driver keeps the fans.
+// The undervolt from start to end: state folder, drivers, journal, the
+// search (core/undervolt.hpp), and saving the result as the profile, which
+// replaces a saved overclock: a core offset and a flat top are one table on
+// the card (hardware check 65). Needs elevation. The NVIDIA driver keeps the
+// fans during the search.
 UndervoltOutcome run_undervolt(const OptimizeHooks& hooks);
 
 struct BootApplyOutcome {

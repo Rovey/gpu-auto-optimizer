@@ -191,6 +191,7 @@ TEST_CASE("find_undervolt: the lowest voltage that holds the stock load clock, m
     const int confirmed_raise = (r.freq_khz - card.base_khz[static_cast<std::size_t>(std::find(card.volt_uv.begin(), card.volt_uv.end(), r.confirmed_uv) - card.volt_uv.begin())]) / 1000;
     CHECK(card.applied_raise_mhz() <= apply_margin(confirmed_raise, 15, 0.7f));
     CHECK(card.applied_raise_mhz() > 0);
+    CHECK(r.raise_khz == card.applied_raise_mhz() * 1000);   // what a saved profile is held to later
     // The result is what the soak ran on, and it is still applied.
     CHECK(card.probe_seconds.back() == kUvSoakS);
     CHECK(card.probe_raise_mhz.back() == card.applied_raise_mhz());

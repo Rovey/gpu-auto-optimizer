@@ -288,7 +288,7 @@ static int optimize(gao::Preset preset, const std::optional<gao::FanCurve>& fan_
     return out.saved ? 0 : 2;   // 2: tuned and applied, but --apply and boot-apply cannot use it
 }
 
-// A first version: finds the undervolt and leaves it applied; nothing is saved.
+// Finds the undervolt, leaves it applied and saves it as the profile.
 static int undervolt() {
     gao::app::OptimizeHooks hooks;
     hooks.aborted = [] { return g_abort.load(); };
@@ -316,8 +316,14 @@ static int undervolt() {
                 r.baseline.peak_temp_c, r.baseline.avg_power_w);
     std::printf("  after:  score=%.0f it/s  core=%d MHz  peak=%d C  power=%d W\n", r.after.score, r.after.avg_core_mhz,
                 r.after.peak_temp_c, r.after.avg_power_w);
-    std::printf("Applied until a restart or `gao --reset`. Not saved: this first version does not keep it.\n");
-    return 0;
+    if (out.saved) {
+        std::printf("Saved: `gao --apply` re-applies it, `gao --boot on` applies it at every logon.\n");
+        if (const std::string note = gao::app::update_logon_copy(); !note.empty()) std::printf("%s\n", note.c_str());
+    } else {
+        std::printf("not saved: %s\n", out.save_note.c_str());
+    }
+    std::printf("Applied until reboot. `gao --reset` returns to stock.\n");
+    return out.saved ? 0 : 2;   // 2: found and applied, but --apply and boot-apply cannot use it
 }
 
 static int apply() {
@@ -553,7 +559,8 @@ int main(int argc, char** argv) {
                 "            | --optimize [best|quiet|cool|max [--fan-curve silent|normal|cool|aggressive]]\n"
                 "            | --apply | --boot on|off | --fan auto | --status\n"
                 "            | --curve (prints the voltage/frequency curve; changes nothing)\n"
-                "            | --undervolt (first version: the stock load clock on the lowest stable voltage; not saved)\n"
+                "            | --undervolt (the stock load clock on the lowest stable voltage; saved like --optimize,\n"
+                "              and it replaces a saved overclock)\n"
                 "            | --curve-flatten <mV> <MHz> (the point at <mV> and all above it run <MHz>; --reset undoes it)\n"
                 "            | --update (installs the latest release into this folder, if there is a newer one)]\n");
     return argc > 1 ? 1 : 0;

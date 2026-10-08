@@ -95,9 +95,12 @@ void boot_log(const std::string& msg) {
 bool prepare_state(std::string* why) { return ensure_app_dir(why); }
 
 std::string profile_text(const Profile& p) {
-    return std::string(preset_name(p.preset)) + ": power " + std::to_string(p.power_pct) + " %, core +" +
-           std::to_string(p.core_mhz) + " MHz, mem +" + std::to_string(p.mem_mhz) + " MHz (driver " + p.driver +
-           ", saved " + p.saved_at + ")";
+    const std::string tail = " (driver " + p.driver + ", saved " + p.saved_at + ")";
+    const std::string clocks = "power " + std::to_string(p.power_pct) + " %, core +" + std::to_string(p.core_mhz) +
+                               " MHz, mem +" + std::to_string(p.mem_mhz) + " MHz";
+    if (!p.undervolt) return std::string(preset_name(p.preset)) + ": " + clocks + tail;
+    return std::string(preset_name(p.preset)) + ": " + std::to_string(p.undervolt->freq_khz / 1000) + " MHz at " +
+           std::to_string(p.undervolt->volt_uv / 1000) + " mV, " + clocks + tail;
 }
 
 std::string decision_text(BootDecision d, const Config& c, const std::string& driver) {
@@ -118,6 +121,7 @@ OptimizeOutcome run_optimize(Preset preset, const OptimizeHooks& hooks, const st
     OptimizeOutcome out;
     auto log = [&](const std::string& m) { if (hooks.log) hooks.log(m); };
     auto fail = [&](const std::string& why) { out.error = why; return out; };
+    if (preset == Preset::Undervolt) return fail("the undervolt is not a clock search; it has its own run");
     if (!is_elevated()) return fail("optimizing changes clocks and power limits and needs administrator rights");
     const TuningLock lock;
     if (!lock.owned()) return fail("another optimize is already running (in the app or on the command line)");
@@ -379,7 +383,7 @@ UndervoltOutcome run_undervolt(const OptimizeHooks& hooks) {
         return false;
     };
 
-    const Objectives obj = objectives_for(Preset::BestOfMyGpu);   // its temperature limit and margin
+    const Objectives obj = objectives_for(Preset::Undervolt);
     if (hooks.active_gpu) hooks.active_gpu(&gpu);
     bool crashed = false;
     try {
@@ -405,6 +409,24 @@ UndervoltOutcome run_undervolt(const OptimizeHooks& hooks) {
     }
     if (hooks.active_gpu) hooks.active_gpu(nullptr);
     out.ran = true;
+    if (!out.result.ok) return out;
+
+    const std::string driver = hw.DriverVersion(), gpu_id = hw.GpuUuid();
+    if (driver.empty() || gpu_id.empty()) {
+        out.save_note = "NVML did not report the driver version or GPU id, so the profile could never be re-applied";
+        return out;
+    }
+    Config cfg = load_config();
+    Profile p{Preset::Undervolt, 100, 0, 0, driver, gpu_id, now_text()};
+    // The search left the fans to the driver and tested no curve. The curve
+    // the fans followed before stays theirs: an undervolt only makes the
+    // card cooler than the tune that curve was tested with.
+    if (cfg.profile) p.fan_curve = cfg.profile->fan_curve;
+    p.undervolt = UndervoltTune{out.result.applied_uv, out.result.freq_khz, out.result.raise_khz};
+    cfg.profile = p;
+    cfg.boot_strikes = 0;   // strikes belong to the profile they were earned by
+    out.saved = save_config(cfg);
+    if (!out.saved) out.save_note = "could not write " + config_path().string();
     return out;
 }
 
