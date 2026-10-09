@@ -8,7 +8,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # would load first. Static linking also drops the redistributable dependency.
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
-# AddressSanitizer build (the `asan` preset), run on core_tests in CI. It
+# AddressSanitizer build (the `asan` preset), run on the tests in CI. It
 # applies to every target: MSVC refuses to link sanitized and unsanitized
 # objects together (annotate_string/annotate_vector mismatch).
 option(GAO_ASAN "Build everything with AddressSanitizer" OFF)
