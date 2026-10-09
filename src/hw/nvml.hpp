@@ -9,7 +9,18 @@ namespace gao {
 class Nvml {
 public:
     bool Init();
+    // For tests: the two entry points the destructor is about, in place of
+    // nvml.dll. Nothing else of this object works after it.
+    bool Init(int (*init)(), int (*shutdown)());
     ~Nvml();
+    // A call into nvml.dll was left by an access violation that was caught
+    // (app/guarded_gpu.hpp). NVML counts the calls that are inside it, and
+    // that one never left: nvmlShutdown then waits for it for ever, holding
+    // the lock nvmlInit needs (hardware check 80). From here on no Nvml in
+    // this process shuts the library down or unloads it: it stays loaded
+    // until the process ends. For the whole process, as NVML's own state is.
+    static void Abandon();
+    static bool Abandoned();
     // -1 when NVML isn't initialized or the count could not be read (see
     // Error() for why); a genuine "no GPUs" result is 0. Never conflate the
     // two, for the same reason Telemetry::fan_pct never conflates "unknown"

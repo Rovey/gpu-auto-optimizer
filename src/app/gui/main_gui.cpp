@@ -44,6 +44,7 @@ extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND, UINT, WPARAM,
 
 using Microsoft::WRL::ComPtr;
 using gao::app::guarded;
+using gao::app::guarded_driver;
 using gao::app::kGpu;
 
 namespace {
@@ -123,7 +124,9 @@ struct App {
     std::unique_ptr<gao::FanDriver> fan;   // while the curve drives the fans
     bool told_about_tray = false;  // the "still running in the tray" balloon, once per session
     std::optional<gao::ReleaseInfo> update;   // the newer release on offer, if any
-    bool restart = false;          // an update was installed: start the new copy on the way out
+    bool restart = false;          // start this program again on the way out: an update was installed, or a driver call faulted
+    std::wstring restart_args = L" --resume";
+    ULONGLONG fault_restart_from = 0;   // a copy started after a fault makes way for the next one no sooner
 
     // Crash dumps are written by a thread created up front (a crashing thread
     // may have no stack or heap left to do it itself).
@@ -747,20 +750,40 @@ void hw_lost() {
     g.hw_lost = true;
     g.hw_retry_at = GetTickCount64() + 5000;
     // Shutting down a library that just faulted may fault again; then leave it.
+    // NVML is not shut down at all once a driver call has faulted (Nvml::Abandon).
     gao::Nvml* nvml = g.nvml.release();
     gao::Nvapi* nvapi = g.nvapi.release();
-    guarded([nvml] { delete nvml; });
-    guarded([nvapi] { delete nvapi; });
+    guarded_driver([nvml] { delete nvml; });
+    guarded_driver([nvapi] { delete nvapi; });
 }
 
 void retry_hw() {
     if (!g.hw_lost || GetTickCount64() < g.hw_retry_at) return;
-    if (!guarded([] { init_hw(); }) || !g.nvml_ok || !g.nvapi_ok) {
+    if (!guarded_driver([] { init_hw(); }) || !g.nvml_ok || !g.nvapi_ok) {
         hw_lost();   // not back yet
         return;
     }
     g.hw_lost = false;
     refresh_status(false);
+}
+
+// A call into NVML or NVAPI faulted in this process (Nvml::Abandoned). NVML is
+// not shut down here any more, so its state can never be made fresh again:
+// make way for a new copy of the app, which also loads the libraries of the
+// driver that is installed now. Not under a run, which first ends at its
+// result or at stock, and not while the result of a run is on the screen: it
+// would be gone. The new copy keeps the tune applied if this one did, starting
+// from the resets this one counted against it.
+void restart_after_fault() {
+    if (!gao::Nvml::Abandoned() || g.exit_requested || GetTickCount64() < g.fault_restart_from) return;
+    if (g.worker->running() || gao::app::tuning_in_progress() || g.ui.update_busy) return;
+    if (g.visible && g.worker->snapshot().ended()) return;
+    g.restart_args = L" --resume --after-fault";
+    if (!g.visible) g.restart_args += L" --hidden";
+    if (g.watch) g.restart_args += L" --watch=" + std::to_wstring(g.watchdog.recent(std::chrono::steady_clock::now()));
+    gao::app::boot_log("a call into the NVIDIA driver library faulted; restarting the app to load the library afresh");
+    g.restart = true;
+    g.exit_requested = true;
 }
 
 // ---------------------------------------------------------------- timers
@@ -975,8 +998,11 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             }
             return 0;
         case WM_TIMER:
-            if (wp == kTimerTelemetry) { if (!guarded([] { on_telemetry(); })) hw_lost(); }
-            else if (wp == kTimerWatchdog) { if (!guarded([] { on_watchdog(); })) hw_lost(); }
+            if (wp == kTimerTelemetry) {
+                if (!guarded_driver([] { on_telemetry(); })) hw_lost();
+                restart_after_fault();
+            }
+            else if (wp == kTimerWatchdog) { if (!guarded_driver([] { on_watchdog(); })) hw_lost(); }
             else if (wp == kTimerStrike) { clear_strike(); refresh_status(false); }
             else if (wp == kTimerUpdate) start_update_check();
             return 0;
@@ -1108,6 +1134,12 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdline, int) {
     // was: a tune that is applied stays watched.
     const bool replace = cmdline && std::wcsstr(cmdline, L"--replace");
     const bool resume = replace || (cmdline && std::wcsstr(cmdline, L"--resume"));
+    // --after-fault: the copy before this one left because a call into a
+    // driver library faulted in it (restart_after_fault). --hidden: its window
+    // was not open. --watch=N: it kept the tune applied, and had counted N
+    // driver resets against it in the last hour.
+    const bool after_fault = cmdline && std::wcsstr(cmdline, L"--after-fault");
+    const bool hidden = tray_mode || (cmdline && std::wcsstr(cmdline, L"--hidden"));
     if (replace) end_other_instance();
     if (!claim_single_instance(tray_mode, !replace)) {
         if (replace)
@@ -1184,6 +1216,16 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdline, int) {
     if (resume && g.ui.elevated && g.ui.profile && g.ui.profile_driver_ok && g.ui.profile_gpu_ok && g.ui.applied &&
         gao::tune_applied(*g.ui.profile, *g.ui.applied, g.ui.curve))
         g.watch = true;
+    if (after_fault) {
+        // A copy that faults as soon as it runs does not restart in a loop.
+        g.fault_restart_from = GetTickCount64() + 60 * 1000;
+        // Also a tune the driver reset took away with it: the watchdog puts
+        // that back, and counts it.
+        if (const wchar_t* count = std::wcsstr(cmdline, L"--watch="); count && g.ui.elevated && g.ui.profile) {
+            g.watch = true;
+            g.watchdog.seed(_wtoi(count + 8), std::chrono::steady_clock::now());
+        }
+    }
     // Apply-at-logon runs the copy in Program Files: keep it this version.
     if (g.ui.elevated) {
         if (const std::string updated = gao::app::update_logon_copy(); !updated.empty()) {
@@ -1196,7 +1238,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdline, int) {
     SetTimer(g.hwnd, kTimerUpdate, 24 * 60 * 60 * 1000, nullptr);
     start_update_check();
     on_telemetry();
-    if (!tray_mode) show_window();
+    if (!hidden) show_window();
 
     // Render only when needed: nothing while hidden, a few frames after input,
     // ~10 Hz during a run and ~4 Hz otherwise. The tool measures the GPU; its
@@ -1218,7 +1260,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdline, int) {
         if (quit) break;
         if (g.exit_requested && !g.worker->running() && !g.ui.update_busy) {   // never leave in the middle of replacing the files
             clear_strike();
-            fan_release();
+            guarded_driver([] { fan_release(); });   // a driver call, perhaps into a library that faulted before
             DestroyWindow(g.hwnd);
             continue;
         }
@@ -1235,14 +1277,14 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdline, int) {
     }
     ImGui_ImplWin32_Shutdown();
     ImGui::DestroyContext();
-    if (g.restart) {   // an update replaced the executables: start the new copy
+    if (g.restart) {   // an update replaced the executables, or a driver call faulted: start the new copy
         wchar_t self[MAX_PATH];
         const DWORD n = GetModuleFileNameW(nullptr, self, MAX_PATH);
         if (n != 0 && n < MAX_PATH) {
             // Released first, or the new copy would take this one for a
             // running instance and only bring it forward.
             if (g.instance_mutex) CloseHandle(g.instance_mutex);
-            std::wstring command = L"\"" + std::wstring(self) + L"\" --resume";
+            std::wstring command = L"\"" + std::wstring(self) + L"\"" + g.restart_args;
             STARTUPINFOW si{sizeof(si)};
             PROCESS_INFORMATION pi{};
             if (CreateProcessW(self, command.data(), nullptr, nullptr, FALSE, 0, nullptr, nullptr, &si, &pi)) {

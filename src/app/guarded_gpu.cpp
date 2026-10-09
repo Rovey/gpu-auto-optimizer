@@ -19,6 +19,12 @@ bool guarded(void (*fn)(void*), void* ctx) {
     }
 }
 
+bool guarded_driver(void (*fn)(void*), void* ctx) {
+    if (guarded(fn, ctx)) return true;
+    Nvml::Abandon();
+    return false;
+}
+
 namespace {
 constexpr int kRecoverAttempts = 15;
 constexpr DWORD kRecoverWaitMs = 2000;
@@ -32,15 +38,16 @@ GuardedGpu::~GuardedGpu() {
     inner_ = {};
     Nvml* nvml = nvml_.release();
     Nvapi* nvapi = nvapi_.release();
-    guarded([nvml] { delete nvml; });
-    guarded([nvapi] { delete nvapi; });
+    guarded_driver([nvml] { delete nvml; });
+    guarded_driver([nvapi] { delete nvapi; });
 }
 
 // Stops using the libraries and shuts them down. The only call into a library
 // that may just have faulted is its destructor, under the guard: if that
 // faults as well, the object and the loaded DLL are leaked, as in the tray's
-// hw_lost(). Leaves fresh, uninitialised objects, which answer every call
-// with a failure without reaching the driver.
+// hw_lost(). After a fault NVML's destructor no longer calls into the library
+// at all (Nvml::Abandon). Leaves fresh, uninitialised objects, which answer
+// every call with a failure without reaching the driver.
 void GuardedGpu::Disconnect() {
     live_ = false;
     inner_ = {};   // its callbacks refer to the objects deleted below
@@ -48,8 +55,8 @@ void GuardedGpu::Disconnect() {
     Nvapi* nvapi = nvapi_.release();
     nvml_ = std::make_unique<Nvml>();
     nvapi_ = std::make_unique<Nvapi>();
-    guarded([nvml] { delete nvml; });
-    guarded([nvapi] { delete nvapi; });
+    guarded_driver([nvml] { delete nvml; });
+    guarded_driver([nvapi] { delete nvapi; });
 }
 
 // Initialises the fresh objects Disconnect (or the constructor) left and
@@ -60,14 +67,14 @@ bool GuardedGpu::Connect(std::string* why) {
         return false;
     };
     bool ok = false;
-    if (!guarded([&] { ok = nvml_->Init(); })) return fail("NVML init failed: access violation inside the driver library");
+    if (!guarded_driver([&] { ok = nvml_->Init(); })) return fail("NVML init failed: access violation inside the driver library");
     if (!ok) return fail("NVML init failed: " + nvml_->Error());
     ok = false;
-    if (!guarded([&] { ok = nvapi_->Init(); })) return fail("NVAPI init failed: access violation inside the driver library");
+    if (!guarded_driver([&] { ok = nvapi_->Init(); })) return fail("NVAPI init failed: access violation inside the driver library");
     if (!ok) return fail("NVAPI init failed: " + nvapi_->Error());
     // make_gpu_control asks NVML what the card supports: driver calls as well.
     GpuControl built;
-    if (!guarded([&] { built = make_gpu_control(*nvml_, *nvapi_, gpu_); }))
+    if (!guarded_driver([&] { built = make_gpu_control(*nvml_, *nvapi_, gpu_); }))
         return fail("NVML init failed: access violation while querying the card");
     inner_ = std::move(built);
     live_ = true;
@@ -81,7 +88,7 @@ template <class R, class Fn> R GuardedGpu::Call(R fail, Fn fn) {
     const std::lock_guard<std::mutex> lock(mutex_);
     if (!live_) return fail;
     R out = fail;
-    if (guarded([&] { out = fn(); })) return out;
+    if (guarded_driver([&] { out = fn(); })) return out;
     live_ = false;
     inner_ = {};   // nothing calls into the faulted libraries again; recover deletes them
     return fail;
@@ -170,7 +177,7 @@ bool GuardedGpu::Init(std::string* why) {
 bool GuardedGpu::FanAuto() {
     const std::lock_guard<std::mutex> lock(mutex_);
     bool ok = false;
-    if (live_ && !guarded([&] { ok = inner_.set_fan_auto && inner_.set_fan_auto(); })) {
+    if (live_ && !guarded_driver([&] { ok = inner_.set_fan_auto && inner_.set_fan_auto(); })) {
         ok = false;
         live_ = false;
         inner_ = {};   // as in Call: the faulted libraries are not called again
@@ -185,7 +192,7 @@ bool GuardedGpu::FanAuto() {
 bool GuardedGpu::DeliverFanAuto() {
     if (!fan_auto_owed_ || !inner_.set_fan_auto) return true;
     bool ok = false;
-    if (!guarded([&] { ok = inner_.set_fan_auto(); })) return false;
+    if (!guarded_driver([&] { ok = inner_.set_fan_auto(); })) return false;
     if (ok) fan_auto_owed_ = false;   // still owed otherwise; the next recover tries again
     return true;
 }
@@ -208,7 +215,7 @@ bool GuardedGpu::Recover() {
         Sleep(kRecoverWaitMs);   // before the first attempt too: the driver needs a moment
         const std::lock_guard<std::mutex> lock(mutex_);
         Telemetry t;
-        if (Connect(nullptr) && inner_.read && guarded([&] { t = inner_.read(); }) && t.ok && DeliverFanAuto()) return true;
+        if (Connect(nullptr) && inner_.read && guarded_driver([&] { t = inner_.read(); }) && t.ok && DeliverFanAuto()) return true;
         Disconnect();   // not back yet; never reuse a half-initialised library
     }
     return false;

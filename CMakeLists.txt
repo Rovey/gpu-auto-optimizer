@@ -154,4 +154,13 @@ add_executable(core_tests
 target_link_libraries(core_tests PRIVATE core doctest gao_warnings)
 add_test(NAME core_tests COMMAND core_tests)
 
-set_target_properties(core hw app gao GpuAutoOptimizer core_tests PROPERTIES COMPILE_WARNING_AS_ERROR ON)
+# The app layer where it can be tested without a GPU: the driver libraries are
+# stood in for, never loaded.
+add_executable(app_tests
+  tests/test_main.cpp
+  tests/test_driver_fault.cpp
+)
+target_link_libraries(app_tests PRIVATE app doctest gao_warnings)
+add_test(NAME app_tests COMMAND app_tests)
+
+set_target_properties(core hw app gao GpuAutoOptimizer core_tests app_tests PROPERTIES COMPILE_WARNING_AS_ERROR ON)

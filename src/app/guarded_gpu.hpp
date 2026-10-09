@@ -27,6 +27,16 @@ template <class F> bool guarded(F f) {
     return guarded([](void* p) { (*static_cast<F*>(p))(); }, &f);
 }
 
+// `guarded`, for calls into NVML or NVAPI. A fault there also marks NVML as
+// never to be shut down in this process again (Nvml::Abandon): the call that
+// faulted never left the library, and its shutdown would wait for it for
+// ever. Which of the two libraries faulted is not known here; leaving NVML
+// loaded when it was NVAPI costs nothing. The tray app then restarts itself.
+bool guarded_driver(void (*fn)(void*), void* ctx);
+template <class F> bool guarded_driver(F f) {
+    return guarded_driver([](void* p) { (*static_cast<F*>(p))(); }, &f);
+}
+
 // NVML and NVAPI for one GPU, behind a GpuControl whose callbacks run guarded
 // and whose `recover` re-creates both libraries.
 class GuardedGpu {
