@@ -2,6 +2,7 @@
 #define NOMINMAX
 #include <windows.h>
 #include "app/common.hpp"
+#include "app/guarded_gpu.hpp"
 #include "core/stability.hpp"
 #include "core/version.hpp"
 #include "core/vf_curve.hpp"
@@ -527,6 +528,7 @@ int main(int argc, char** argv) {
     // Before anything loads a DLL: System32 only (the delay-loaded
     // d3dcompiler_47.dll included), never the exe's own folder.
     SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32);
+    gao::app::set_fault_log(gao::app::boot_log);
     // The manifest makes the process code page UTF-8; match the console so
     // paths print correctly.
     SetConsoleOutputCP(CP_UTF8);

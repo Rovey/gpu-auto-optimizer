@@ -1128,6 +1128,7 @@ bool claim_single_instance(bool tray_mode, bool may_offer) {
 
 int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdline, int) {
     SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32);
+    gao::app::set_fault_log(gao::app::boot_log);
     const bool tray_mode = cmdline && std::wcsstr(cmdline, L"--tray");
     // --replace: take over from an older copy in the tray. --resume: this is
     // the new copy after an update. Both carry on where the copy before them

@@ -4,6 +4,8 @@
 #include "app/guarded_gpu.hpp"
 #include "hw/nvml.hpp"
 #include <memory>
+#include <string>
+#include <vector>
 
 namespace {
 
@@ -29,6 +31,8 @@ void faulting_call() {
     --in_flight;
 }
 
+std::vector<std::string> fault_lines;
+
 int shut_down_one() {
     auto nvml = std::make_unique<gao::Nvml>();
     REQUIRE(nvml->Init(fake_init, fake_shutdown));
@@ -53,7 +57,13 @@ TEST_CASE("NVML is shut down until a driver call has faulted, and never after") 
 
     auto nvml = std::make_unique<Nvml>();
     REQUIRE(nvml->Init(fake_init, fake_shutdown));
+    gao::app::set_fault_log([](const std::string& line) { fault_lines.push_back(line); });
     CHECK_FALSE(guarded_driver([] { faulting_call(); }));
+    gao::app::set_fault_log(nullptr);
+    // The fault is written down with where it happened: this program is among the callers.
+    REQUIRE(fault_lines.size() == 1);
+    CHECK(fault_lines[0].find("a call into a driver library faulted: ") == 0);
+    CHECK(fault_lines[0].find("app_tests.exe+0x") != std::string::npos);
     CHECK(in_flight == 1);   // the call never left the library
     CHECK(Nvml::Abandoned());
     nvml.reset();
