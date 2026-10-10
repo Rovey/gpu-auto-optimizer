@@ -33,9 +33,9 @@ template <class F> bool guarded(F f) {
 // ever. Which of the two libraries faulted is not known here; leaving NVML
 // loaded when it was NVAPI costs nothing. The tray app then restarts itself.
 bool guarded_driver(void (*fn)(void*), void* ctx);
-// Where the access violation `guarded` last caught on this thread happened:
-// the faulting instruction and its callers, each as module+offset. Empty when
-// it has caught none.
+// The access violation `guarded` last caught on this thread: what could not
+// be read or written, then the faulting instruction and its callers, each as
+// module+offset. Empty when it has caught none.
 std::string last_fault();
 // Where a fault in a driver call, and a reconnect that failed, are written
 // down: one line each. Set once at startup (the apps use boot_log); without
