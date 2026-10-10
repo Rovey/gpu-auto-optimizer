@@ -220,7 +220,7 @@ Only to look for a new version: one request to `api.github.com` when the app sta
 <details>
 <summary><b>How do I move to a new version?</b></summary>
 
-From 0.3.1 on, click **Update available** at the bottom left of the window. From an older version, download the zip and start `GpuAutoOptimizer.exe` from it: it offers to replace the older copy that runs in the tray, and it updates the copy that starts at logon by itself.
+From 0.3.1 on, click **Update available** at the bottom left of the window. From an older version, download the zip and start `GpuAutoOptimizer.exe` from it: it offers to replace the older copy that runs in the tray, and then updates the copy that starts at logon.
 </details>
 
 <details>

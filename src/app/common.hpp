@@ -170,11 +170,17 @@ bool disable_boot(std::string* message);
 
 // True when the copies in Program Files are byte for byte this build.
 bool logon_copy_is_this_build();
-// Apply-at-logon runs the copy in Program Files. When this build runs
-// elevated from another folder and that copy is an older or equal version
-// with other contents, it is replaced by this build, so that a profile saved
-// here is one the logon copy accepts. Returns what happened for the log;
-// empty when there was nothing to do.
+// Apply-at-logon runs the copy in Program Files. True when the logon task
+// exists, this build runs from another folder and that copy is an older or
+// equal version with other contents.
+bool logon_copy_outdated();
+// Replaces such a copy by this build, so that a profile saved here is one the
+// logon copy accepts. Needs elevation. Returns what happened for the log;
+// empty when there was nothing to do. Never called just because the program
+// was started: only after something the user did with this build that the
+// logon copy has to follow (a run that saved a profile, an update, taking
+// over from an older copy). A program that installs itself the moment it
+// starts is what an antivirus takes for a dropper (hardware check 83).
 std::string update_logon_copy();
 
 struct UpdateCheck {

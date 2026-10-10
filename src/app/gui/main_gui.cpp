@@ -872,6 +872,14 @@ void on_telemetry() {
         // One click is all of it: a result that was saved is kept at every
         // logon without another click, unless that was unticked.
         if (snap.kept() && g.ui.keep_at_logon && !g.ui.boot_on) act_boot(true);
+        // Apply at logon was on already: the copy that starts then has to
+        // understand the profile this build just saved.
+        else if (snap.kept() && g.ui.boot_on) {
+            if (const std::string updated = gao::app::update_logon_copy(); !updated.empty()) {
+                note(updated);
+                refresh_status(true);
+            }
+        }
     }
     g.worker_was_running = running;
 }
@@ -1227,12 +1235,19 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdline, int) {
             g.watchdog.seed(_wtoi(count + 8), std::chrono::steady_clock::now());
         }
     }
-    // Apply-at-logon runs the copy in Program Files: keep it this version.
-    if (g.ui.elevated) {
+    // Apply-at-logon runs the copy in Program Files. After an update, or after
+    // taking over from an older copy, it follows at once: the user asked for
+    // this version. A copy that was merely started installs nothing; it says
+    // what is the matter, and a run that saves a profile brings the logon copy
+    // along (on_telemetry).
+    if (resume && !after_fault && g.ui.elevated) {
         if (const std::string updated = gao::app::update_logon_copy(); !updated.empty()) {
             note(updated);
             refresh_status(true);
         }
+    } else if (gao::app::logon_copy_outdated()) {
+        note("The copy that starts at logon is an older build than this one. A run that saves a profile installs this one; "
+             "so does switching Apply at logon off and on.", true);
     }
     SetTimer(g.hwnd, kTimerTelemetry, 1000, nullptr);
     SetTimer(g.hwnd, kTimerWatchdog, 30 * 1000, nullptr);
