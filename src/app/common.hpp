@@ -71,16 +71,25 @@ struct OptimizeOutcome {
     bool ran = false;          // false: stopped before tuning; `error` says why
     std::string error;
     OptimizeResult result;     // valid when ran
+    // The card at stock for five minutes, as long as the result is soaked,
+    // with the fans left to the NVIDIA driver: the "before" of the result.
+    // The search's own 30 s baseline (result.baseline) is too short to heat
+    // the card through; it stays what the search measures its probes against.
+    StabilityResult stock;     // valid when ran
     bool saved = false;        // the profile was saved for --apply / boot-apply
     std::string save_note;     // why it was not saved, when !saved
 };
 
 // --optimize from start to end: state folder, drivers, journal checks, the
-// search, and saving the profile. Needs elevation.
+// card at stock for five minutes, the search, and saving the profile. Needs
+// elevation.
 // fan_curve: the curve to drive the fans with during the run and to save
 // as the tested curve; empty means the profile's own (default_curve).
+// known_stock: the card at stock as the caller has just measured it (the all-in-one
+// run); empty means it is measured here, before the search.
 // Not for Preset::Undervolt: that is run_undervolt.
-OptimizeOutcome run_optimize(Preset preset, const OptimizeHooks& hooks, const std::optional<FanCurve>& fan_curve = {});
+OptimizeOutcome run_optimize(Preset preset, const OptimizeHooks& hooks, const std::optional<FanCurve>& fan_curve = {},
+                             const std::optional<StabilityResult>& known_stock = {});
 
 struct UndervoltOutcome {
     bool ran = false;          // false: stopped before the search; `error` says why
