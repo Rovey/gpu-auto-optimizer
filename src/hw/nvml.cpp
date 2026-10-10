@@ -2,6 +2,7 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <algorithm>
+#include <atomic>
 
 namespace gao {
 
@@ -52,6 +53,17 @@ static fn_fan_get     p_fan_policy = nullptr;
 static fn_fan_get     p_fan_speed = nullptr;
 constexpr unsigned kFanPolicyAuto = 0;     // NVML_FAN_POLICY_TEMPERATURE_CONTINOUS_SW
 constexpr unsigned kFanPolicyManual = 1;   // NVML_FAN_POLICY_MANUAL
+static std::atomic<bool> g_abandoned{false};
+
+void Nvml::Abandon() { g_abandoned = true; }
+bool Nvml::Abandoned() { return g_abandoned; }
+
+bool Nvml::Init(int (*init)(), int (*shutdown)()) {
+    p_init = init;
+    p_shutdown = shutdown;
+    inited_ = (p_init() == NVML_SUCCESS);
+    return inited_;
+}
 
 bool Nvml::Init() {
     // System32 only: gao runs elevated at logon, and the exe's own folder
@@ -200,6 +212,7 @@ std::string Nvml::GpuUuid(unsigned index) {
 }
 
 Nvml::~Nvml() {
+    if (g_abandoned) return;   // see Abandon(): nvmlShutdown would never return
     if (inited_ && p_shutdown) p_shutdown();
     if (lib_) FreeLibrary((HMODULE)lib_);
 }

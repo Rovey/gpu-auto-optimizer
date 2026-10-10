@@ -2,6 +2,7 @@
 #define NOMINMAX
 #include <windows.h>
 #include "app/common.hpp"
+#include "app/guarded_gpu.hpp"
 #include "core/stability.hpp"
 #include "core/version.hpp"
 #include "core/vf_curve.hpp"
@@ -281,10 +282,11 @@ static int optimize(gao::Preset preset, const std::optional<gao::FanCurve>& fan_
     std::printf("RESULT: power %d %%, core +%d MHz (confirmed +%d), mem +%d MHz (confirmed +%d)\n",
                 r.power_pct, r.core_mhz, r.core_confirmed, r.mem_mhz, r.mem_confirmed);
     if (r.driver_resets > 0) std::printf("  driver resets during this run: %d\n", r.driver_resets);
-    // The two runs differ in length: the temperature and the fan speed of the short one are not those of a warm card.
+    // Both runs last as long, so the temperature and the fan speed compare; at stock the driver had the fans.
+    const gao::StabilityResult& before = out.stock;
     std::printf("  before: score=%.0f it/s  core=%d MHz  mem=%d MHz  peak=%d C  fan=%s  power=%d W  (%.0f s)\n",
-                r.baseline.score, r.baseline.avg_core_mhz, r.baseline.avg_mem_mhz, r.baseline.peak_temp_c,
-                gao::reading(r.baseline.end_fan_pct, " %").c_str(), r.baseline.avg_power_w, r.baseline.seconds);
+                before.score, before.avg_core_mhz, before.avg_mem_mhz, before.peak_temp_c,
+                gao::reading(before.end_fan_pct, " %").c_str(), before.avg_power_w, before.seconds);
     std::printf("  after:  score=%.0f it/s  core=%d MHz  mem=%d MHz  peak=%d C  fan=%s  power=%d W  (%.0f s)\n",
                 r.soak.score, r.soak.avg_core_mhz, r.soak.avg_mem_mhz, r.soak.peak_temp_c,
                 gao::reading(r.soak.end_fan_pct, " %").c_str(), r.soak.avg_power_w, r.soak.seconds);
@@ -527,6 +529,7 @@ int main(int argc, char** argv) {
     // Before anything loads a DLL: System32 only (the delay-loaded
     // d3dcompiler_47.dll included), never the exe's own folder.
     SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32);
+    gao::app::set_fault_log(gao::app::boot_log);
     // The manifest makes the process code page UTF-8; match the console so
     // paths print correctly.
     SetConsoleOutputCP(CP_UTF8);
