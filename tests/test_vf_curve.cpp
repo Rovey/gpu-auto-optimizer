@@ -536,3 +536,55 @@ TEST_CASE("curve_state: a flat top whose anchor needed no raise of its own is st
     card.raw[8] = 45000;
     CHECK(curve_state(*card.gpu().read_vf_curve(), card.volt_uv[8], 60000) == CurveState::Other);
 }
+
+TEST_CASE("a tune found on a warm card goes back on a cooler one, where its anchor runs a step more by itself") {
+    // Hardware check 94: All in one found `2865 MHz at 1050 mV` over a core
+    // offset of +135, with the card warm from the search: that point ran the
+    // target by itself, so the curve was only cut off there. Seconds later,
+    // on a card that had cooled a little, the same point read one step more,
+    // and putting the tune back was refused: "the point already runs more
+    // than the target". The built-in curve moves that much with temperature.
+    FakeCurve card;
+    const int base = 60000;
+    const int target = card.base_khz[8] + base;   // what slot 8 ran with the offset alone, warm
+    card.base_khz[8] += 15000;                    // cooler: one step of the clock grid more
+    const auto r = apply_flat_top(card.gpu(), 8, target, kVfTailDropKhz, base);
+    REQUIRE(r.ok);
+    CHECK(card.freq(8) == target);                // held on the target, at the voltage it was tested on
+    CHECK(card.raw[8] == base - 15000);
+    for (std::size_t i = 0; i < 8; ++i) CHECK(card.raw[i] == base);   // the points below keep the offset
+    for (std::size_t i = 9; i < card.raw.size(); ++i) CHECK(card.freq(i) < target);
+    CHECK(card.runs_at() == 8);
+    // And it reads as this program's flat top, not as something another program left.
+    CHECK(curve_state(*card.gpu().read_vf_curve(), card.volt_uv[8], base) == CurveState::FlatTop);
+    // The same without a core offset under it.
+    FakeCurve plain;
+    const int plain_target = plain.base_khz[8];
+    plain.base_khz[8] += 30000;
+    REQUIRE(apply_flat_top(plain.gpu(), 8, plain_target).ok);
+    CHECK(plain.freq(8) == plain_target);
+    CHECK(curve_state(*plain.gpu().read_vf_curve(), plain.volt_uv[8]) == CurveState::FlatTop);
+}
+
+TEST_CASE("an anchor that runs more than the target by more than temperature explains is still refused") {
+    FakeCurve card;
+    const int target = card.base_khz[8];
+    card.base_khz[8] += kVfTailDropKhz + 15000;   // not this tune's curve any more
+    const auto r = apply_flat_top(card.gpu(), 8, target);
+    CHECK_FALSE(r.ok);
+    CHECK(r.why.find("the point already runs more than the target") != std::string::npos);
+    CHECK(card.writes == 0);
+    CHECK(card.at_stock());
+}
+
+TEST_CASE("curve_state: an anchor far below the offset, or below it with nothing cut off above, is not a flat top") {
+    FakeCurve card;
+    std::fill(card.raw.begin(), card.raw.end(), 60000);
+    card.raw[8] = 60000 - 15000;   // lowered, but the points above still carry the whole offset
+    CHECK(curve_state(*card.gpu().read_vf_curve(), card.volt_uv[8], 60000) == CurveState::Other);
+    for (std::size_t i = 9; i < card.raw.size(); ++i) card.raw[i] = 0;
+    card.raw[8] = 60000 - kVfTailDropKhz - 15000;   // more than temperature moves a point
+    CHECK(curve_state(*card.gpu().read_vf_curve(), card.volt_uv[8], 60000) == CurveState::Other);
+    card.raw[8] = 60000 - kVfTailDropKhz;           // as far as it moves
+    CHECK(curve_state(*card.gpu().read_vf_curve(), card.volt_uv[8], 60000) == CurveState::FlatTop);
+}

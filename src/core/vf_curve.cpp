@@ -65,7 +65,9 @@ CurveState curve_state(const std::vector<VfPoint>& curve, int anchor_uv, int bas
     // A flat top: the base offset on every point below the anchor, and the
     // anchor raised above it. Or, when the anchor already ran the target with
     // the base offset alone and needed no raise of its own: the anchor on the
-    // base offset and every point above it at or below that, some lower.
+    // base offset, or below it by no more than temperature moves a point
+    // (apply_flat_top holds it on the target on a cooler card), and every
+    // point above it at or below the base offset, some lower.
     bool has_anchor = false, raised_above = false, lowered_above = false;
     int anchor_raw = 0;
     for (const VfPoint& p : curve) {
@@ -78,7 +80,7 @@ CurveState curve_state(const std::vector<VfPoint>& curve, int anchor_uv, int bas
     }
     if (!has_anchor) return CurveState::Other;
     if (anchor_raw > base_raw) return CurveState::FlatTop;
-    return anchor_raw == base_raw && lowered_above && !raised_above ? CurveState::FlatTop : CurveState::Other;
+    return anchor_raw >= base_raw - kVfTailDropKhz && lowered_above && !raised_above ? CurveState::FlatTop : CurveState::Other;
 }
 
 int stock_point_for(const std::vector<VfPoint>& curve, int freq_khz) {
@@ -165,7 +167,12 @@ VfApplyResult apply_flat_top(const GpuControl& gpu, int anchor_index, int freq_k
     const int top_khz = std::max_element(curve->begin(), curve->end(), [](const VfPoint& a, const VfPoint& b) {
                             return a.freq_khz < b.freq_khz;
                         })->freq_khz;
-    if (freq_khz < anchor->freq_khz) return stop("the point already runs more than the target");
+    // A point that already runs the target is no undervolt. Up to what the
+    // built-in curve moves with temperature it still is the same tune: the
+    // anchor of a curve that was only cut off ran the target by itself when
+    // the tune was found, on a warm card, and reads a step more on a cooler
+    // one. It is held on the target then, at the voltage it was tested on.
+    if (anchor->freq_khz - freq_khz > kVfTailDropKhz) return stop("the point already runs more than the target");
     if (freq_khz > top_khz) return stop("the target is above anything the card runs by itself");
     // Counted over the built-in curve: the base offset and the flat top together.
     if (freq_khz - anchor->freq_khz + base_raw > kVfMaxRaiseKhz) {
