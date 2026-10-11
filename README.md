@@ -38,7 +38,7 @@ The one time it asks for you again is after a driver update: a tune belongs to t
 What else is in it:
 
 - **Five more profiles** for when you want one thing only: Best of my GPU, Cool & efficient, Quiet, Max performance and Undervolt.
-- **You see what it does:** during a run the window draws the card's voltage/frequency curve as the run writes it, over the card's own, and counts every long measurement down.
+- **You see what it does:** during a run the window draws the card's voltage/frequency curve as the run writes it, over the card's own, says which step the run is at, and counts every long one down.
 - **Fan curves:** the measured one, Silent, Normal, Cool or Aggressive, or your own; fans stop at idle without cycling on and off, the app learns the lowest speed your fans can actually hold, and the fans go back to the driver on exit, sleep, logoff and crashes.
 - **Native and small:** two C++ programs, under 2 MB together, with no installer, no runtime and no driver or service.
 
@@ -167,8 +167,7 @@ The undervolt is saved in place of an overclock, not next to it: on the card a c
 
 ```mermaid
 flowchart LR
-    S[Stock<br/>300 s, to compare with] --> A[Baseline<br/>30 s at stock]
-    A --> B[Power limit]
+    S[Stock<br/>300 s: the "before",<br/>and what probes are judged by] --> B[Power limit]
     B --> C[Memory offset<br/>bandwidth peak, confirmed,<br/>safety margin]
     C --> D[Core offset<br/>single steps, confirmed,<br/>safety margin]
     D --> G[Soak<br/>300 s]

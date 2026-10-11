@@ -1322,13 +1322,19 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdline, int) {
 
     // Render only when needed: nothing while hidden, a few frames after input,
     // ~10 Hz during a run and ~4 Hz otherwise. The tool measures the GPU; its
-    // own window must not load it.
+    // own window must not load it. The one exception is a step that counts
+    // down: at 10 Hz the bar of a 20 s step moves in jumps of several pixels,
+    // so it gets ~30 Hz while it is on screen. The steps that measure
+    // bandwidth have no countdown and stay at 10.
     for (;;) {
         // While the device is lost nothing is drawn either: wait for a message
         // (the telemetry timer rebuilds the device, when the backoff lets it)
         // instead of polling.
         const DWORD timeout =
-            !g.visible || g.device_lost ? INFINITE : g.input_frames > 0 ? 0 : g.worker->running() ? 100 : 250;
+            !g.visible || g.device_lost ? INFINITE
+            : g.input_frames > 0        ? 0
+            : !g.worker->running()      ? 250
+            : g.worker->snapshot().measuring_seconds > 0 ? 33 : 100;
         MsgWaitForMultipleObjectsEx(0, nullptr, timeout, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
         MSG msg;
         bool quit = false;

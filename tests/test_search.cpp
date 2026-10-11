@@ -290,6 +290,7 @@ struct Run {
     int abort_after_probes = -1;
     bool no_rest = false;            // the application gives the search no way to wait
     std::optional<StabilityResult> stock;   // the measurement at stock that went before the run, when there was one
+    std::vector<std::pair<std::string, double>> steps;   // what the search said it was doing, and for how long
     OptimizeResult go(Preset preset, GpuControl gpu) {
         Journal j(card.journal, [this](const std::string& l) {
             if (l.find("\"complete\"") != std::string::npos && card.completes_ok >= 0 && card.completes_ok-- == 0)
@@ -334,9 +335,13 @@ struct Run {
                 return card.bw_curve(card.mem);
             };
         if (card.bw_curve) io.bandwidth_unsettled = [this] { return card.bw_unsettled; };
+        io.measuring = [this](const std::string& what, double seconds) { steps.emplace_back(what, seconds); };
         return optimize(gpu, objectives_for(preset), j, io, stock);
     }
     OptimizeResult go(Preset preset) { return go(preset, card.gpu()); }
+    bool said(const std::string& what, double seconds) const {
+        return std::find(steps.begin(), steps.end(), std::make_pair(what, seconds)) != steps.end();
+    }
     bool logged(const std::string& what) const { return count_logged(what) > 0; }
     int count_logged(const std::string& what) const {
         int n = 0;
@@ -435,6 +440,49 @@ TEST_CASE("best preset converges to the card's edges and applies the margin") {
     CHECK(run.card.last_set_begin_ok.empty());
     CHECK(r.core_confirmed == 150);
     CHECK(r.mem_confirmed == 800);
+}
+
+TEST_CASE("a stock measurement the caller made is the baseline: the search takes none of its own") {
+    Run plain;
+    const auto without = plain.go(Preset::BestOfMyGpu);
+    REQUIRE(without.ok);
+    CHECK(plain.logged("baseline: 30 s at stock"));
+
+    Run run;
+    run.stock = StabilityResult{};
+    run.stock->score = without.baseline.score;
+    const auto r = run.go(Preset::BestOfMyGpu);
+    REQUIRE(r.ok);
+    CHECK_FALSE(run.logged("baseline: 30 s at stock"));
+    CHECK(run.logged("baseline: the measurement at stock"));
+    CHECK(run.card.probes == plain.card.probes - 1);   // the half minute at stock, and nothing else
+    CHECK(r.baseline.score == without.baseline.score);
+    CHECK(r.power_pct == without.power_pct);
+    CHECK(r.core_mhz == without.core_mhz);
+    CHECK(r.mem_mhz == without.mem_mhz);
+}
+
+TEST_CASE("a stock measurement that was not stable is no baseline") {
+    Run run;
+    run.stock = StabilityResult{};
+    run.stock->verdict = Verdict::TooHot;
+    run.stock->score = 1000;
+    REQUIRE(run.go(Preset::BestOfMyGpu).ok);
+    CHECK(run.logged("baseline: 30 s at stock"));
+}
+
+TEST_CASE("the search says which step it is at, and how long the long ones last") {
+    Run run;
+    const auto r = run.go(Preset::BestOfMyGpu);
+    REQUIRE(r.ok);
+    REQUIRE_FALSE(run.steps.empty());
+    CHECK(run.steps.front() == std::make_pair(std::string("Baseline at stock"), 30.0));
+    CHECK(run.said("Power limit 115 %", 20));
+    CHECK(run.said("Trying memory clock +800 MHz", 0));     // a search probe: seconds, no countdown
+    CHECK(run.said("Confirming memory clock +800 MHz", 30));
+    CHECK(run.said("Trying core clock +150 MHz", 0));
+    CHECK(run.said("Confirming core clock +150 MHz", 30));
+    CHECK(run.steps.back() == std::make_pair(std::string("Final test of the result"), 300.0));
 }
 
 TEST_CASE("quiet preset picks the lowest power within 2 % of the reference score") {

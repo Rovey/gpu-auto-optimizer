@@ -584,26 +584,33 @@ bool curve_editor(FanCurve& c, int min_pct, int max_temp_c, int now_temp_c, int*
         const ImVec2 n = to_screen(static_cast<float>(std::min(now_temp_c, 100)), 0);
         dl->AddLine(ImVec2(n.x, a.y), ImVec2(n.x, b.y), ImGui::GetColorU32(kText), 1.0f);
     }
+    // The curve as it was set: straight from point to point, flat outside them.
+    auto as_set = [&](float t) {
+        const auto& pts = c.points;
+        if (t <= static_cast<float>(pts.front().temp_c)) return static_cast<float>(pts.front().pct);
+        for (size_t k = 1; k < pts.size(); ++k) {
+            if (t > static_cast<float>(pts[k].temp_c)) continue;
+            const float f = (t - static_cast<float>(pts[k - 1].temp_c)) / static_cast<float>(pts[k].temp_c - pts[k - 1].temp_c);
+            return static_cast<float>(pts[k - 1].pct) + f * static_cast<float>(pts[k].pct - pts[k - 1].pct);
+        }
+        return static_cast<float>(pts.back().pct);
+    };
     // What the fans actually do, guard rails included: exact, not rounded to
     // whole percents, so straight segments stay straight and the jumps at the
     // stop threshold and the limit are vertical.
     auto effective = [&](float t) {
         if (t >= static_cast<float>(max_temp_c)) return 100.0f;
         if (c.stop_below_c && t < static_cast<float>(*c.stop_below_c)) return 0.0f;
-        const auto& pts = c.points;
-        float v = static_cast<float>(pts.back().pct);
-        if (t <= static_cast<float>(pts.front().temp_c)) {
-            v = static_cast<float>(pts.front().pct);
-        } else {
-            for (size_t k = 1; k < pts.size(); ++k) {
-                if (t > static_cast<float>(pts[k].temp_c)) continue;
-                const float f = (t - static_cast<float>(pts[k - 1].temp_c)) / static_cast<float>(pts[k].temp_c - pts[k - 1].temp_c);
-                v = static_cast<float>(pts[k - 1].pct) + f * static_cast<float>(pts[k].pct - pts[k - 1].pct);
-                break;
-            }
-        }
-        return std::max(v, static_cast<float>(min_pct));
+        return std::max(as_set(t), static_cast<float>(min_pct));
     };
+    // Thin and dimmed through the points, under the line the fans follow: where
+    // the two part, a guard rail is why, and the points there are not ignored
+    // by mistake.
+    std::vector<ImVec2> set_line{to_screen(20, as_set(20))};
+    for (const FanPoint& pt : c.points) set_line.push_back(to_screen(static_cast<float>(pt.temp_c), static_cast<float>(pt.pct)));
+    set_line.push_back(to_screen(100, as_set(100)));
+    dl->AddPolyline(set_line.data(), static_cast<int>(set_line.size()),
+                    ImGui::GetColorU32(ImVec4(kAccentBright.x, kAccentBright.y, kAccentBright.z, 0.40f)), ImDrawFlags_None, 1.2f);
     std::vector<ImVec2> line;
     for (int i = 0; i <= 80 * 8; ++i) {
         const float t = 20 + static_cast<float>(i) / 8;
@@ -928,19 +935,28 @@ void run_screen(UiState& s, const OptimizeWorker::Snapshot& run, const UiActions
         if (ImGui::Button("Cancel")) act.answer_busy(BusyAnswer::Stop);
         ImGui::Spacing();
     }
-    // A long measurement: what it is and how long it still takes.
-    if (run.running && !run.measuring.empty() && run.measuring_seconds > 0) {
-        const double left = std::max(0.0, run.measuring_seconds - run.measuring_spent);
-        char time[48];
-        std::snprintf(time, sizeof(time), "%d:%02d left of %s", static_cast<int>(left) / 60, static_cast<int>(left) % 60,
-                      duration_text(run.measuring_seconds).c_str());
+    // The step the run is at. One that lasts counts down; one that takes
+    // seconds, or as long as it takes, only says what it is. The row is as
+    // high either way, so the page does not jump from step to step.
+    if (run.running && !run.measuring.empty()) {
         text_bold((ic(kIconClock) + "  " + run.measuring).c_str(), 1.1f);
-        ImGui::SameLine(0, em());
-        ImGui::TextUnformatted(time);
-        ImGui::PushStyleColor(ImGuiCol_PlotHistogram, kAccentBright);
-        ImGui::PushStyleColor(ImGuiCol_FrameBg, kInner);
-        ImGui::ProgressBar(static_cast<float>(std::min(1.0, run.measuring_spent / run.measuring_seconds)), ImVec2(-1, em() * 0.5f), "");
-        ImGui::PopStyleColor(2);
+        const ImVec2 bar(-1, em() * 0.5f);
+        if (run.measuring_seconds > 0) {
+            const double left = std::max(0.0, run.measuring_seconds - run.measuring_spent);
+            char time[48];
+            std::snprintf(time, sizeof(time), "%d:%02d left of %s", static_cast<int>(left) / 60, static_cast<int>(left) % 60,
+                          duration_text(run.measuring_seconds).c_str());
+            // At the right edge, over the end of the bar it belongs to: the
+            // step's name changes length from step to step, the time does not.
+            align_right(ImGui::CalcTextSize(time).x);
+            ImGui::TextUnformatted(time);
+            ImGui::PushStyleColor(ImGuiCol_PlotHistogram, kAccentBright);
+            ImGui::PushStyleColor(ImGuiCol_FrameBg, kInner);
+            ImGui::ProgressBar(static_cast<float>(std::min(1.0, run.measuring_spent / run.measuring_seconds)), bar, "");
+            ImGui::PopStyleColor(2);
+        } else {
+            ImGui::Dummy(ImVec2(1, bar.y));
+        }
         ImGui::Spacing();
     }
     telemetry_tiles(s);
