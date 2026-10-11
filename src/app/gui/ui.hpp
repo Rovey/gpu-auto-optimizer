@@ -82,6 +82,7 @@ struct UiState {
 struct UiActions {
     std::function<void(Preset)> optimize;
     std::function<void()> abort;
+    std::function<void(BusyAnswer)> answer_busy;          // to the run's question about other programs on the card
     std::function<void()> restart_elevated;
     std::function<void()> apply_profile;
     std::function<void()> retest;                         // the saved tune, five minutes, on the driver that is installed now

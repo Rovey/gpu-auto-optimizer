@@ -264,10 +264,25 @@ static int update() {
     return ok ? 0 : 1;
 }
 
+// --busy-ok, as the last argument of a run: other programs may stay on the card.
+static bool g_busy_ok = false;
+
+// Other programs use the card: the run says which, and does not start unless
+// it was told that this is fine.
+static gao::BusyAnswer on_busy(const std::vector<gao::BusyProgram>& programs) {
+    if (g_busy_ok) return gao::BusyAnswer::GoOn;
+    std::printf("Other programs are using the graphics card: %s.\n"
+                "A run measures the card under full load, and what they take from it makes every number lower and less\n"
+                "steady: the result, and its comparison with stock. Close them and start again, or add --busy-ok as the\n"
+                "last argument to go on as it is.\n", gao::busy_text(programs).c_str());
+    return gao::BusyAnswer::Stop;
+}
+
 static int optimize(gao::Preset preset, const std::optional<gao::FanCurve>& fan_curve) {
     gao::app::OptimizeHooks hooks;
     hooks.aborted = [] { return g_abort.load(); };
     hooks.log = gao::app::logged([](const std::string& msg) { std::printf("  %s\n", msg.c_str()); });
+    hooks.busy = on_busy;
     hooks.active_gpu = [](const gao::GpuControl* gpu) {
         g_gpu = gpu;
         SetConsoleCtrlHandler(OnConsoleCtrl, gpu ? TRUE : FALSE);
@@ -307,6 +322,7 @@ static int undervolt(bool on_overclock) {
     gao::app::OptimizeHooks hooks;
     hooks.aborted = [] { return g_abort.load(); };
     hooks.log = gao::app::logged([](const std::string& msg) { std::printf("  %s\n", msg.c_str()); });
+    hooks.busy = on_busy;
     hooks.active_gpu = [](const gao::GpuControl* gpu) {
         g_gpu = gpu;
         SetConsoleCtrlHandler(OnConsoleCtrl, gpu ? TRUE : FALSE);
@@ -346,6 +362,7 @@ static int retest() {
     gao::app::OptimizeHooks hooks;
     hooks.aborted = [] { return g_abort.load(); };
     hooks.log = gao::app::logged([](const std::string& msg) { std::printf("  %s\n", msg.c_str()); });
+    hooks.busy = on_busy;
     hooks.active_gpu = [](const gao::GpuControl* gpu) {
         g_gpu = gpu;
         SetConsoleCtrlHandler(OnConsoleCtrl, gpu ? TRUE : FALSE);
@@ -370,6 +387,7 @@ static int all_in_one() {
     gao::app::OptimizeHooks hooks;
     hooks.aborted = [] { return g_abort.load(); };
     hooks.log = gao::app::logged([](const std::string& msg) { std::printf("  %s\n", msg.c_str()); });
+    hooks.busy = on_busy;
     hooks.active_gpu = [](const gao::GpuControl* gpu) {
         g_gpu = gpu;
         SetConsoleCtrlHandler(OnConsoleCtrl, gpu ? TRUE : FALSE);
@@ -590,11 +608,19 @@ int main(int argc, char** argv) {
     // The manifest makes the process code page UTF-8; match the console so
     // paths print correctly.
     SetConsoleOutputCP(CP_UTF8);
+    if (argc > 2 && std::strcmp(argv[argc - 1], "--busy-ok") == 0) {
+        g_busy_ok = true;
+        --argc;
+    }
     if (argc > 1 && std::strcmp(argv[1], "--version") == 0) {
         std::printf("%s %s\n", gao::kProductName.data(), gao::kVersion.data());
         return 0;
     }
     if (argc > 1 && std::strcmp(argv[1], "--probe") == 0) return probe();
+    if (argc > 1 && std::strcmp(argv[1], "--busy") == 0) {
+        std::printf("other programs on the card: %s\n", gao::busy_text(gao::app::busy_now()).c_str());
+        return 0;
+    }
     if (argc > 2 && std::strcmp(argv[1], "--set-core") == 0) {
         int mhz = 0;
         if (!ParseIntArg(argv[2], &mhz)) { std::printf("--set-core expects an integer MHz value, got '%s'\n", argv[2]); return 1; }
@@ -694,6 +720,7 @@ int main(int argc, char** argv) {
         return optimize(preset, fan_curve);
     }
     std::printf("usage: gao [--version | --probe | --set-core <mhz> | --set-mem <mhz> | --reset\n"
+                "            | --busy (the other programs that use the card now, as a run looks for them; changes nothing)\n"
                 "            | --stress <sec> [--max-temp <c>] | --bandwidth [--after-load <sec>]\n"
                 "            | --stress-recreate (loads the card for two 3 s runs around a device rebuild;\n"
                 "              changes no setting; exit 0 = both STABLE, rebuilt and a clean first batch, 1 = anything else,\n"
@@ -710,6 +737,8 @@ int main(int argc, char** argv) {
                 "              saved tune and saved into it)\n"
                 "            | --curve-flatten <mV> <MHz> [<MHz>] (the point at <mV> runs <MHz> and no point above it more;\n"
                 "              the third number is how much lower those are stored, 0 for exactly flat; --reset undoes it)\n"
-                "            | --update (installs the latest release into this folder, if there is a newer one)]\n");
+                "            | --update (installs the latest release into this folder, if there is a newer one)]\n"
+                "A run (--optimize, --undervolt, --retest) looks first at what else uses the card and does not start next to\n"
+                "programs that do; --busy-ok as the last argument lets it.\n");
     return argc > 1 ? 1 : 0;
 }

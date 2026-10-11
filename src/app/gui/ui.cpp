@@ -912,6 +912,22 @@ void run_screen(UiState& s, const OptimizeWorker::Snapshot& run, const UiActions
     dim(run.is_retest ? "Five minutes of full load with the tune applied. Aborting stops the test and restores stock."
                       : "Aborting stops the running probe and restores stock.");
     ImGui::Spacing();
+    // The run looked at what else uses the card before it began, found
+    // something, and waits for what to do about it.
+    if (run.running && !run.busy_question.empty()) {
+        text_bold((ic(kIconInfo) + "  Other programs are using the graphics card").c_str(), 1.1f);
+        wrapped(kText, busy_text(run.busy_question) + ".");
+        wrapped(kDim, "A run measures the card under full load. What these programs take from it makes every number lower and less "
+                      "steady: the result, and its comparison with stock. Close them and check again, or go on as it is. "
+                      "Nothing is closed for you.");
+        ImGui::Spacing();
+        if (primary_button("Check again")) act.answer_busy(BusyAnswer::CheckAgain);
+        ImGui::SameLine();
+        if (ImGui::Button("Go on anyway")) act.answer_busy(BusyAnswer::GoOn);
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel")) act.answer_busy(BusyAnswer::Stop);
+        ImGui::Spacing();
+    }
     // A long measurement: what it is and how long it still takes.
     if (run.running && !run.measuring.empty() && run.measuring_seconds > 0) {
         const double left = std::max(0.0, run.measuring_seconds - run.measuring_spent);
@@ -1134,6 +1150,9 @@ void results(UiState& s, const OptimizeWorker::Snapshot& run, const UiActions& a
         if (saved && s.boot_on) wrapped(kText, "Saved, and applied at every logon from now on. There is nothing left to do.");
         else if (saved) wrapped(kText, "Saved. It stays applied until reboot; turn on apply at logon to keep it.");
         else wrapped(kWarn, "Not saved: " + (run.undervolt ? run.undervolt->save_note : run.outcome ? run.outcome->save_note : std::string()));
+        if (run.outcome && !run.outcome->busy_note.empty())
+            wrapped(kWarn, run.outcome->busy_note + ". The numbers of this run and the ones at stock were not measured on the same card, "
+                           "so the comparison can be off by several percent.");
         if (saved && !s.boot_on && primary_button("Apply at every logon")) act.set_boot(true);
         if (saved && !s.boot_on) ImGui::SameLine();
         if (ImGui::Button(with_icon(kIconUndo, "Revert to stock").c_str())) act.revert_to_stock();
