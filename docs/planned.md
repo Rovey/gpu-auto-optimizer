@@ -1,6 +1,6 @@
 # Planned: tune history, stability, sharing
 
-Three features that are decided on but not built. This page records the choices made for each, so
+Three features that are decided on but not built, and one open design point at the end. This page records the choices made for each, so
 that whoever builds one does not have to make them again. Nothing here is in the code yet; the
 first step of the same request, testing a saved tune again after a driver update, is
 (`core/retest.*`, hardware check 86).
@@ -100,3 +100,38 @@ their card for five minutes before it is applied.
 **Not decided, and the owner's to decide.** Who runs the server and pays for it; where it runs;
 what happens to the data when the project stops; whether the list is public as a file anyone can
 read; how abuse is limited without accounts. These come before any code.
+
+## Open design point: "stock" on a card that is not run at stock
+
+Not a feature and not decided: a finding from the first card other than the reference card, kept
+here so that it is not lost. Nothing is built for it.
+
+**What was seen** (an RTX 3080 Ti Founders Edition with replaced thermal pads, driver 610.88,
+version 0.4.3):
+
+- Its owner runs it day to day at a power limit of 70 % (245 W of 350 W), set in MSI Afterburner.
+- Every run starts by measuring the card at stock, and stock is the power limit at 100 %. There the
+  card drew 290 W and reached 86 C after 148 s, with the NVIDIA driver holding the fans at 66 %.
+- With the fans at 100 % it still ran at 82 to 83 C at about 280 W.
+- To get under the profile's 75 C the search lowered the power limit to 65 %: 4547 it/s, where the
+  30 s baseline at stock scored 4818 and the measurement at stock 5013, with the fans at 86 %
+  instead of 66 %. A "Best of my GPU" result that is slower and louder than stock.
+
+**What that puts in question.**
+
+- **The "before" is a state this owner never uses.** The result compares with stock at 100 %
+  power; what they would want to know is how it compares with what the card ran when they pressed
+  the button. The app reads those settings at the start ("Set by another program") and does
+  nothing with them.
+- **Stock is hotter and louder than what the card is used at,** so the first five minutes of every
+  run are the worst the card has seen in a long time. Whether a run should start from the settings
+  it found, or from stock, is open; starting from settings another program made means trusting
+  them.
+- **A fixed temperature ceiling does not fit a card that is over it at stock.** 75 C is a choice
+  that suits the reference card. On this card it can only be met by giving up speed, which is the
+  opposite of what the profile promises. A ceiling relative to the card's own measurement at
+  stock ("never hotter than it was") is one answer; refusing to save a result that is slower than
+  stock, and saying why, is another. They do not exclude each other.
+
+**Not decided.** All of the above. It is recorded before a second card of this kind is tested,
+not after.
