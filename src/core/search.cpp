@@ -70,8 +70,8 @@ int best_bandwidth_offset(int lo, int hi, int step, int ceiling, const std::func
         if (!s.stable) break;
         // A step that is further below the best than readings scatter is in
         // doubt: it is read kBandwidthReadings times and the middle one counts.
-        // Only such a step: every reading is a copy that checks nothing, and
-        // near its edge the memory answers more of it with a driver reset.
+        // Only such a step: three readings at every step cost two minutes a
+        // scan and decided nothing a single reading did not (hardware check 95).
         if (s.gbps < best * (1 - kBandwidthTie)) {
             std::vector<double> readings{s.gbps};
             while (static_cast<int>(readings.size()) < kBandwidthReadings && (s = sample(v)).stable) readings.push_back(s.gbps);

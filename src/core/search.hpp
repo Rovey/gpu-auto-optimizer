@@ -82,8 +82,8 @@ inline constexpr double kBandwidthTie = 0.01;
 // off decides nothing; and a reading that did not settle is taken again up to
 // this many times. On the reference card single readings ended scans at +250,
 // at +1000 and not at all on one day, and the runs saved +100, +650 and +1600
-// MHz (hardware check 94). Not every step: three readings at every step ended
-// both scans of hardware check 95 in a driver reset near the memory's edge.
+// MHz (hardware check 94). Not every step: that cost two minutes a scan and
+// changed no outcome on the card (hardware check 95).
 inline constexpr int kBandwidthReadings = 3;
 
 // A confirm probe that ends too hot keeps the clock edge (heat is the power

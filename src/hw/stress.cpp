@@ -372,7 +372,7 @@ std::optional<double> Stress::MeasureBandwidth() {
             !wait(d.q_end.Get(), &t1, sizeof(t1))) {
             // Say which: the log line used to end in nothing here.
             const HRESULT removed = d.device->GetDeviceRemovedReason();
-            error_ = removed != S_OK ? Hr("the device was lost during the copy", removed) : "the timing of the copy did not come back";
+            error_ = removed != S_OK ? Hr("the copy", removed) + ": the device was lost" : "the timing of the copy did not come back";
             if (removed != S_OK) d.device.Reset();
             return std::nullopt;
         }
