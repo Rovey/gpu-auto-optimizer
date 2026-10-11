@@ -71,6 +71,12 @@ struct App {
     UINT tray_notice = 0;
     bool visible = false;
     bool exit_requested = false;
+    // --demo: the window plays a run (OptimizeWorker::start_demo) and nothing
+    // else. It stands next to the copy in the tray, without a tray icon of
+    // its own, and closing it ends it. --demo=run: without the question about
+    // other programs that the played run begins with.
+    bool demo = false;
+    bool demo_asks = true;
     int input_frames = 0;   // frames still to draw after input, so hover/click feedback shows
 
     ComPtr<ID3D11Device> device;
@@ -341,6 +347,7 @@ void recover_device() {
 // ---------------------------------------------------------------- tray
 
 void tray_icon(DWORD message, const wchar_t* tip = nullptr, const wchar_t* balloon = nullptr) {
+    if (g.demo) return;
     NOTIFYICONDATAW nid{};
     nid.cbSize = sizeof(nid);
     nid.hWnd = g.hwnd;
@@ -484,6 +491,10 @@ void refresh_status(bool with_task) {
 void hw_lost();   // below, with the other hardware helpers
 
 void act_optimize(gao::Preset preset) {
+    if (g.demo) {
+        g.worker->start_demo(g.demo_asks);
+        return;
+    }
     fan_release();   // the search drives the fans itself
     g.ui.run_curve.clear();
     g.ui.run_stock.clear();
@@ -1023,6 +1034,11 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return 0;
         }
         case WM_CLOSE:
+            if (g.demo) {   // nothing to stay in the tray for
+                g.worker->abort();
+                g.exit_requested = true;
+                return 0;
+            }
             // Closing hides to the tray, like other tray apps; Exit in the tray
             // menu quits. Say so the first time, or it looks like a quit.
             ShowWindow(hwnd, SW_HIDE);
@@ -1176,8 +1192,17 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdline, int) {
     // driver resets against it in the last hour.
     const bool after_fault = cmdline && std::wcsstr(cmdline, L"--after-fault");
     const bool hidden = tray_mode || (cmdline && std::wcsstr(cmdline, L"--hidden"));
-    if (replace) end_other_instance();
-    if (!claim_single_instance(tray_mode, !replace)) {
+    // --demo: a played run to look at the window with. Without administrator
+    // rights only, so that nothing in it can reach the card whatever is clicked.
+    g.demo = cmdline && std::wcsstr(cmdline, L"--demo");
+    g.demo_asks = !(cmdline && std::wcsstr(cmdline, L"--demo=run"));
+    if (g.demo && gao::app::is_elevated()) {
+        MessageBoxW(nullptr, L"The demo runs without administrator rights. Start it from a normal window.", L"GPU Auto Optimizer",
+                    MB_OK | MB_ICONINFORMATION | MB_SETFOREGROUND);
+        return 0;
+    }
+    if (replace && !g.demo) end_other_instance();
+    if (!g.demo && !claim_single_instance(tray_mode, !replace)) {
         if (replace)
             MessageBoxW(nullptr, L"The running app is still busy (an optimize run?). Try again when it has finished.",
                         L"GPU Auto Optimizer", MB_OK | MB_ICONINFORMATION | MB_SETFOREGROUND);
@@ -1195,10 +1220,13 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdline, int) {
     wc.hInstance = inst;
     wc.hIcon = LoadIconW(inst, MAKEINTRESOURCEW(1));
     wc.hCursor = LoadCursorW(nullptr, MAKEINTRESOURCEW(32512));   // IDC_ARROW
-    wc.lpszClassName = kWindowClass;
+    // A class of its own for the demo: the command line and an update find
+    // the real app by kWindowClass, and must not find this window.
+    const wchar_t* const window_class = g.demo ? L"GpuAutoOptimizerDemoWindow" : kWindowClass;
+    wc.lpszClassName = window_class;
     RegisterClassExW(&wc);
-    g.hwnd = CreateWindowW(kWindowClass, L"GPU Auto Optimizer", WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, 1180, 860,
-                           nullptr, nullptr, inst, nullptr);
+    g.hwnd = CreateWindowW(window_class, g.demo ? L"GPU Auto Optimizer (demo)" : L"GPU Auto Optimizer", WS_OVERLAPPEDWINDOW,
+                           CW_USEDEFAULT, CW_USEDEFAULT, 1180, 860, nullptr, nullptr, inst, nullptr);
     if (!g.hwnd || !create_device()) return 1;
     SetPropW(g.hwnd, kVersionProp, reinterpret_cast<HANDLE>(static_cast<UINT_PTR>(gao::kVersionNumber)));
     const float scale = GetDpiForWindow(g.hwnd) / 96.0f;   // the monitor the window actually opened on
@@ -1284,9 +1312,13 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdline, int) {
     SetTimer(g.hwnd, kTimerWatchdog, 30 * 1000, nullptr);
     SetTimer(g.hwnd, kTimerUpdate, 24 * 60 * 60 * 1000, nullptr);
     g.update_now = cmdline && std::wcsstr(cmdline, L"--update-now");
-    start_update_check();
+    if (!g.demo) start_update_check();
     on_telemetry();
-    if (!hidden) show_window();
+    if (!hidden || g.demo) show_window();
+    if (g.demo) {
+        g.ui.page = gao::gui::Page::Optimize;
+        g.worker->start_demo(g.demo_asks);
+    }
 
     // Render only when needed: nothing while hidden, a few frames after input,
     // ~10 Hz during a run and ~4 Hz otherwise. The tool measures the GPU; its

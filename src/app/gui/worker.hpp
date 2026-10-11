@@ -53,6 +53,12 @@ public:
 
     bool start(Preset preset, std::optional<FanCurve> fan_curve);   // false when a run is already active
     bool start_retest();                                            // the saved tune, five minutes; false likewise
+    // A run that is only played: the question about other programs, the
+    // steps with their countdowns and a result, in about a minute, with made-up
+    // numbers. It touches no card and no file. For looking at the window
+    // (GpuAutoOptimizer.exe --demo). ask: it begins with the question about
+    // other programs on the card; without it the steps begin at once.
+    bool start_demo(bool ask = true);
     void abort();                       // the run restores stock before it ends
     void answer_busy(BusyAnswer answer);   // to the question in Snapshot::busy_question
     bool running() const { return running_; }
