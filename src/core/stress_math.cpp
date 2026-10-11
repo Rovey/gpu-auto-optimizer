@@ -1,4 +1,6 @@
 #include "core/stress_math.hpp"
+#include <algorithm>
+#include <cstdio>
 #include <random>
 
 namespace gao {
@@ -24,6 +26,24 @@ std::vector<float> reference_matmul(const std::vector<float>& a,
             for (int j = 0; j < n; ++j) crow[j] += aik * brow[j];
         }
     return c;
+}
+
+std::string bandwidth_runs_text(const std::vector<double>& runs) {
+    int readings = 0, discarded = 0;
+    double lo = 0, hi = 0;
+    for (const double r : runs) {
+        if (r <= 0) { ++discarded; continue; }
+        lo = readings ? std::min(lo, r) : r;
+        hi = readings ? std::max(hi, r) : r;
+        ++readings;
+    }
+    char buf[160];
+    if (readings == 0) std::snprintf(buf, sizeof(buf), "no reading");
+    else if (readings == 1) std::snprintf(buf, sizeof(buf), "1 reading of %.1f GB/s", lo);
+    else std::snprintf(buf, sizeof(buf), "%d readings from %.1f to %.1f GB/s (spread %.1f %%)", readings, lo, hi, (hi / lo - 1) * 100);
+    std::string text = buf;
+    if (discarded > 0) text += ", " + std::to_string(discarded) + " discarded for a clock change";
+    return text;
 }
 
 }

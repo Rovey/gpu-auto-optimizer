@@ -4,6 +4,7 @@
 #include "app/common.hpp"
 #include "app/guarded_gpu.hpp"
 #include "core/stability.hpp"
+#include "core/stress_math.hpp"
 #include "core/version.hpp"
 #include "core/vf_curve.hpp"
 #include "hw/app_files.hpp"
@@ -480,10 +481,37 @@ static int fan_auto() {
     return ok ? 0 : 1;
 }
 
-static int bandwidth() {
+// The memory bandwidth as a run measures it, and what the measurement looked
+// like. after_load_s: that many seconds of the stress load first, on the same
+// device, as the memory search measures right after a probe: the card is then
+// warm and at whatever limit holds it back. Changes no setting.
+static int bandwidth(int after_load_s) {
     gao::Stress load;
     if (!load.Init()) { std::printf("stress init failed: %s\n", load.Error().c_str()); return 1; }
+    gao::Nvml nvml;
+    const bool telemetry = nvml.Init();
+    auto card = [&](const char* when) {
+        if (!telemetry) return;
+        const gao::Telemetry t = nvml.Read(kGpu);
+        std::printf("  %s: core=%s MHz  mem=%s MHz  temp=%s C  power=%s/%d W\n", when, gao::reading(t.core_mhz).c_str(),
+                    gao::reading(t.mem_mhz).c_str(), gao::reading(t.temp_c).c_str(), gao::reading(t.power_w).c_str(), t.power_limit_w);
+    };
+    if (after_load_s > 0) {
+        if (!telemetry) { std::printf("NVML init failed: %s\n", nvml.Error().c_str()); return 1; }
+        const gao::StabilityResult r = gao::run_stability([&] { return load.Batch(); }, [&] { return nvml.Read(kGpu); }, after_load_s, 85);
+        std::printf("  load: %s  score=%.0f it/s  %.1f s  peak=%s C  avg power=%s W  avg core=%s MHz\n", gao::verdict_name(r.verdict), r.score,
+                    r.seconds, gao::reading(r.peak_temp_c).c_str(), gao::reading(r.avg_power_w).c_str(), gao::reading(r.avg_core_mhz).c_str());
+        if (r.verdict != gao::Verdict::Stable) return 1;
+    }
     const auto gbps = load.MeasureBandwidth();
+    card("after the measurement");
+    std::string each;
+    for (const double run : load.BandwidthRuns()) {
+        char one[16] = " -";   // a run that was thrown away
+        if (run > 0) std::snprintf(one, sizeof(one), " %.1f", run);
+        each += one;
+    }
+    std::printf("  runs: %zu, %s\n  each:%s\n", load.BandwidthRuns().size(), gao::bandwidth_runs_text(load.BandwidthRuns()).c_str(), each.c_str());
     if (!gbps) { std::printf("bandwidth measurement failed: %s\n", load.Error().c_str()); return 1; }
     std::printf("memory bandwidth: %.1f GB/s (%s)\n", *gbps, load.AdapterName().c_str());
     return 0;
@@ -579,7 +607,15 @@ int main(int argc, char** argv) {
         }
         return stress(seconds, max_temp, selftest);
     }
-    if (argc > 1 && std::strcmp(argv[1], "--bandwidth") == 0) return bandwidth();
+    if (argc > 1 && std::strcmp(argv[1], "--bandwidth") == 0) {
+        int after_load_s = 0;
+        if (argc > 2 && (argc != 4 || std::strcmp(argv[2], "--after-load") != 0 || !ParseIntArg(argv[3], &after_load_s) || after_load_s < 1 ||
+                         after_load_s > 600)) {
+            std::printf("--bandwidth accepts --after-load <seconds, 1 to 600>\n");
+            return 1;
+        }
+        return bandwidth(after_load_s);
+    }
     if (argc > 1 && std::strcmp(argv[1], "--stress-recreate") == 0) return stress_recreate();
     if (argc > 1 && std::strcmp(argv[1], "--apply") == 0) return apply();
     if (argc > 2 && std::strcmp(argv[1], "--boot") == 0) {
@@ -633,7 +669,7 @@ int main(int argc, char** argv) {
         return optimize(preset, fan_curve);
     }
     std::printf("usage: gao [--version | --probe | --set-core <mhz> | --set-mem <mhz> | --reset\n"
-                "            | --stress <sec> [--max-temp <c>] | --bandwidth\n"
+                "            | --stress <sec> [--max-temp <c>] | --bandwidth [--after-load <sec>]\n"
                 "            | --stress-recreate (loads the card for two 3 s runs around a device rebuild;\n"
                 "              changes no setting; exit 0 = both STABLE, rebuilt and a clean first batch, 1 = anything else,\n"
                 "              never --stress's 2 / 3)\n"

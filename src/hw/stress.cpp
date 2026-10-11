@@ -287,6 +287,7 @@ StressBatch Stress::Batch() {
 std::optional<double> Stress::MeasureBandwidth() {
     Impl& d = *impl_;
     bw_unsettled_ = false;
+    bw_runs_.clear();
     if (!d.device && !CreateDevice()) return std::nullopt;
     // Created lazily (the stress path never needs 512 MB of buffers) and all
     // or nothing: q_end is created last, and any failure drops what was made,
@@ -367,15 +368,19 @@ std::optional<double> Stress::MeasureBandwidth() {
             if (d.device->GetDeviceRemovedReason() != S_OK) d.device.Reset();
             return std::nullopt;
         }
-        if (dj.Disjoint || dj.Frequency == 0 || t1 <= t0) continue;   // clock changed mid-run: discard
+        if (dj.Disjoint || dj.Frequency == 0 || t1 <= t0) {   // clock changed mid-run: discard
+            bw_runs_.push_back(0);
+            continue;
+        }
         const double seconds = double(t1 - t0) / double(dj.Frequency);
         runs.push_back(2.0 * kBwBytes * kBwDispatches / seconds / 1e9);
+        bw_runs_.push_back(runs.back());
         if (runs.size() < kBwRuns) continue;
         std::vector<double> last(runs.end() - kBwRuns, runs.end());
         std::sort(last.begin(), last.end());
         if (last.back() <= last.front() * (1 + kBwSettle)) return last[kBwRuns / 2];
     }
-    error_ = "bandwidth did not settle within " + std::to_string(kBwMaxRuns) + " runs";
+    error_ = "bandwidth did not settle within " + std::to_string(kBwMaxRuns) + " runs: " + bandwidth_runs_text(bw_runs_);
     bw_unsettled_ = true;
     return std::nullopt;
 }
