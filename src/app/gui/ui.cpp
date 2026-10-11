@@ -946,7 +946,9 @@ void run_screen(UiState& s, const OptimizeWorker::Snapshot& run, const UiActions
             char time[48];
             std::snprintf(time, sizeof(time), "%d:%02d left of %s", static_cast<int>(left) / 60, static_cast<int>(left) % 60,
                           duration_text(run.measuring_seconds).c_str());
-            ImGui::SameLine(0, em());
+            // At the right edge, over the end of the bar it belongs to: the
+            // step's name changes length from step to step, the time does not.
+            align_right(ImGui::CalcTextSize(time).x);
             ImGui::TextUnformatted(time);
             ImGui::PushStyleColor(ImGuiCol_PlotHistogram, kAccentBright);
             ImGui::PushStyleColor(ImGuiCol_FrameBg, kInner);
