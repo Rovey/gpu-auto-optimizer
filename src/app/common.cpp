@@ -332,7 +332,10 @@ OptimizeOutcome run_optimize(Preset preset, const OptimizeHooks& hooks, const st
     if (path.empty()) return fail("the ProgramData folder could not be resolved; cannot keep the crash journal");
     const auto lines = read_lines(path);
     if (!lines) return fail("the crash journal " + path.string() + " exists but cannot be read; not tuning without it");
-    Journal journal(*lines, [&path](const std::string& l) { return append_line_durable(path, l); });
+    // What a memory edge in the journal is bound to: this card with this driver.
+    const std::string rig_card = hw.GpuUuid(), rig_driver = hw.DriverVersion();
+    Journal journal(*lines, [&path](const std::string& l) { return append_line_durable(path, l); },
+                    rig_card.empty() || rig_driver.empty() ? std::string() : rig_card + " / " + rig_driver);
     // Prove the journal is writable before any clock is touched; the parser
     // ignores lines without an id, so this one never becomes a ceiling.
     if (!append_line_durable(path, "{\"session\":\"" + now_text() + "\"}"))

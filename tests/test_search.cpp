@@ -295,6 +295,7 @@ struct Run {
     int abort_after_probes = -1;
     bool no_rest = false;            // the application gives the search no way to wait
     std::optional<StabilityResult> stock;   // the measurement at stock that went before the run, when there was one
+    std::string rig = "card-a / 617.42";    // the card and driver the journal's memory edges are bound to
     OptimizeResult go(Preset preset, GpuControl gpu) {
         Journal j(card.journal, [this](const std::string& l) {
             if (l.find("\"complete\"") != std::string::npos && card.completes_ok >= 0 && card.completes_ok-- == 0)
@@ -302,7 +303,7 @@ struct Run {
             if (l.find("\"begin\"") != std::string::npos) card.events.push_back("begin");
             card.journal.push_back(l);
             return true;
-        });
+        }, rig);
         OptimizeIo io;
         io.probe = card.probe();
         io.aborted = [this] { return card.aborted_now || (abort_after_probes >= 0 && card.probes >= abort_after_probes); };
@@ -2994,3 +2995,102 @@ TEST_CASE("a stretch in which every reading is 2 % off does not end the memory s
         CHECK(r.mem_max_stable >= 2000);
     }
 }
+
+namespace {
+
+// The run after: the same card and journal, the counters of the first run gone.
+OptimizeResult again(Run& run) {
+    run.log.clear();
+    run.card.max_mem_seen = 0;
+    run.card.bw_measurements = 0;
+    run.card.bw_readings_at.clear();
+    return run.go(Preset::BestOfMyGpu);
+}
+
+}
+
+TEST_CASE("a memory scan that ran into a wrong result leaves the edge in the journal") {
+    Run run = rising_to_the_edge();
+    REQUIRE(run.go(Preset::BestOfMyGpu).ok);
+    CHECK(run.card.max_mem_seen == 2550);
+    CHECK(run.card.count("\"mem_edge\":2550") == 1);
+    CHECK(run.card.count("card-a / 617.42") == 1);
+    check_journal_rules(run);
+}
+
+TEST_CASE("the next run stays four steps below the memory edge of the run before") {
+    // On the reference card every scan ended in a driver reset at the edge
+    // (hardware check 95). Once is enough.
+    Run run = rising_to_the_edge();
+    const auto first = run.go(Preset::BestOfMyGpu);
+    REQUIRE(first.ok);
+    const auto second = again(run);
+    REQUIRE(second.ok);
+    CHECK(run.card.max_mem_seen == 2550 - kResetBackoffSteps * 50);
+    CHECK(run.logged("mem: the memory gave out at +2550 in an earlier run on this card and driver; the scan stops at +2350"));
+    CHECK_FALSE(run.logged("mem +2400"));   // no candidate above it, so none that could fail
+    CHECK(second.driver_resets == 0);
+    CHECK(second.mem_max_stable >= 2200);
+    CHECK(second.mem_mhz >= 1500);
+    CHECK(run.card.count("\"mem_edge\"") == 1);   // nothing new was found
+    // And the run after that is the same.
+    const auto third = again(run);
+    REQUIRE(third.ok);
+    CHECK(third.mem_mhz == second.mem_mhz);
+}
+
+TEST_CASE("a bandwidth measurement that lost the device leaves the edge too, and the next run has no reset") {
+    Run run = recovering();
+    run.card.bw_curve = [](int m) { return 500 + m * 0.3; };
+    run.card.bw_fails_once_at_mem = 500;
+    const auto first = run.go(Preset::BestOfMyGpu);
+    REQUIRE(first.ok);
+    CHECK(first.driver_resets == 1);
+    CHECK(run.card.count("\"mem_edge\":500") == 1);
+    const auto second = again(run);
+    REQUIRE(second.ok);
+    CHECK(second.driver_resets == 0);
+    CHECK(run.card.max_mem_seen == 300);
+    CHECK(second.mem_max_stable == 300);
+}
+
+TEST_CASE("the memory edge lapses with another driver") {
+    Run run = rising_to_the_edge();
+    REQUIRE(run.go(Preset::BestOfMyGpu).ok);
+    run.rig = "card-a / 620.10";
+    REQUIRE(again(run).ok);
+    CHECK(run.card.max_mem_seen == 2550);   // searched afresh
+    CHECK_FALSE(run.logged("in an earlier run"));
+    CHECK(run.card.count("\"mem_edge\":2550") == 2);   // and found again, for the new driver
+}
+
+TEST_CASE("a scan that ended for another reason leaves no memory edge") {
+    {   // a bandwidth peak
+        Run run;
+        run.card.mem_edge = 1400;
+        run.card.bw_curve = [](int m) { return m <= 900 ? 500 + m * 0.3 : 770 - (m - 900) * 0.6; };
+        REQUIRE(run.go(Preset::BestOfMyGpu).ok);
+        CHECK(run.card.count("mem_edge") == 0);
+    }
+    {   // readings that did not settle
+        Run run = recovering();
+        run.card.bw_curve = [](int m) { return 500 + m * 0.3; };
+        run.card.bw_unsettled_at_mem = 300;
+        REQUIRE(run.go(Preset::BestOfMyGpu).ok);
+        CHECK(run.card.count("mem_edge") == 0);
+    }
+    {   // a measurement that does not work on this machine
+        Run run = recovering();
+        run.card.bw_curve = [](int m) { return 500 + m * 0.3; };
+        run.card.bw_fails_at_zero = true;
+        REQUIRE(run.go(Preset::BestOfMyGpu).ok);
+        CHECK(run.card.count("mem_edge") == 0);
+    }
+    {   // the driver's own range
+        Run run = rising_to_the_edge(5000);
+        REQUIRE(run.go(Preset::BestOfMyGpu).ok);
+        CHECK(run.card.max_mem_seen == 3000);
+        CHECK(run.card.count("mem_edge") == 0);
+    }
+}
+

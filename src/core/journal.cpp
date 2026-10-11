@@ -43,8 +43,8 @@ std::optional<int> int_field(const nlohmann::json& j, const char* key) {
 }
 }
 
-Journal::Journal(const std::vector<std::string>& existing_lines, Append append)
-    : append_(std::move(append)) {
+Journal::Journal(const std::vector<std::string>& existing_lines, Append append, std::string rig)
+    : append_(std::move(append)), rig_(std::move(rig)) {
     std::map<int, Pending> pending;   // ordered by id = file order
     int max_id = 0;
     for (std::string line : existing_lines) {
@@ -53,6 +53,14 @@ Journal::Journal(const std::vector<std::string>& existing_lines, Append append)
         const bool parsed = !j.is_discarded() && j.is_object();
         torn_tail_ = !line.empty() && !parsed;   // only the last line's value survives the loop
         if (!parsed) continue;
+        if (const auto edge = j.find("mem_edge"); edge != j.end()) {
+            // A line of its own, without an id: builds that do not know it skip it.
+            const auto mhz = int_field(j, "mem_edge");
+            const auto rig_of = j.find("rig");
+            if (mhz && *mhz > 0 && *mhz <= kMaxClockMhz && !rig_.empty() && rig_of != j.end() && rig_of->is_string() && *rig_of == rig_)
+                mem_edge_ = std::min(mem_edge_, *mhz);
+            continue;
+        }
         const auto id = int_field(j, "id");
         const auto state = j.find("state");
         if (!id || *id <= 0 || *id >= kMaxJournalId || state == j.end() || !state->is_string()) continue;
@@ -89,6 +97,14 @@ bool Journal::complete(int id, const std::string& verdict) {
     const nlohmann::json j = {{"id", id}, {"state", "complete"}, {"verdict", verdict}};
     if (!write(j.dump())) return false;
     if (id == open_id_) open_id_ = -1;
+    return true;
+}
+
+bool Journal::note_mem_edge(int mhz) {
+    if (mhz <= 0 || rig_.empty()) return true;   // nothing to bind it to: nothing is kept
+    const nlohmann::json j = {{"mem_edge", mhz}, {"rig", rig_}};
+    if (!write(j.dump())) return false;
+    mem_edge_ = std::min(mem_edge_, mhz);
     return true;
 }
 

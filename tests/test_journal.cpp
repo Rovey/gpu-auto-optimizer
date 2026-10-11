@@ -227,3 +227,70 @@ TEST_CASE("an empty journal has no freeze entries") {
     Journal j({}, s.append());
     CHECK(j.freeze_entries().empty());
 }
+
+TEST_CASE("a journal without a memory edge has none") {
+    std::vector<std::string> out;
+    Journal j({"{\"id\":1,\"mem\":2500,\"state\":\"begin\"}", "{\"id\":1,\"state\":\"complete\",\"verdict\":\"WRONG RESULT\"}"},
+              [&](const std::string& l) { out.push_back(l); return true; }, "card-a / 617.42");
+    CHECK(j.mem_edge() == INT_MAX);
+    CHECK(j.ceilings().mem_mhz == INT_MAX);
+}
+
+TEST_CASE("a memory edge is written with the card and driver it was found on, and read back") {
+    std::vector<std::string> out;
+    Journal j({}, [&](const std::string& l) { out.push_back(l); return true; }, "card-a / 617.42");
+    CHECK(j.note_mem_edge(2500));
+    REQUIRE(out.size() == 1);
+    CHECK(out[0].find("\"mem_edge\":2500") != std::string::npos);
+    CHECK(out[0].find("card-a / 617.42") != std::string::npos);
+    CHECK(j.mem_edge() == 2500);
+
+    Journal again(out, [](const std::string&) { return true; }, "card-a / 617.42");
+    CHECK(again.mem_edge() == 2500);
+    CHECK(again.ceilings().mem_mhz == INT_MAX);   // not a freeze
+    CHECK(again.freezes().empty());
+    CHECK(again.next_id() == 1);                  // not a candidate either
+}
+
+TEST_CASE("the lowest memory edge of this card and driver counts") {
+    const std::vector<std::string> lines = {
+        "{\"mem_edge\":2500,\"rig\":\"card-a / 617.42\"}",
+        "{\"mem_edge\":2450,\"rig\":\"card-a / 617.42\"}",
+        "{\"mem_edge\":1200,\"rig\":\"card-b / 617.42\"}",
+        "{\"mem_edge\":900,\"rig\":\"card-a / 620.10\"}",
+    };
+    auto ok = [](const std::string&) { return true; };
+    CHECK(Journal(lines, ok, "card-a / 617.42").mem_edge() == 2450);
+    CHECK(Journal(lines, ok, "card-b / 617.42").mem_edge() == 1200);
+}
+
+TEST_CASE("a memory edge lapses with another driver or another card") {
+    const std::vector<std::string> lines = {"{\"mem_edge\":2500,\"rig\":\"card-a / 617.42\"}"};
+    auto ok = [](const std::string&) { return true; };
+    CHECK(Journal(lines, ok, "card-a / 620.10").mem_edge() == INT_MAX);
+    CHECK(Journal(lines, ok, "card-b / 617.42").mem_edge() == INT_MAX);
+    // Back on the driver it was found with, it counts again.
+    CHECK(Journal(lines, ok, "card-a / 617.42").mem_edge() == 2500);
+}
+
+TEST_CASE("without a card and driver to bind it to, no memory edge is kept or used") {
+    std::vector<std::string> out;
+    Journal j({"{\"mem_edge\":2500,\"rig\":\"\"}", "{\"mem_edge\":2400}"}, [&](const std::string& l) { out.push_back(l); return true; });
+    CHECK(j.mem_edge() == INT_MAX);
+    CHECK(j.note_mem_edge(2300));
+    CHECK(out.empty());
+    CHECK(j.mem_edge() == INT_MAX);
+}
+
+TEST_CASE("memory edges that make no sense are ignored, and a failed write is reported") {
+    const std::vector<std::string> lines = {
+        "{\"mem_edge\":0,\"rig\":\"r\"}", "{\"mem_edge\":-50,\"rig\":\"r\"}", "{\"mem_edge\":4294967305,\"rig\":\"r\"}",
+        "{\"mem_edge\":\"2500\",\"rig\":\"r\"}", "{\"mem_edge\":2500,\"rig\":7}",
+    };
+    Journal j(lines, [](const std::string&) { return false; }, "r");
+    CHECK(j.mem_edge() == INT_MAX);
+    CHECK_FALSE(j.note_mem_edge(2500));
+    CHECK(j.mem_edge() == INT_MAX);
+    CHECK(j.note_mem_edge(0));   // nothing to note
+}
+

@@ -568,8 +568,20 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
     // Memory comes first, at core 0: the core climb is where a card is most
     // likely to give out, and it must not keep the memory from being tuned.
     if (obj.mem_oc) {
-        const int ceiling = journal.ceilings().mem_mhz;
+        int ceiling = journal.ceilings().mem_mhz;
+        // Where the memory gave out in an earlier scan on this card and
+        // driver, the scan does not go again: it stops as far below it as
+        // confirming starts below a reset. A card whose bandwidth rises until
+        // its memory fails would otherwise end every run in a wrong result or
+        // a driver reset (hardware check 95).
+        if (const int edge = journal.mem_edge(); edge != INT_MAX) {
+            const int top = std::max(0, edge - kResetBackoffSteps * kMemStep);
+            log("mem: the memory gave out at " + offset_text(edge) + " in an earlier run on this card and driver; the scan stops at " +
+                offset_text(top));
+            ceiling = std::min(ceiling, top + 1);
+        }
         int reset_at = -1;   // the memory offset at which a reset event ended the scan
+        int gave_out_at = 0; // the offset whose candidate computed a wrong result
         const bool by_bandwidth = static_cast<bool>(io.bandwidth);
         bool left_at_stock = false;   // the measurement does not work: nothing was searched
         if (by_bandwidth) {
@@ -586,13 +598,14 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
                 // memory 0 would read as "never search memory again".
                 const std::optional<int> mem_j = v > 0 ? std::optional<int>(v) : std::nullopt;
                 m.stable = explore(v, reset_at, [&] {
-                    if (!is_stable(clock_candidate(std::nullopt, mem_j, 0, v, kClockProbeS, [&] {
-                            for (int i = 0; i < kBandwidthReadings && !gbps && !failed; ++i) {
-                                gbps = io.bandwidth();
-                                failed = !gbps && !(io.bandwidth_unsettled && io.bandwidth_unsettled());
-                            }
-                        })))
-                        return false;
+                    const auto verdict = clock_candidate(std::nullopt, mem_j, 0, v, kClockProbeS, [&] {
+                        for (int i = 0; i < kBandwidthReadings && !gbps && !failed; ++i) {
+                            gbps = io.bandwidth();
+                            failed = !gbps && !(io.bandwidth_unsettled && io.bandwidth_unsettled());
+                        }
+                    });
+                    if (verdict == Verdict::WrongResult) gave_out_at = v;
+                    if (!is_stable(verdict)) return false;
                     if (gbps) return true;
                     // The candidate passed, the measurement failed: the step is unusable.
                     if (v > 0 && !failed) {
@@ -638,6 +651,12 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
                 reset_event(why);
             }
             left_at_stock = unavailable;
+            // The edge of this card's memory, for the runs after this one. A
+            // reset event counts as much as a wrong result: the scan ended
+            // there because the memory did.
+            if (reset_at > 0) gave_out_at = reset_at;
+            if (gave_out_at > 0 && !journal.note_mem_edge(gave_out_at))
+                log("warning: the memory's edge could not be written to the journal; the next run will find it again");
         }
         if (!by_bandwidth) {
             r.mem_max_stable = climb_to_edge(0, bounds.mem_max_mhz, kMemStep, kMemStride, ceiling, [&](int v) {

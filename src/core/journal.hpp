@@ -30,11 +30,18 @@ struct Freeze {
 // that froze the machine, and it becomes a ceiling for every later run. An
 // offset of 0 is never a ceiling: that would end the search of that clock.
 // Pure: the file lives in hw/app_files, reached through `append`.
+//
+// The journal also remembers where the memory of a card gave out in a scan
+// that finished (a wrong result, a driver reset, a lost device): a card whose
+// bandwidth rises until its memory fails has nothing else to stop a scan, and
+// every run would meet that edge again. Such an edge belongs to a card with a
+// driver, `rig`; with another of either it does not count. An empty rig keeps
+// and uses none.
 class Journal {
 public:
     using Append = std::function<bool(const std::string&)>;
 
-    Journal(const std::vector<std::string>& existing_lines, Append append);
+    Journal(const std::vector<std::string>& existing_lines, Append append, std::string rig = {});
 
     const Ceilings& ceilings() const { return ceilings_; }
     // Human-readable description of each unfinished candidate, in file order:
@@ -43,6 +50,12 @@ public:
     // The same candidates, each with whether it lowered a ceiling.
     const std::vector<Freeze>& freeze_entries() const { return freeze_entries_; }
     int next_id() const { return next_id_; }
+    // The lowest memory offset at which a scan on this rig gave out; INT_MAX
+    // when none is known. Not a ceiling: the search decides how far below it
+    // to stay.
+    int mem_edge() const { return mem_edge_; }
+    // Writes one down. False when the line could not be written.
+    bool note_mem_edge(int mhz);
     // The entry begin() opened and complete() has not closed; -1 when none.
     int open_id() const { return open_id_; }
 
@@ -60,6 +73,8 @@ private:
     // by a power cut, without its newline. The next write starts with '\n'
     // so it is not glued onto that fragment.
     bool torn_tail_ = false;
+    std::string rig_;
+    int mem_edge_ = INT_MAX;
     Ceilings ceilings_;
     std::vector<std::string> freezes_;
     std::vector<Freeze> freeze_entries_;
