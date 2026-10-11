@@ -27,7 +27,8 @@ int fake_shutdown() {
 // as a call into nvml.dll can during a driver reset.
 void faulting_call() {
     ++in_flight;
-    RaiseException(EXCEPTION_ACCESS_VIOLATION, 0, 0, nullptr);
+    const ULONG_PTR read_of[2] = {0, 0x18};
+    RaiseException(EXCEPTION_ACCESS_VIOLATION, 0, 2, read_of);
     --in_flight;
 }
 
@@ -62,7 +63,7 @@ TEST_CASE("NVML is shut down until a driver call has faulted, and never after") 
     gao::app::set_fault_log(nullptr);
     // The fault is written down with where it happened: this program is among the callers.
     REQUIRE(fault_lines.size() == 1);
-    CHECK(fault_lines[0].find("a call into a driver library faulted: ") == 0);
+    CHECK(fault_lines[0].find("a call into a driver library faulted: read of 0x18 at ") == 0);
     CHECK(fault_lines[0].find("app_tests.exe+0x") != std::string::npos);
     CHECK(in_flight == 1);   // the call never left the library
     CHECK(Nvml::Abandoned());

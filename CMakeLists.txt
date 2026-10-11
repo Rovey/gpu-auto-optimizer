@@ -86,7 +86,7 @@ add_library(hw STATIC
   src/hw/update_io.hpp src/hw/update_io.cpp
 )
 target_include_directories(hw PUBLIC src)
-target_link_libraries(hw PUBLIC core d3d11 dxgi d3dcompiler shell32 ole32 winhttp bcrypt version
+target_link_libraries(hw PUBLIC core d3d11 dxgi d3dcompiler shell32 ole32 oleaut32 taskschd winhttp bcrypt version
                       PRIVATE gao_warnings gao_hardening)
 
 # UI-independent application logic shared by both executables.

@@ -590,12 +590,11 @@ bool enable_boot(std::string* message) {
     const auto exe = installed_tray_path();
     const auto u8 = exe.u8string();
     const std::string xml = boot_task_xml(std::string(u8.begin(), u8.end()), "--tray", sid, "PT0S");
-    const auto xml_path = app_dir() / L"BootApply.xml";
-    if (!write_utf16_file(xml_path, xml)) return say("could not write " + xml_path.string(), false);
-    const int code = boot_task_create_xml(xml_path);
-    std::error_code ec;
-    std::filesystem::remove(xml_path, ec);
-    if (code != 0) return say("could not create the task (schtasks exit " + std::to_string(code) + ")", false);
+    if (const long code = boot_task_create(xml); code < 0) {
+        char hex[16];
+        std::snprintf(hex, sizeof(hex), "%08lX", static_cast<unsigned long>(code));
+        return say(std::string("could not create the task (Task Scheduler error 0x") + hex + ")", false);
+    }
     Config cfg = load_config();
     cfg.boot_strikes = 0;
     if (!save_config(cfg)) return say("task created, but could not reset the strike counter", false);
@@ -608,11 +607,11 @@ bool disable_boot(std::string* message) {
     if (!is_elevated()) return say("boot-apply needs administrator rights", false);
     std::string why;
     if (!prepare_state(&why)) return say(why, false);
-    const int code = boot_task_remove();
+    const bool task_removed = boot_task_remove() >= 0;
     const bool removed_now = uninstall_app();
-    return say(std::string("boot-apply off: task ") + (code == 0 ? "removed" : "not removed") + ", installed copy " +
+    return say(std::string("boot-apply off: task ") + (task_removed ? "removed" : "not removed") + ", installed copy " +
                    (removed_now ? "removed" : "in use by the running tray app; it is removed at the next restart"),
-               code == 0);
+               task_removed);
 }
 
 namespace {
@@ -629,16 +628,20 @@ bool logon_copy_is_this_build() {
     return files_equal(dir / L"gao.exe", installed_exe_path()) && files_equal(dir / L"GpuAutoOptimizer.exe", installed_tray_path());
 }
 
-std::string update_logon_copy() {
-    if (!is_elevated() || !boot_task_exists()) return {};
+bool logon_copy_outdated() {
+    if (!boot_task_exists()) return false;
     const auto dir = own_dir();
     std::error_code ec;
-    if (dir.empty() || std::filesystem::equivalent(dir, installed_dir(), ec)) return {};
-    if (!std::filesystem::exists(installed_exe_path(), ec) || logon_copy_is_this_build()) return {};
+    if (dir.empty() || std::filesystem::equivalent(dir, installed_dir(), ec)) return false;
+    if (!std::filesystem::exists(installed_exe_path(), ec) || logon_copy_is_this_build()) return false;
     // Never a downgrade: an old zip that is still lying around must not
     // replace a newer installed copy just because it was started.
     const auto installed = file_version_number(installed_exe_path());
-    if (installed && *installed > kVersionNumber) return {};
+    return !(installed && *installed > kVersionNumber);
+}
+
+std::string update_logon_copy() {
+    if (!is_elevated() || !logon_copy_outdated()) return {};
     std::string message;
     if (!enable_boot(&message)) return "The copy that starts at logon could not be updated: " + message;
     return "The copy that starts at logon was updated to this version (" + std::string(kVersion) + ").";

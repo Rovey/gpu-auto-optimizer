@@ -14,18 +14,23 @@
 namespace gao::app {
 
 namespace {
-// The stack at the last caught fault, taken in the exception filter: the
-// frames of the fault are still there then. Plain data, nothing allocated.
+// The last caught fault, taken in the exception filter: the frames of the
+// fault are still there then. Plain data, nothing allocated.
 struct FaultSite {
     void* frames[32];
     unsigned short count = 0;
+    ULONG_PTR access = 0;    // 0 a read, 1 a write, 8 an execute
+    ULONG_PTR address = 0;   // of what could not be accessed
 };
 thread_local FaultSite t_fault;
 std::atomic<void (*)(const std::string&)> g_fault_log{nullptr};
 
-int fault_filter(unsigned long code) {
-    if (code != EXCEPTION_ACCESS_VIOLATION) return EXCEPTION_CONTINUE_SEARCH;
+int fault_filter(const EXCEPTION_POINTERS* info) {
+    const EXCEPTION_RECORD& record = *info->ExceptionRecord;
+    if (record.ExceptionCode != EXCEPTION_ACCESS_VIOLATION) return EXCEPTION_CONTINUE_SEARCH;
     t_fault.count = RtlCaptureStackBackTrace(0, 32, t_fault.frames, nullptr);
+    t_fault.access = record.NumberParameters >= 2 ? record.ExceptionInformation[0] : 0;
+    t_fault.address = record.NumberParameters >= 2 ? record.ExceptionInformation[1] : 0;
     return EXCEPTION_EXECUTE_HANDLER;
 }
 
@@ -38,12 +43,16 @@ bool guarded(void (*fn)(void*), void* ctx) {
     __try {
         fn(ctx);
         return true;
-    } __except (fault_filter(GetExceptionCode())) {
+    } __except (fault_filter(GetExceptionInformation())) {
         return false;
     }
 }
 
 std::string last_fault() {
+    if (t_fault.count == 0) return {};
+    char what[48];
+    std::snprintf(what, sizeof(what), "%s 0x%llx at ", t_fault.access == 1 ? "write to" : t_fault.access == 8 ? "execute of" : "read of",
+                  static_cast<unsigned long long>(t_fault.address));
     std::string out;
     for (unsigned i = 0; i < t_fault.count; ++i) {
         HMODULE module = nullptr;
@@ -59,7 +68,7 @@ std::string last_fault() {
         if (!out.empty()) out += " < ";
         out += name + site;
     }
-    return out;
+    return what + out;
 }
 
 void set_fault_log(void (*sink)(const std::string&)) { g_fault_log = sink; }

@@ -4,6 +4,8 @@
 #define NOMINMAX
 #include <windows.h>
 #include <sddl.h>
+#include <taskschd.h>
+#include <wrl/client.h>
 #include <cstdlib>
 #include <fstream>
 #include <iterator>
@@ -11,27 +13,6 @@
 #include <vector>
 
 namespace gao {
-
-static int run_schtasks(const std::wstring& args) {
-    // Full path: --boot runs elevated, and a bare name would let the current
-    // or the exe's folder supply a different schtasks.exe.
-    wchar_t sys[MAX_PATH];
-    const UINT n = GetSystemDirectoryW(sys, MAX_PATH);
-    if (n == 0 || n >= MAX_PATH) return -1;
-    const std::wstring app = std::wstring(sys) + L"\\schtasks.exe";
-    std::wstring cmd = L"\"" + app + L"\" " + args;
-    STARTUPINFOW si{};
-    si.cb = sizeof(si);
-    PROCESS_INFORMATION pi{};
-    if (!CreateProcessW(app.c_str(), cmd.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi))
-        return -1;
-    WaitForSingleObject(pi.hProcess, INFINITE);
-    DWORD code = 1;
-    GetExitCodeProcess(pi.hProcess, &code);
-    CloseHandle(pi.hThread);
-    CloseHandle(pi.hProcess);
-    return static_cast<int>(code);
-}
 
 std::filesystem::path installed_dir() {
     const auto pf = program_files_dir();
@@ -130,19 +111,86 @@ std::string current_user_sid() {
     return out;
 }
 
-bool write_utf16_file(const std::filesystem::path& p, const std::string& utf8) {
-    const std::wstring w = widen(utf8);
-    std::ofstream out(p, std::ios::binary | std::ios::trunc);
-    const unsigned char bom[] = {0xFF, 0xFE};
-    out.write(reinterpret_cast<const char*>(bom), 2);
-    out.write(reinterpret_cast<const char*>(w.data()), static_cast<std::streamsize>(w.size() * sizeof(wchar_t)));
-    return static_cast<bool>(out);
+namespace {
+
+// The task \GpuAutoOptimizer\BootApply, through the Task Scheduler's own
+// interface. (Until 0.4.0 this started schtasks.exe; an unsigned program that
+// starts schtasks to create a task with the highest rights is what malware
+// does too, and reads like it to an antivirus.)
+constexpr wchar_t kTaskFolder[] = L"\\GpuAutoOptimizer";
+constexpr wchar_t kTaskName[] = L"BootApply";
+
+struct Bstr {
+    BSTR text;
+    explicit Bstr(const wchar_t* s) : text(SysAllocString(s)) {}
+    ~Bstr() { SysFreeString(text); }
+    Bstr(const Bstr&) = delete;
+    Bstr& operator=(const Bstr&) = delete;
+};
+
+// COM on this thread for one call. A thread that already runs COM in the
+// other mode keeps it: the Task Scheduler works in both.
+struct Com {
+    const HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    ~Com() { if (SUCCEEDED(hr)) CoUninitialize(); }
+    bool usable() const { return SUCCEEDED(hr) || hr == RPC_E_CHANGED_MODE; }
+};
+
+// The root folder of the local Task Scheduler.
+HRESULT task_root(Microsoft::WRL::ComPtr<ITaskFolder>& root) {
+    Microsoft::WRL::ComPtr<ITaskService> service;
+    HRESULT hr = CoCreateInstance(CLSID_TaskScheduler, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&service));
+    if (FAILED(hr)) return hr;
+    VARIANT none;
+    VariantInit(&none);
+    hr = service->Connect(none, none, none, none);
+    if (FAILED(hr)) return hr;
+    const Bstr path(L"\\");
+    return service->GetFolder(path.text, &root);
 }
 
-int boot_task_create_xml(const std::filesystem::path& xml_file) {
-    return run_schtasks(L"/Create /F /TN \\GpuAutoOptimizer\\BootApply /XML \"" + xml_file.wstring() + L"\"");
 }
-int boot_task_remove() { return run_schtasks(L"/Delete /F /TN \\GpuAutoOptimizer\\BootApply"); }
-bool boot_task_exists() { return run_schtasks(L"/Query /TN \\GpuAutoOptimizer\\BootApply") == 0; }
+
+long boot_task_create(const std::string& xml) {
+    const Com com;
+    if (!com.usable()) return com.hr;
+    Microsoft::WRL::ComPtr<ITaskFolder> root, folder;
+    HRESULT hr = task_root(root);
+    if (FAILED(hr)) return hr;
+    VARIANT none;
+    VariantInit(&none);
+    const Bstr folder_path(kTaskFolder);
+    if (FAILED(root->GetFolder(folder_path.text, &folder))) {
+        hr = root->CreateFolder(folder_path.text, none, &folder);
+        if (FAILED(hr)) return hr;
+    }
+    // Who the task runs as, and with which rights, is in the XML.
+    const Bstr name(kTaskName), text(widen(xml).c_str());
+    Microsoft::WRL::ComPtr<IRegisteredTask> task;
+    return folder->RegisterTask(name.text, text.text, TASK_CREATE_OR_UPDATE, none, none, TASK_LOGON_INTERACTIVE_TOKEN, none, &task);
+}
+
+long boot_task_remove() {
+    const Com com;
+    if (!com.usable()) return com.hr;
+    Microsoft::WRL::ComPtr<ITaskFolder> root, folder;
+    HRESULT hr = task_root(root);
+    if (FAILED(hr)) return hr;
+    const Bstr folder_path(kTaskFolder), name(kTaskName);
+    hr = root->GetFolder(folder_path.text, &folder);
+    if (FAILED(hr)) return hr;
+    return folder->DeleteTask(name.text, 0);
+}
+
+bool boot_task_exists() {
+    const Com com;
+    if (!com.usable()) return false;
+    Microsoft::WRL::ComPtr<ITaskFolder> root, folder;
+    if (FAILED(task_root(root))) return false;
+    const Bstr folder_path(kTaskFolder), name(kTaskName);
+    if (FAILED(root->GetFolder(folder_path.text, &folder))) return false;
+    Microsoft::WRL::ComPtr<IRegisteredTask> task;
+    return SUCCEEDED(folder->GetTask(name.text, &task));
+}
 
 }
