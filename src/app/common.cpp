@@ -13,6 +13,7 @@
 #include "hw/boot_task.hpp"
 #include "hw/gpu_control.hpp"
 #include "hw/nvapi.hpp"
+#include "hw/nvidia_app.hpp"
 #include "hw/nvml.hpp"
 #include "hw/stress.hpp"
 #include "hw/update_io.hpp"
@@ -161,6 +162,11 @@ struct KeepAwake {
 
 constexpr double kLongRunS = 300;      // as the soaks: the two sides of the comparison last equally long
 
+constexpr const char* kAutoTuningRefusal =
+    "Automatic Tuning is switched on in the NVIDIA app: NVIDIA's own scanner loads the card and changes its clocks when it sees fit, "
+    "also in the middle of a run. Switch it off (NVIDIA app, System, Performance) and start again. If the NVIDIA app shows it as off "
+    "already, restart the PC and look again";
+
 // Why no run starts next to another tuning tool (core/search.hpp); empty when
 // none runs. A list of programs that cannot be had reads as none: this check
 // is a courtesy, the run's own verifications are what it relies on.
@@ -176,7 +182,11 @@ std::string other_tool() {
         running.push_back(std::move(name));
     }
     CloseHandle(snap);
-    return other_tool_refusal(running);
+    if (const std::string tool = other_tool_refusal(running); !tool.empty()) return tool;
+    // The NVIDIA app may run; its Automatic Tuning may not be on. Unknown
+    // (nothing documents where it is kept) counts as off.
+    if (nvidia_auto_tuning().value_or(false)) return kAutoTuningRefusal;
+    return {};
 }
 // After a measurement at stock that the temperature stopped: without load,
 // this far below it before the run loads the card again, or this long. The

@@ -84,6 +84,7 @@ add_library(hw STATIC
   src/hw/app_files.hpp src/hw/app_files.cpp
   src/hw/boot_task.hpp src/hw/boot_task.cpp
   src/hw/update_io.hpp src/hw/update_io.cpp
+  src/hw/nvidia_app.hpp src/hw/nvidia_app.cpp
 )
 target_include_directories(hw PUBLIC src)
 target_link_libraries(hw PUBLIC core d3d11 dxgi d3dcompiler shell32 ole32 oleaut32 taskschd winhttp bcrypt version
@@ -160,6 +161,7 @@ add_executable(app_tests
   tests/test_main.cpp
   tests/test_driver_fault.cpp
   tests/test_run_log.cpp
+  tests/test_nvidia_app.cpp
 )
 target_link_libraries(app_tests PRIVATE app doctest gao_warnings)
 add_test(NAME app_tests COMMAND app_tests)
