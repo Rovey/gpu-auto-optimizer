@@ -228,7 +228,7 @@ From 0.3.1 on, click **Update available** at the bottom left of the window. From
 
 Not during a run: a run does not start while MSI Afterburner or RivaTuner Statistics Server (`MSIAfterburner.exe`, `RTSS.exe`) is running, and says which one to close. Close it completely, also its icon in the notification area, and switch off its start with Windows if it applies settings there. Outside a run they can coexist as long as only one of them applies settings: if Afterburner applies an offset while GPU Auto Optimizer keeps its tune applied, the watchdog notices, says so in a notification and leaves the settings alone.
 
-The NVIDIA app can stay installed. Two of its features get in the way of a run: **Automatic Tuning** (System, Performance) applies an overclock of its own and scans again from time to time, so switch it off, for a run and for as long as you keep a tune of this app applied; and the **overlay** (Alt+Z) draws on programs that use the card, so leave it closed while a run is going.
+The NVIDIA app can stay installed. Two of its features get in the way of a run: **Automatic Tuning** (System, Performance) applies an overclock of its own and scans again from time to time, so switch it off, for a run and for as long as you keep a tune of this app applied; and the **overlay** (Alt+Z) draws on programs that use the card, so leave it closed while a run is going. A run does not start while Automatic Tuning is on, and `gao --status` shows what the app reads (`nvidia app: Automatic Tuning off`). The overlay it cannot see: that one is yours to keep closed.
 </details>
 
 <details>
