@@ -93,11 +93,11 @@ MemScanEnd bandwidth_scan(int lo, int hi, int step, int ceiling, const std::func
     return end;
 }
 
-int precise_top(const MemScanEnd& end, int lo, int step, int known_edge) {
+int second_pass_top(const MemScanEnd& end, int lo, int step, int known_edge) {
     // The lowest offset that is known, or has to be assumed, not to hold.
     int bound = end.top + step;
     if (end.why == MemScanEnd::Why::Limit && known_edge != INT_MAX && known_edge > bound) bound = known_edge;
-    return std::max(lo, bound - step - kPreciseMarginSteps * step);
+    return std::max(lo, bound - step - kPeakMarginSteps * step);
 }
 
 int bandwidth_peak_below(int top, int lo, int step, const std::function<MemSample(int)>& sample) {
@@ -632,9 +632,8 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
         if (by_bandwidth) {
             bool unavailable = false;
             // One step of either pass: the candidate, then the reading while
-            // it is still applied. `precise`: with the long copy.
-            const auto sample = [&](int v, bool precise) {
-                const auto& read = precise && io.bandwidth_precise ? io.bandwidth_precise : io.bandwidth;
+            // it is still applied. `again`: in the second pass.
+            const auto sample = [&](int v, bool again) {
                 MemSample m;
                 // One reading. One that only did not settle is taken again,
                 // kBandwidthReadings times at most; any other failure ends
@@ -648,7 +647,7 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
                 m.stable = explore(v, reset_at, [&] {
                     const auto verdict = clock_candidate(std::nullopt, mem_j, 0, v, kClockProbeS, [&] {
                         for (int i = 0; i < kBandwidthReadings && !gbps && !failed; ++i) {
-                            gbps = read();
+                            gbps = io.bandwidth();
                             failed = !gbps && !(io.bandwidth_unsettled && io.bandwidth_unsettled());
                         }
                     });
@@ -678,21 +677,19 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
                 if (m.stable) {
                     m.gbps = *gbps;
                     char buf[64];
-                    std::snprintf(buf, sizeof(buf), "mem +%d: bandwidth %.1f GB/s%s", v, m.gbps,
-                                  precise && io.bandwidth_precise ? ", the long copy" : "");
+                    std::snprintf(buf, sizeof(buf), "mem +%d: bandwidth %.1f GB/s%s", v, m.gbps, again ? ", read again" : "");
                     log(buf);
                 }
                 return m;
             };
             const MemScanEnd end = bandwidth_scan(0, bounds.mem_max_mhz, kMemStep, ceiling, [&](int v) { return sample(v, false); });
-            int peak = precise_top(end, 0, kMemStep, journal.mem_edge());
+            int peak = second_pass_top(end, 0, kMemStep, journal.mem_edge());
             // The second pass, when there is something to read and the scan
             // left the card in a state to read it: not after a reset event
             // (nothing new is explored then, and confirming starts
             // kResetBackoffSteps below `peak`), not on a stopped run.
             if (!unavailable && stopped.empty() && !explored_enough && peak > 0) {
-                log("mem: the scan passed " + offset_text(end.top) + "; reading from " + offset_text(peak) + " down" +
-                    (io.bandwidth_precise ? " with the long copy" : " once more"));
+                log("mem: the scan passed " + offset_text(end.top) + "; reading again from " + offset_text(peak) + " down");
                 peak = bandwidth_peak_below(peak, 0, kMemStep, [&](int v) { return sample(v, true); });
             }
             // An unavailable measurement ended the scan at +0, and nothing

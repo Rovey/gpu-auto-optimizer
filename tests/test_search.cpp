@@ -131,14 +131,14 @@ struct FakeCard {
     bool lost_on_first_core_confirm = false;   // the first 30 s probe with a non-zero core offset ends DEVICE LOST
     bool lost_on_first_mem_confirm = false;    // the first 30 s probe with a non-zero memory offset ends DEVICE LOST
     int bw_measurements = 0;         // bandwidth measurements taken with the short copy
-    // The long copy. Quiet unless bw_precise_noise says otherwise, and from
-    // this memory offset on it takes the device down, as it did on the
-    // reference card at its edge (hardware check 95).
-    int bw_precise_loses_device_from = INT_MAX;
-    std::function<double(int mem, int nth)> bw_precise_noise;
-    int bw_precise_measurements = 0;
-    int max_precise_mem = -1;        // the highest offset it was taken at
-    std::map<int, int> bw_precise_at;
+    // The readings of the second pass: those taken below an offset the card
+    // has already been at. bw_again_noise: what they are off by, when that is
+    // to differ from bw_noise. From bw_again_loses_device_from on, such a
+    // reading takes the device down.
+    int bw_again_loses_device_from = INT_MAX;
+    std::function<double(int mem, int nth)> bw_again_noise;
+    int bw_again_measurements = 0;
+    int max_again_mem = -1;          // the highest offset one was taken at
     bool bw_fails_at_zero = false;   // the measurement at memory +0 fails; nothing is wrong with the card
     bool lost_on_first_soak = false;      // the first 300 s probe ends DEVICE LOST
     bool fail_set_on_first_soak = false;  // the first write of the soak state fails once
@@ -304,7 +304,6 @@ struct Run {
     bool no_rest = false;            // the application gives the search no way to wait
     std::optional<StabilityResult> stock;   // the measurement at stock that went before the run, when there was one
     std::string rig = "card-a / 617.42";    // the card and driver the journal's memory edges are bound to
-    bool no_precise = false;                // the application gives the search one way of measuring bandwidth only
     std::vector<std::pair<std::string, double>> steps;   // what the search said it was doing, and for how long
     OptimizeResult go(Preset preset, GpuControl gpu) {
         Journal j(card.journal, [this](const std::string& l) {
@@ -336,8 +335,16 @@ struct Run {
             };
         if (card.bw_curve)
             io.bandwidth = [this]() -> std::optional<double> {
-                ++card.bw_measurements;
                 const int nth = card.bw_readings_at[card.mem]++;
+                if (card.mem < card.max_mem_seen) {   // the second pass
+                    ++card.bw_again_measurements;
+                    card.max_again_mem = std::max(card.max_again_mem, card.mem);
+                    card.bw_unsettled = false;
+                    if (card.mem >= card.bw_again_loses_device_from) { card.driver_reset(); return std::nullopt; }
+                    const auto& noise = card.bw_again_noise ? card.bw_again_noise : card.bw_noise;
+                    return card.bw_curve(card.mem) * (noise ? noise(card.mem, nth) : 1.0);
+                }
+                ++card.bw_measurements;
                 card.bw_unsettled = card.mem == card.bw_unsettled_at_mem || (card.mem == card.bw_unsettled_once_at_mem && nth == 0);
                 if (card.bw_unsettled) return std::nullopt;
                 if (card.bw_loses_device) { card.driver_reset(); return std::nullopt; }
@@ -349,15 +356,6 @@ struct Run {
                 }
                 if (card.bw_fails) return std::nullopt;
                 return card.bw_curve(card.mem) * (card.bw_noise ? card.bw_noise(card.mem, nth) : 1.0);
-            };
-        if (card.bw_curve && !no_precise)
-            io.bandwidth_precise = [this]() -> std::optional<double> {
-                ++card.bw_precise_measurements;
-                const int nth = card.bw_precise_at[card.mem]++;
-                card.max_precise_mem = std::max(card.max_precise_mem, card.mem);
-                card.bw_unsettled = false;
-                if (card.mem >= card.bw_precise_loses_device_from) { card.driver_reset(); return std::nullopt; }
-                return card.bw_curve(card.mem) * (card.bw_precise_noise ? card.bw_precise_noise(card.mem, nth) : 1.0);
             };
         if (card.bw_curve) io.bandwidth_unsettled = [this] { return card.bw_unsettled; };
         io.measuring = [this](const std::string& what, double seconds) { steps.emplace_back(what, seconds); };
@@ -783,31 +781,31 @@ TEST_CASE("the bandwidth scan samples lo and respects the ceiling") {
     CHECK(none.why == MemScanEnd::Why::Failed);
 }
 
-TEST_CASE("the long copy stays four steps below the highest step the scan passed") {
+TEST_CASE("the second pass begins four steps below the highest step the scan passed") {
     using Why = MemScanEnd::Why;
     // The step above +2500 failed: +2500 passed, so +2300.
-    CHECK(precise_top({2500, Why::Failed}, 0, 50, INT_MAX) == 2300);
+    CHECK(second_pass_top({2500, Why::Failed}, 0, 50, INT_MAX) == 2300);
     // +1000 passed and had lost bandwidth: +800.
-    CHECK(precise_top({1000, Why::Dropped}, 0, 50, INT_MAX) == 800);
+    CHECK(second_pass_top({1000, Why::Dropped}, 0, 50, INT_MAX) == 800);
     // The driver's range, or the ceiling of a freeze: nothing failed, and the
     // margin is kept all the same. What is above was never tried.
-    CHECK(precise_top({3000, Why::Limit}, 0, 50, INT_MAX) == 2800);
+    CHECK(second_pass_top({3000, Why::Limit}, 0, 50, INT_MAX) == 2800);
     // Never below lo, and a scan that passed nothing reads nothing above it.
-    CHECK(precise_top({150, Why::Failed}, 0, 50, INT_MAX) == 0);
-    CHECK(precise_top({0, Why::Failed}, 0, 50, INT_MAX) == 0);
+    CHECK(second_pass_top({150, Why::Failed}, 0, 50, INT_MAX) == 0);
+    CHECK(second_pass_top({0, Why::Failed}, 0, 50, INT_MAX) == 0);
 }
 
 TEST_CASE("a scan held below a known edge counts the margin from that edge, once") {
     using Why = MemScanEnd::Why;
     // The run that found the edge at +2550 read from +2300. The run after it is
     // held at +2350 and reads from +2300 as well, not from +2150.
-    CHECK(precise_top({2500, Why::Failed}, 0, 50, INT_MAX) == 2300);
-    CHECK(precise_top({2350, Why::Limit}, 0, 50, 2550) == 2300);
+    CHECK(second_pass_top({2500, Why::Failed}, 0, 50, INT_MAX) == 2300);
+    CHECK(second_pass_top({2350, Why::Limit}, 0, 50, 2550) == 2300);
     // A step that failed below the known edge counts, not the edge.
-    CHECK(precise_top({2000, Why::Failed}, 0, 50, 2550) == 1800);
-    CHECK(precise_top({2000, Why::Dropped}, 0, 50, 2550) == 1800);
+    CHECK(second_pass_top({2000, Why::Failed}, 0, 50, 2550) == 1800);
+    CHECK(second_pass_top({2000, Why::Dropped}, 0, 50, 2550) == 1800);
     // An edge that is no higher than where the scan got changes nothing.
-    CHECK(precise_top({2350, Why::Limit}, 0, 50, 2400) == 2150);
+    CHECK(second_pass_top({2350, Why::Limit}, 0, 50, 2400) == 2150);
 }
 
 TEST_CASE("the second pass goes down from the top and keeps the lowest offset within the tie") {
@@ -832,8 +830,8 @@ TEST_CASE("the second pass goes down from the top and keeps the lowest offset wi
 
     // A flat curve keeps the lowest offset there is.
     CHECK(bandwidth_peak_below(400, 0, 50, [](int v) { return MemSample{true, 500.0 + ((v / 50) % 2)}; }) == 0);
-    // Readings that scatter by twice what the long copy does on the 4070 leave
-    // a flat curve at the bottom.
+    // Readings that scatter by twice what they do on a quiet 4070 leave a flat
+    // curve at the bottom.
     CHECK(bandwidth_peak_below(400, 0, 50, [](int v) { return MemSample{true, 500.0 * (1 + (((v / 50) % 3) - 1) * 0.004)}; }) == 0);
 }
 
@@ -870,12 +868,12 @@ TEST_CASE("memory search stops at the bandwidth peak, not the stability edge") {
     const auto r = run.go(Preset::BestOfMyGpu);
     REQUIRE(r.ok);
     // The scan ends at +1000, the first step that has lost 5 % (7.8 % below
-    // the peak at +900), far below the first wrong result at +1450. The long
-    // copy reads from four steps below that, +800, and keeps +800: the peak
+    // the peak at +900), far below the first wrong result at +1450. The second
+    // pass reads from four steps below that, +800, and keeps +800: the peak
     // itself is inside the margin. That is the price of the margin on a card
     // that has a peak.
     CHECK(run.card.max_mem_seen == 1000);
-    CHECK(run.card.max_precise_mem == 800);
+    CHECK(run.card.max_again_mem == 800);
     CHECK(r.mem_max_stable == 800);
     CHECK(r.mem_confirmed == 800);
     CHECK(r.mem_mhz == 550);
@@ -2308,7 +2306,7 @@ TEST_CASE("a failed bandwidth measurement ends the memory scan; the core is stil
     REQUIRE(r.ok);
     CHECK(r.driver_resets == 1);
     // The scan samples +0 .. +300. +250 was the highest step that passed, so
-    // the long copy would read from +50; after a reset nothing is read, and
+    // the second pass would begin at +50; after a reset nothing is read, and
     // confirming starts four steps below that, which is stock. The +0 sample
     // names no clock in the journal.
     CHECK(mem_begins(run.card) == climb(50, 300, 50));
@@ -2319,7 +2317,7 @@ TEST_CASE("a failed bandwidth measurement ends the memory scan; the core is stil
     CHECK(run.logged("mem +0: bandwidth 500.0 GB/s"));
     CHECK(run.card.max_mem_seen == 300);
     CHECK(run.card.bw_measurements == 7);
-    CHECK(run.card.bw_precise_measurements == 0);
+    CHECK(run.card.bw_again_measurements == 0);
     CHECK(r.mem_max_stable == 50);
     CHECK(r.mem_confirmed == 0);
     CHECK(r.mem_mhz == 0);
@@ -2344,10 +2342,10 @@ TEST_CASE("bandwidth readings that do not settle end the memory scan and are no 
     CHECK_FALSE(run.logged("treated as a driver reset"));
     CHECK(run.logged("mem +300: the bandwidth readings did not settle; the memory scan ends here"));
     // The scan ends at +300; +250 was the highest step that passed, so the
-    // long copy reads from +50, and the confirm probe runs at what it kept,
+    // second pass begins at +50, and the confirm probe runs at what it kept,
     // not four steps below that.
     CHECK(run.card.max_mem_seen == 300);
-    CHECK(run.card.max_precise_mem == 50);
+    CHECK(run.card.max_again_mem == 50);
     CHECK(r.mem_max_stable == 50);
     CHECK(r.mem_confirmed == 50);
     // The core is searched as in a run without any event.
@@ -2585,7 +2583,7 @@ TEST_CASE("the +0 sample of the bandwidth scan journals no clock") {
     run.card.bw_curve = [](int m) { return 500 + m * 0.3; };
     const auto r = run.go(Preset::BestOfMyGpu);
     REQUIRE(r.ok);
-    CHECK(r.mem_max_stable == 600);   // +800 passed; the long copy read from +600
+    CHECK(r.mem_max_stable == 600);   // +800 passed; the second pass began at +600
     // The first entry of the run is the +0 sample: it ran and was measured,
     // and its `begin` line names neither clock.
     CHECK(run.logged("core +0 / mem +0: STABLE"));
@@ -3059,7 +3057,7 @@ TEST_CASE("one bandwidth reading that is far too high does not end the memory sc
     CHECK(run.card.max_mem_seen == 2550);   // the scan went to the first wrong result
     CHECK(run.logged("mem +0: bandwidth 434.0 GB/s"));
     CHECK(run.card.bw_measurements == 51);   // +0 .. +2500, each once: no step was in doubt
-    // +2500 passed; the long copy reads from +2300 down, and +2200 is the
+    // +2500 passed; the second pass reads from +2300 down, and +2200 is the
     // lowest offset within 1 % of what it read there.
     CHECK(r.mem_max_stable == 2200);
     CHECK(r.mem_mhz == 1500);
@@ -3083,29 +3081,27 @@ TEST_CASE("one low bandwidth reading does not end the memory scan; three low one
         const auto r = run.go(Preset::BestOfMyGpu);
         REQUIRE(r.ok);
         CHECK(run.card.bw_readings_at[1000] == kBandwidthReadings);
-        CHECK(run.logged("mem: the scan passed +1000; reading from +800 down with the long copy"));
+        CHECK(run.logged("mem: the scan passed +1000; reading again from +800 down"));
         CHECK(run.card.max_mem_seen == 1000);
-        CHECK(run.card.max_precise_mem == 800);
+        CHECK(run.card.max_again_mem == 800);
         CHECK(r.mem_max_stable == 700);   // the lowest offset within 1 % of the reading at +800
     }
 }
 
 TEST_CASE("readings that scatter as they do on the reference card leave the memory scan where the card puts it") {
-    // Measured there: the short copy scatters by 0.4 to 1.3 % (standard
-    // deviation), the long one by 0.2 %. The worst of the first and a little
-    // more than the second here, on two hundred different days. Every scan
-    // gets to the first wrong result, and the offset that is kept moves by
-    // four steps.
+    // Measured there: readings scatter by 0.2 % on a card that is left alone
+    // (hardware check 96). A little more than that here, on two hundred
+    // different days. Every scan gets to the first wrong result, and the
+    // offset that is kept moves by five steps: +2050 to +2300.
     for (unsigned seed = 1; seed <= 200; ++seed) {
         Run run = rising_to_the_edge();
-        run.card.bw_noise = scatter(seed, 0.013);
-        run.card.bw_precise_noise = scatter(seed + 1000, 0.0025);
+        run.card.bw_noise = scatter(seed, 0.0025);
         const auto r = run.go(Preset::BestOfMyGpu);
         CAPTURE(seed);
         REQUIRE(r.ok);
         CHECK(run.card.max_mem_seen == 2550);
-        CHECK(run.card.max_precise_mem == 2300);
-        CHECK(r.mem_max_stable >= 2100);
+        CHECK(run.card.max_again_mem == 2300);
+        CHECK(r.mem_max_stable >= 2050);
         CHECK(r.mem_max_stable <= 2300);
     }
 }
@@ -3118,7 +3114,6 @@ TEST_CASE("a real peak is still found where it is when the readings scatter") {
         run.card.mem_edge = 1400;
         run.card.bw_curve = [](int m) { return m <= 900 ? 500 + m * 0.3 : 770 - (m - 900) * 0.6; };
         run.card.bw_noise = scatter(seed, 0.013);
-        run.card.bw_precise_noise = scatter(seed + 1000, 0.0045);
         const auto r = run.go(Preset::BestOfMyGpu);
         CAPTURE(seed);
         REQUIRE(r.ok);
@@ -3126,7 +3121,7 @@ TEST_CASE("a real peak is still found where it is when the readings scatter") {
         // scan ends at one of the two, now and then one step later.
         CHECK(run.card.max_mem_seen >= 950);
         CHECK(run.card.max_mem_seen <= 1050);
-        CHECK(run.card.max_precise_mem <= run.card.max_mem_seen - kPreciseMarginSteps * 50);
+        CHECK(run.card.max_again_mem <= run.card.max_mem_seen - kPeakMarginSteps * 50);
         CHECK(r.mem_max_stable >= 700);
         CHECK(r.mem_max_stable <= 900);
     }
@@ -3173,9 +3168,8 @@ OptimizeResult again(Run& run) {
     run.card.max_mem_seen = 0;
     run.card.bw_measurements = 0;
     run.card.bw_readings_at.clear();
-    run.card.bw_precise_measurements = 0;
-    run.card.bw_precise_at.clear();
-    run.card.max_precise_mem = -1;
+    run.card.bw_again_measurements = 0;
+    run.card.max_again_mem = -1;
     return run.go(Preset::BestOfMyGpu);
 }
 
@@ -3204,7 +3198,7 @@ TEST_CASE("the next run stays four steps below the memory edge of the run before
     CHECK(second.driver_resets == 0);
     // The same offset as the run that found the edge: the margin counts from
     // the edge, not a second time from where the scan was held.
-    CHECK(run.card.max_precise_mem == 2300);
+    CHECK(run.card.max_again_mem == 2300);
     CHECK(second.mem_max_stable == first.mem_max_stable);
     CHECK(second.mem_max_stable == 2200);
     CHECK(second.mem_mhz == 1500);
@@ -3272,34 +3266,32 @@ TEST_CASE("a scan that ended for another reason leaves no memory edge") {
 
 namespace {
 
-// The reference RTX 4070 as hardware check 95 found it: bandwidth rises by
-// 0.4 % a step until the memory gives out, the stress load computes right up
-// to +2500 and wrong at +2550, and the long copy takes the device down from
-// +2450 on (in five scans out of five; once the machine went with it). The
-// short copy got through there in the one scan that took it that far.
+// The reference RTX 4070: bandwidth rises by 0.4 % a step until the memory
+// gives out, and the stress load computes right up to +2500 and wrong at
+// +2550. Nothing announces that edge (hardware checks 94 and 95).
 Run reference_card() {
     Run run = recovering();
     run.card.mem_edge = 2500;
     run.card.ranges = ClockOffsetRanges{{-500, 1000}, {-1000, 3000}};
     run.card.bw_curve = [](int m) { return 434.0 * (1 + 0.004 * m / 50); };
-    run.card.bw_precise_loses_device_from = 2450;
     return run;
 }
 
 }
 
-TEST_CASE("on a card whose long copy loses the device at the edge, the first run never takes it there") {
+TEST_CASE("on a card whose bandwidth rises to the edge, the offset is read again well below it") {
     Run run = reference_card();
     const auto r = run.go(Preset::BestOfMyGpu);
     REQUIRE(r.ok);
     // The scan finds the end with the short copy and the stress load.
     CHECK(run.card.max_mem_seen == 2550);
     CHECK(run.logged("core +0 / mem +2550: WRONG RESULT"));
-    CHECK(run.logged("mem: the scan passed +2500; reading from +2300 down with the long copy"));
-    // The long copy: four readings, none above +2300, and the device stayed.
-    CHECK(run.card.max_precise_mem == 2300);
-    CHECK(run.card.bw_precise_measurements == 4);
-    CHECK(run.logged("mem +2300: bandwidth 513.9 GB/s, the long copy"));
+    CHECK(run.logged("mem: the scan passed +2500; reading again from +2300 down"));
+    // The second pass: four readings, none above +2300.
+    CHECK(run.card.max_again_mem == 2300);
+    CHECK(run.card.bw_readings_at[2300] == 2);   // once going up, once coming down
+    CHECK(run.card.bw_again_measurements == 4);
+    CHECK(run.logged("mem +2300: bandwidth 513.9 GB/s, read again"));
     CHECK(r.driver_resets == 0);
     CHECK(run.card.recover_calls == 0);
     CHECK_FALSE(run.logged("treated as a driver reset"));
@@ -3310,15 +3302,15 @@ TEST_CASE("on a card whose long copy loses the device at the edge, the first run
     const auto second = again(run);
     REQUIRE(second.ok);
     CHECK(run.card.max_mem_seen == 2350);
-    CHECK(run.card.max_precise_mem == 2300);
+    CHECK(run.card.max_again_mem == 2300);
     CHECK(second.driver_resets == 0);
     CHECK(second.mem_mhz == 1500);
     check_journal_rules(run);
 }
 
-TEST_CASE("the long copy stays below the margin on that card whatever the readings do") {
-    // Short readings that scatter as the worst series measured, with a high
-    // and a low stretch thrown in; the long copy at twice its measured scatter.
+TEST_CASE("the second pass stays below the margin on that card whatever the readings do") {
+    // Readings that scatter as the worst series measured next to another
+    // program, in both passes, with a high and a low stretch thrown in.
     for (unsigned seed = 1; seed <= 40; ++seed) {
         Run run = reference_card();
         const auto noise = scatter(seed, 0.013);
@@ -3327,45 +3319,40 @@ TEST_CASE("the long copy stays below the margin on that card whatever the readin
             const double level = n > 10 && n <= 20 ? 1.018 : n > 30 + static_cast<int>(seed % 10) && n <= 45 ? 0.982 : 1.0;
             return noise(mem, nth) * level;
         };
-        run.card.bw_precise_noise = scatter(seed + 1000, 0.0045);
         const auto r = run.go(Preset::BestOfMyGpu);
         CAPTURE(seed);
         REQUIRE(r.ok);
-        CHECK(run.card.max_precise_mem <= run.card.max_mem_seen - 50 - kPreciseMarginSteps * 50);
-        CHECK(run.card.max_precise_mem < 2450);
+        CHECK(run.card.max_again_mem <= run.card.max_mem_seen - 50 - kPeakMarginSteps * 50);
         CHECK(r.driver_resets == 0);
         CHECK(run.card.max_mem_seen == 2550);
-        CHECK(r.mem_mhz >= 1400);   // +2050 or higher kept, at twice the long copy's scatter
+        CHECK(r.mem_mhz >= 1400);   // +2050 or higher kept
     }
 }
 
 TEST_CASE("the margin holds for an edge anywhere") {
-    // The same kind of card with its edge elsewhere: the long copy dies one
-    // step below the highest offset the stress load passes, as on the
-    // reference card, and is never taken there.
+    // The same kind of card with its edge elsewhere.
     for (int edge = 300; edge <= 2900; edge += 150) {
         Run run = reference_card();
         run.card.mem_edge = edge;
-        run.card.bw_precise_loses_device_from = edge - 50;
         const auto r = run.go(Preset::BestOfMyGpu);
         CAPTURE(edge);
         REQUIRE(r.ok);
         CHECK(run.card.max_mem_seen == edge + 50);
-        CHECK(run.card.max_precise_mem == edge - 200);
+        CHECK(run.card.max_again_mem == edge - 200);
         CHECK(r.driver_resets == 0);
         CHECK(r.mem_max_stable <= edge - 200);
     }
 }
 
-TEST_CASE("a long copy that loses the device below the margin after all is a reset the search recovers from") {
+TEST_CASE("a reading of the second pass that loses the device is a reset the search recovers from") {
     // A card that is worse than the margin allows for. The run goes on as
     // after any reset in the memory search, and the offset is remembered.
     Run run = reference_card();
-    run.card.bw_precise_loses_device_from = 2300;
+    run.card.bw_again_loses_device_from = 2300;
     const auto r = run.go(Preset::BestOfMyGpu);
     REQUIRE(r.ok);
     CHECK(r.driver_resets == 1);
-    CHECK(run.card.bw_precise_measurements == 1);
+    CHECK(run.card.bw_again_measurements == 1);
     CHECK(run.logged("mem +2300: the bandwidth measurement failed; treated as a driver reset"));
     CHECK(r.mem_max_stable == 2300);
     CHECK(r.mem_confirmed == 2300 - kResetBackoffSteps * 50);
@@ -3376,20 +3363,7 @@ TEST_CASE("a long copy that loses the device below the margin after all is a res
     REQUIRE(second.ok);
     CHECK(second.driver_resets == 0);
     CHECK(run.card.max_mem_seen == 2100);
-    CHECK(run.card.max_precise_mem == 2050);
+    CHECK(run.card.max_again_mem == 2050);
     check_journal_rules(run);
-}
-
-TEST_CASE("without a long copy the second pass reads with the short one") {
-    // A caller that gives only one way of measuring: the search is the same.
-    Run run = rising_to_the_edge();
-    run.no_precise = true;
-    const auto r = run.go(Preset::BestOfMyGpu);
-    REQUIRE(r.ok);
-    CHECK(run.card.bw_precise_measurements == 0);
-    CHECK(run.card.bw_readings_at[2300] == 2);   // once going up, once coming down
-    CHECK_FALSE(run.logged("the long copy"));
-    CHECK(run.logged("mem: the scan passed +2500; reading from +2300 down once more"));
-    CHECK(r.mem_max_stable == 2200);
 }
 

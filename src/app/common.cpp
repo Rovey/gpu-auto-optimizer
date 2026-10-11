@@ -381,13 +381,11 @@ OptimizeOutcome run_optimize(Preset preset, const OptimizeHooks& hooks, const st
     };
     io.aborted = hooks.aborted;
     io.log = hooks.log;
-    const auto measure = [&](bool precise) {
-        const auto gbps = load->MeasureBandwidth(precise);
+    io.bandwidth = [&] {
+        const auto gbps = load->MeasureBandwidth();
         if (!gbps) log("bandwidth measurement failed: " + load->Error());
         return gbps;
     };
-    io.bandwidth = [=] { return measure(false); };
-    io.bandwidth_precise = [=] { return measure(true); };
     io.bandwidth_unsettled = [&] { return load->BandwidthUnsettled(); };
     // The wait between a driver reset and the next load. The card is left
     // alone: no load, no driver call, no fan tick, and no log line (the search
