@@ -182,6 +182,9 @@ bool logon_copy_outdated();
 // over from an older copy). A program that installs itself the moment it
 // starts is what an antivirus takes for a dropper (hardware check 83).
 std::string update_logon_copy();
+// The installed copy's Start menu entry, when apply-at-logon is on and the
+// entry is not there: copies installed by 0.4.1 or older have none. Elevated only.
+void ensure_start_menu_entry();
 
 struct UpdateCheck {
     std::optional<ReleaseInfo> release;   // set when a release newer than this build exists
@@ -195,5 +198,9 @@ UpdateCheck check_for_update();
 // The running program keeps running its old code until it is restarted.
 // `message` describes the outcome either way.
 bool install_update(const ReleaseInfo& release, std::string* message);
+// Whether this process may write to the folder its executable is in, which is
+// what an update does. Not so for a copy in Program Files without
+// administrator rights.
+bool own_folder_writable();
 
 }

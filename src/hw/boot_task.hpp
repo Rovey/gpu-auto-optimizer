@@ -32,4 +32,11 @@ long boot_task_create(const std::string& xml);
 long boot_task_remove();
 bool boot_task_exists();
 
+// The installed copy's entry in the Start menu, for every user of the PC:
+// without it Windows' search does not find the app, and the tray icon is the
+// only way to a copy that is running, and no way at all to one that is not.
+long start_menu_entry_create();   // an HRESULT, as above; replaces an entry that is there
+bool start_menu_entry_remove();   // true as well when there was none
+bool start_menu_entry_exists();
+
 }

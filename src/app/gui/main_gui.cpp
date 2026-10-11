@@ -126,6 +126,7 @@ struct App {
     std::optional<gao::ReleaseInfo> update;   // the newer release on offer, if any
     bool restart = false;          // start this program again on the way out: an update was installed, or a driver call faulted
     std::wstring restart_args = L" --resume";
+    bool update_now = false;       // --update-now: this copy was started elevated to install the update that was clicked
     ULONGLONG fault_restart_from = 0;   // a copy started after a fault makes way for the next one no sooner
 
     // Crash dumps are written by a thread created up front (a crashing thread
@@ -492,13 +493,14 @@ void act_optimize(gao::Preset preset) {
 
 void act_abort() { g.worker->abort(); }
 
-void act_restart_elevated() {
+void restart_elevated(const wchar_t* arguments) {
     wchar_t self[MAX_PATH];
     const DWORD n = GetModuleFileNameW(nullptr, self, MAX_PATH);
     if (n == 0 || n >= MAX_PATH) return;
     SHELLEXECUTEINFOW sei{sizeof(sei)};
     sei.lpVerb = L"runas";
     sei.lpFile = self;
+    sei.lpParameters = arguments;
     sei.nShow = SW_SHOWNORMAL;
     // The elevated copy must not find our single-instance mutex: release it
     // first, and take it back if elevation is cancelled.
@@ -511,6 +513,8 @@ void act_restart_elevated() {
         note("Elevation was cancelled.");
     }
 }
+
+void act_restart_elevated() { restart_elevated(nullptr); }
 
 void start_update_check() {
     if (!g.ui.update_check) return;
@@ -529,6 +533,13 @@ void act_install_update() {
     if (!g.update || g.ui.update_busy) return;
     if (g.worker->running() || gao::app::tuning_in_progress()) {
         note("An optimize run is in progress; update when it has finished.", true);
+        return;
+    }
+    // A copy that may not write to its own folder, the one in Program Files
+    // started without administrator rights, cannot replace itself: the click
+    // asks for those rights, and the elevated copy installs the update.
+    if (!g.ui.elevated && !gao::app::own_folder_writable()) {
+        restart_elevated(L"--update-now");
         return;
     }
     g.ui.update_busy = true;
@@ -557,6 +568,7 @@ void on_update_news() {
     if (news.checked) {
         g.update = std::move(news.release);
         g.ui.update_version = g.update ? g.update->version : std::string();
+        if (std::exchange(g.update_now, false) && g.update) act_install_update();
     }
     if (news.installed) {
         g.ui.update_busy = false;
@@ -1245,6 +1257,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdline, int) {
             note(updated);
             refresh_status(true);
         }
+        gao::app::ensure_start_menu_entry();
     } else if (gao::app::logon_copy_outdated()) {
         note("The copy that starts at logon is an older build than this one. A run that saves a profile installs this one; "
              "so does switching Apply at logon off and on.", true);
@@ -1252,6 +1265,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdline, int) {
     SetTimer(g.hwnd, kTimerTelemetry, 1000, nullptr);
     SetTimer(g.hwnd, kTimerWatchdog, 30 * 1000, nullptr);
     SetTimer(g.hwnd, kTimerUpdate, 24 * 60 * 60 * 1000, nullptr);
+    g.update_now = cmdline && std::wcsstr(cmdline, L"--update-now");
     start_update_check();
     on_telemetry();
     if (!hidden) show_window();
