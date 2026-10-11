@@ -390,9 +390,14 @@ void tuning_card(const UiState& s, const UiActions& act) {
                 if (p.mem_mhz != 0) tune += ", memory " + offset(p.mem_mhz);
             }
             tuning_row("Saved tune", std::string(title_of(p.preset)) + ": " + tune + " (" + p.saved_at + ")");
-            if (!s.profile_driver_ok || !s.profile_gpu_ok)
-                tuning_row("", "Tuned on driver " + p.driver + (s.profile_gpu_ok ? "" : " and another card") +
-                                   ". Optimize again before relying on it.",
+            if (!s.profile_gpu_ok)
+                tuning_row("", "Tuned on " + std::string(s.profile_driver_ok ? "" : "driver " + p.driver + " and ") +
+                                   "another card. Optimize again before relying on it.",
+                           kWarn);
+            else if (!s.profile_driver_ok)
+                tuning_row("", "The driver was updated: this tune was tested on " + p.driver +
+                                   (s.driver.empty() ? "" : ", and this is " + s.driver) +
+                                   ". It is not applied until it has been tested again.",
                            kWarn);
         } else {
             tuning_row("Saved tune", "None yet. Pick a profile and optimize.", kDim);
@@ -410,7 +415,10 @@ void tuning_card(const UiState& s, const UiActions& act) {
     ImGui::BeginChild("actions", ImVec2(0, h), ImGuiChildFlags_Borders | ImGuiChildFlags_AlwaysUseWindowPadding);
     ImGui::PopStyleColor();
     const float bw = ImGui::GetContentRegionAvail().x, bh = em() * 2.3f;
-    if (s.elevated) {
+    if (s.elevated && s.profile && s.profile_gpu_ok && !s.profile_driver_ok && !s.driver.empty()) {
+        // After a driver update the tune is not applied as it is: five minutes show whether it still holds.
+        if (primary_button("Test the tune (5 min)", ImVec2(bw, bh))) act.retest();
+    } else if (s.elevated) {
         ImGui::BeginDisabled(!s.profile);
         if (primary_button("Apply saved tune", ImVec2(bw, bh))) act.apply_profile();
         ImGui::EndDisabled();
@@ -877,15 +885,17 @@ void curve_card(const UiState& s, const char* caption, bool live) {
 
 void run_screen(UiState& s, const OptimizeWorker::Snapshot& run, const UiActions& act) {
     begin_card("run");
-    text_bold(s.preset == Preset::Undervolt ? "Finding the undervolt"
-                                            : (std::string("Optimizing: ") + title_of(s.preset)).c_str(),
+    text_bold(run.is_retest ? "Testing the saved tune"
+              : s.preset == Preset::Undervolt ? "Finding the undervolt"
+                                              : (std::string("Optimizing: ") + title_of(s.preset)).c_str(),
               1.4f);
     if (run.running) {
         const std::string abort = with_icon(kIconStop, "Abort");
         align_right(button_width(abort) + em());
         if (ImGui::Button(abort.c_str(), ImVec2(button_width(abort) + em(), 0))) act.abort();
     }
-    dim("Aborting stops the running probe and restores stock.");
+    dim(run.is_retest ? "Five minutes of full load with the tune applied. Aborting stops the test and restores stock."
+                      : "Aborting stops the running probe and restores stock.");
     ImGui::Spacing();
     // A long measurement: what it is and how long it still takes.
     if (run.running && !run.measuring.empty() && run.measuring_seconds > 0) {
@@ -1072,17 +1082,39 @@ bool all_in_one_result(const app::AllInOneOutcome& o) {
     return true;
 }
 
+// The saved tune after its five minutes on a new driver. True: it is applied.
+bool retest_result(const app::RetestOutcome& o) {
+    if (!o.ok) {
+        heading("Not applied");
+        wrapped(kBad, o.error);
+        if (o.result.test.seconds > 0)
+            wrapped(kText, "The saved tune is kept as it is and stays off on this driver. Optimize again to find one that holds.");
+        return false;
+    }
+    heading("The tune holds");
+    wrapped(kGood, "Five minutes of full load on driver " + o.driver + " (it was tested on " + o.driver_was +
+                       "): stable. It is applied again: core " + offset(o.profile.core_mhz) + ", memory " + offset(o.profile.mem_mhz) +
+                       ", power limit " + std::to_string(o.profile.power_pct) + " %" +
+                       (o.profile.undervolt ? ", " + undervolt_text(*o.profile.undervolt) : std::string()));
+    const StabilityResult& t = o.result.test;
+    wrapped(kDim, "Score " + score_text(t.score) + ", core " + reading(t.avg_core_mhz, " MHz") + ", memory " +
+                      reading(t.avg_mem_mhz, " MHz") + ", peak " + reading(t.peak_temp_c, " \xC2\xB0""C") + ", fans " +
+                      reading(t.end_fan_pct, " %") + " at the end, " + reading(t.avg_power_w, " W") + ".");
+    return true;
+}
+
 void results(UiState& s, const OptimizeWorker::Snapshot& run, const UiActions& act) {
     if (!run.ended()) {
         s.screen = Screen::Choose;
         return;
     }
     begin_card("results");
-    const bool applied = run.all_in_one  ? all_in_one_result(*run.all_in_one)
-                         : run.undervolt ? undervolt_result(*run.undervolt)
-                                         : optimize_result(*run.outcome);
+    const bool applied = run.retest       ? retest_result(*run.retest)
+                         : run.all_in_one ? all_in_one_result(*run.all_in_one)
+                         : run.undervolt  ? undervolt_result(*run.undervolt)
+                                          : optimize_result(*run.outcome);
     if (applied) {
-        const bool saved = run.all_in_one ? run.all_in_one->ok : run.undervolt ? run.undervolt->saved : run.outcome->saved;
+        const bool saved = run.retest ? true : run.all_in_one ? run.all_in_one->ok : run.undervolt ? run.undervolt->saved : run.outcome->saved;
         ImGui::Spacing();
         if (saved && s.boot_on) wrapped(kText, "Saved, and applied at every logon from now on. There is nothing left to do.");
         else if (saved) wrapped(kText, "Saved. It stays applied until reboot; turn on apply at logon to keep it.");

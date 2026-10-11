@@ -341,6 +341,30 @@ static int undervolt(bool on_overclock) {
     return out.saved ? 0 : 2;   // 2: found and applied, but --apply and boot-apply cannot use it
 }
 
+// The saved tune, tested again on the driver that is installed now.
+static int retest() {
+    gao::app::OptimizeHooks hooks;
+    hooks.aborted = [] { return g_abort.load(); };
+    hooks.log = [](const std::string& msg) { std::printf("  %s\n", msg.c_str()); };
+    hooks.active_gpu = [](const gao::GpuControl* gpu) {
+        g_gpu = gpu;
+        SetConsoleCtrlHandler(OnConsoleCtrl, gpu ? TRUE : FALSE);
+    };
+    const gao::app::RetestOutcome out = gao::app::run_retest(hooks);
+    if (out.result.test.seconds > 0) {
+        const gao::StabilityResult& s = out.result.test;
+        std::printf("  %s  score=%.0f it/s  core=%d MHz  mem=%d MHz  peak=%d C  fan=%s  power=%d W  (%.0f s)\n", gao::verdict_name(s.verdict),
+                    s.score, s.avg_core_mhz, s.avg_mem_mhz, s.peak_temp_c, gao::reading(s.end_fan_pct, " %").c_str(), s.avg_power_w, s.seconds);
+    }
+    if (!out.ok) {
+        std::printf("RESULT: not applied -- %s\n", out.error.c_str());
+        return 1;
+    }
+    std::printf("RESULT: the tune holds on driver %s (it was tested on %s) and is applied: %s\n", out.driver.c_str(), out.driver_was.c_str(),
+                gao::app::profile_text(out.profile).c_str());
+    return 0;
+}
+
 // The all-in-one run: stock, overclock, undervolt on top, fans, final test.
 static int all_in_one() {
     gao::app::OptimizeHooks hooks;
@@ -618,6 +642,7 @@ int main(int argc, char** argv) {
     }
     if (argc > 1 && std::strcmp(argv[1], "--stress-recreate") == 0) return stress_recreate();
     if (argc > 1 && std::strcmp(argv[1], "--apply") == 0) return apply();
+    if (argc > 1 && std::strcmp(argv[1], "--retest") == 0) return retest();
     if (argc > 2 && std::strcmp(argv[1], "--boot") == 0) {
         if (std::strcmp(argv[2], "on") == 0) return boot(true);
         if (std::strcmp(argv[2], "off") == 0) return boot(false);
@@ -677,6 +702,8 @@ int main(int argc, char** argv) {
                 "            | --optimize all (all in one: stock measured, overclock, an undervolt on top of it at a clock\n"
                 "              between the two, the quietest fan curve, and a final test; about 40 minutes)\n"
                 "            | --apply | --boot on|off | --fan auto | --status\n"
+                "            | --retest (after a driver update: the saved tune under full load for five minutes; applied and\n"
+                "              saved for the new driver when that is stable, stock when it is not)\n"
                 "            | --curve (prints the voltage/frequency curve; changes nothing)\n"
                 "            | --undervolt [--on-overclock] (the load clock on the lowest stable voltage; saved like --optimize.\n"
                 "              Alone it replaces a saved overclock; with --on-overclock it is searched on top of the\n"
