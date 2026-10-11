@@ -1,10 +1,12 @@
 #include "core/search.hpp"
 #include <algorithm>
+#include <cctype>
 #include <climits>
 #include <cmath>
 #include <cstdio>
 #include <map>
 #include <optional>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -119,6 +121,19 @@ std::string stock_refusal(const StabilityResult& stock) {
     if (stock.seconds >= kStockMinS) return {};
     return "the card was at " + std::to_string(stock.peak_temp_c) + " C after " + std::to_string(static_cast<int>(stock.seconds)) +
            " s at stock; let it cool down and start again";
+}
+
+std::string other_tool_refusal(const std::vector<std::string>& running) {
+    auto runs = [&](std::string_view exe) {
+        return std::any_of(running.begin(), running.end(), [&](const std::string& name) {
+            return std::equal(name.begin(), name.end(), exe.begin(), exe.end(),
+                              [](char a, char b) { return std::tolower(static_cast<unsigned char>(a)) == b; });
+        });
+    };
+    const char* tool = runs("msiafterburner.exe") ? "MSI Afterburner" : runs("rtss.exe") ? "RivaTuner Statistics Server (RTSS)" : nullptr;
+    if (!tool) return {};
+    return std::string(tool) + " is running. Close it, also its icon in the notification area, and start again: a run cannot share "
+           "the card with a program that sets clocks and fans or draws over what the card shows";
 }
 
 namespace {
@@ -533,7 +548,8 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
     if (obj.mem_oc) {
         const int ceiling = journal.ceilings().mem_mhz;
         int reset_at = -1;   // the memory offset at which a reset event ended the scan
-        bool by_bandwidth = static_cast<bool>(io.bandwidth);
+        const bool by_bandwidth = static_cast<bool>(io.bandwidth);
+        bool left_at_stock = false;   // the measurement does not work: nothing was searched
         if (by_bandwidth) {
             bool unavailable = false;
             const int peak = best_bandwidth_offset(0, bounds.mem_max_mhz, kMemStep, ceiling, [&](int v) {
@@ -558,10 +574,9 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
                     } else if (v == 0) {
                         // Nothing is overclocked yet, so this is not the card
                         // giving out: the measurement does not work on this
-                        // machine. Not a reset event, and no recovery. If the
-                        // driver did reset, the next write fails and is counted.
+                        // machine. Not a reset event, and no recovery.
                         unavailable = true;
-                        log("bandwidth measurement not available; searching memory by stability only");
+                        log("the bandwidth measurement does not work here; the memory is not overclocked");
                     } else {
                         log("mem " + offset_text(v) + ": the bandwidth measurement failed; treated as a driver reset");
                         reset_event("the bandwidth measurement failed");
@@ -576,10 +591,22 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
                 }
                 return m;
             });
-            // An unavailable measurement ended the scan at +0: its result
-            // says nothing, and the stability climb below takes over.
-            if (unavailable) by_bandwidth = false;
-            else r.mem_max_stable = peak;
+            // An unavailable measurement ended the scan at +0, and nothing
+            // is searched without it. Memory that corrects its own errors
+            // computes right far beyond the point where it stops getting
+            // faster: a climb on stability alone took a 3080 Ti to +2300 MHz,
+            // and the machine froze in the confirm probes below that. The
+            // peak of the bandwidth is what keeps the search away from there.
+            if (!unavailable) {
+                r.mem_max_stable = peak;
+            } else if (const std::string why = write_state(r.power_pct, 0, 0); !why.empty()) {
+                // The next write, made here and at stock: if the driver was
+                // reset under the measurement it fails now, and the event is
+                // the memory search's, not the core's first candidate's.
+                log(why + "; treated as a driver reset");
+                reset_event(why);
+            }
+            left_at_stock = unavailable;
         }
         if (!by_bandwidth) {
             r.mem_max_stable = climb_to_edge(0, bounds.mem_max_mhz, kMemStep, kMemStride, ceiling, [&](int v) {
@@ -595,9 +622,12 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
         }, confirm_step_down);
         if (!stopped.empty()) return finish_fail(stopped);
         r.mem_mhz = apply_margin(r.mem_confirmed, kMemStep, obj.perf_push);
-        log(std::string("mem: ") + (by_bandwidth ? "bandwidth peak +" : "highest stable +") +
-            std::to_string(r.mem_max_stable) + ", confirmed +" + std::to_string(r.mem_confirmed) +
-            ", applying +" + std::to_string(r.mem_mhz));
+        if (left_at_stock)
+            log("mem: left at stock");
+        else
+            log(std::string("mem: ") + (by_bandwidth ? "bandwidth peak +" : "highest stable +") +
+                std::to_string(r.mem_max_stable) + ", confirmed +" + std::to_string(r.mem_confirmed) +
+                ", applying +" + std::to_string(r.mem_mhz));
     }
     // The core comes second and runs with the chosen memory offset applied
     // (0 when the profile does not tune memory). Each clock has its own

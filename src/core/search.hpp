@@ -6,6 +6,7 @@
 #include <functional>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace gao {
 
@@ -130,13 +131,21 @@ inline constexpr double kStockMinS = 30;   // stopped sooner than this, it measu
 // What was measured until then is the "before", and the run goes on with the
 // fans on a curve, which is what keeps the card below the profile's limit.
 std::string stock_refusal(const StabilityResult& stock);
+// Why no run starts next to another tuning tool, given the file names of the
+// programs that run now; empty when none of them is one. MSI Afterburner
+// sets clocks and fans itself, and RivaTuner hooks into every program that
+// uses the card, the stress load among them.
+std::string other_tool_refusal(const std::vector<std::string>& running);
 
 struct OptimizeIo {
     Probe probe;
     std::function<bool()> aborted;                      // polled between probes; the probe itself must honour it too
     std::function<void(const std::string&)> log;
     // GB/s at the currently applied settings; nullopt when the measurement
-    // failed. Empty: the memory search falls back to stability only.
+    // failed. Empty: the memory is searched by stability alone, which goes
+    // far past the point where memory that corrects its own errors stops
+    // getting faster. The app always gives one; when it fails at stock, the
+    // memory is left at stock.
     std::function<std::optional<double>()> bandwidth;
     // Asked after `bandwidth` returned nothing: true when the load measured
     // but its readings did not agree (other programs using the card, say).

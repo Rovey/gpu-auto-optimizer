@@ -265,7 +265,7 @@ static int update() {
 static int optimize(gao::Preset preset, const std::optional<gao::FanCurve>& fan_curve) {
     gao::app::OptimizeHooks hooks;
     hooks.aborted = [] { return g_abort.load(); };
-    hooks.log = [](const std::string& msg) { std::printf("  %s\n", msg.c_str()); };
+    hooks.log = gao::app::logged([](const std::string& msg) { std::printf("  %s\n", msg.c_str()); });
     hooks.active_gpu = [](const gao::GpuControl* gpu) {
         g_gpu = gpu;
         SetConsoleCtrlHandler(OnConsoleCtrl, gpu ? TRUE : FALSE);
@@ -304,7 +304,7 @@ static int optimize(gao::Preset preset, const std::optional<gao::FanCurve>& fan_
 static int undervolt(bool on_overclock) {
     gao::app::OptimizeHooks hooks;
     hooks.aborted = [] { return g_abort.load(); };
-    hooks.log = [](const std::string& msg) { std::printf("  %s\n", msg.c_str()); };
+    hooks.log = gao::app::logged([](const std::string& msg) { std::printf("  %s\n", msg.c_str()); });
     hooks.active_gpu = [](const gao::GpuControl* gpu) {
         g_gpu = gpu;
         SetConsoleCtrlHandler(OnConsoleCtrl, gpu ? TRUE : FALSE);
@@ -343,7 +343,7 @@ static int undervolt(bool on_overclock) {
 static int all_in_one() {
     gao::app::OptimizeHooks hooks;
     hooks.aborted = [] { return g_abort.load(); };
-    hooks.log = [](const std::string& msg) { std::printf("  %s\n", msg.c_str()); };
+    hooks.log = gao::app::logged([](const std::string& msg) { std::printf("  %s\n", msg.c_str()); });
     hooks.active_gpu = [](const gao::GpuControl* gpu) {
         g_gpu = gpu;
         SetConsoleCtrlHandler(OnConsoleCtrl, gpu ? TRUE : FALSE);

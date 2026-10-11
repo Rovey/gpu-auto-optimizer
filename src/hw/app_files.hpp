@@ -13,6 +13,7 @@ std::filesystem::path app_dir();
 std::filesystem::path journal_path();
 std::filesystem::path config_path();
 std::filesystem::path boot_log_path();
+std::filesystem::path run_log_path();
 // %ProgramFiles%, resolved from the registry (never the environment).
 std::filesystem::path program_files_dir();
 

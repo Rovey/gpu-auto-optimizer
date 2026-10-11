@@ -915,11 +915,12 @@ void run_screen(UiState& s, const OptimizeWorker::Snapshot& run, const UiActions
 
     curve_card(s, "What the run writes to the card, read back every second. Higher is faster at that voltage.", true);
 
-    begin_card("probes");
+    // What is left of the page, and never less than a few lines: a card that
+    // sizes itself has no height to hand on to the list inside it.
+    begin_card("probes", std::max(em() * 14, ImGui::GetContentRegionAvail().y));
     heading("Probes");
     ImGui::PushStyleColor(ImGuiCol_ChildBg, kInner);
-    ImGui::BeginChild("lines", ImVec2(0, std::max(em() * 10, ImGui::GetContentRegionAvail().y - em())),
-                      ImGuiChildFlags_Borders);
+    ImGui::BeginChild("lines", ImVec2(0, ImGui::GetContentRegionAvail().y), ImGuiChildFlags_Borders);
     ImGui::PopStyleColor();
     for (const std::string& line : run.log) ImGui::TextUnformatted(line.c_str());
     if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY()) ImGui::SetScrollHereY(1.0f);

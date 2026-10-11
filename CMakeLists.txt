@@ -159,6 +159,7 @@ add_test(NAME core_tests COMMAND core_tests)
 add_executable(app_tests
   tests/test_main.cpp
   tests/test_driver_fault.cpp
+  tests/test_run_log.cpp
 )
 target_link_libraries(app_tests PRIVATE app doctest gao_warnings)
 add_test(NAME app_tests COMMAND app_tests)

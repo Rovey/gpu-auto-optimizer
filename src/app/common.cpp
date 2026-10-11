@@ -3,6 +3,7 @@
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
+#include <tlhelp32.h>
 #include "core/journal.hpp"
 #include "core/fan_curve.hpp"
 #include "core/fan_tune.hpp"
@@ -96,6 +97,35 @@ void boot_log(const std::string& msg) {
 
 bool prepare_state(std::string* why) { return ensure_app_dir(why); }
 
+std::function<void(const std::string&)> logged_to(const std::filesystem::path& file, std::function<void(const std::string&)> show) {
+    std::error_code ec;
+    if (std::filesystem::file_size(file, ec) > kRunLogMaxBytes && !ec) {
+        std::filesystem::path old = file;
+        old += L".old";
+        std::filesystem::rename(file, old, ec);   // replaces an older one
+    }
+    auto write = [file](const std::string& line) {
+        SYSTEMTIME t{};
+        GetLocalTime(&t);
+        char stamp[32];
+        std::snprintf(stamp, sizeof(stamp), "%04d-%02d-%02d %02d:%02d:%02d  ", t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond);
+        append_line_durable(file, stamp + line);
+    };
+    write("=== " + std::string(kProductName) + " " + std::string(kVersion));
+    return [write, show = std::move(show)](const std::string& line) {
+        write(line);   // on disk before anything acts on it
+        if (show) show(line);
+    };
+}
+
+std::function<void(const std::string&)> logged(std::function<void(const std::string&)> show) {
+    // Only into a folder that was verified: an elevated process does not
+    // append to a file somebody else may have put there.
+    std::string why;
+    if (!is_elevated() || run_log_path().empty() || !prepare_state(&why)) return show;
+    return logged_to(run_log_path(), std::move(show));
+}
+
 std::string profile_text(const Profile& p) {
     const std::string tail = " (driver " + p.driver + ", saved " + p.saved_at + ")";
     const std::string clocks = "power " + std::to_string(p.power_pct) + " %, core +" + std::to_string(p.core_mhz) +
@@ -130,6 +160,24 @@ struct KeepAwake {
 };
 
 constexpr double kLongRunS = 300;      // as the soaks: the two sides of the comparison last equally long
+
+// Why no run starts next to another tuning tool (core/search.hpp); empty when
+// none runs. A list of programs that cannot be had reads as none: this check
+// is a courtesy, the run's own verifications are what it relies on.
+std::string other_tool() {
+    std::vector<std::string> running;
+    const HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snap == INVALID_HANDLE_VALUE) return {};
+    PROCESSENTRY32W e{};
+    e.dwSize = sizeof(e);
+    for (BOOL more = Process32FirstW(snap, &e); more; more = Process32NextW(snap, &e)) {
+        std::string name;   // the names looked for are ASCII; anything else cannot match
+        for (const wchar_t* c = e.szExeFile; *c; ++c) name += *c < 128 ? static_cast<char>(*c) : '?';
+        running.push_back(std::move(name));
+    }
+    CloseHandle(snap);
+    return other_tool_refusal(running);
+}
 // After a measurement at stock that the temperature stopped: without load,
 // this far below it before the run loads the card again, or this long. The
 // steps that follow have limits of their own.
@@ -235,6 +283,7 @@ OptimizeOutcome run_optimize(Preset preset, const OptimizeHooks& hooks, const st
     auto log = [&](const std::string& m) { if (hooks.log) hooks.log(m); };
     auto fail = [&](const std::string& why) { out.error = why; return out; };
     if (preset == Preset::Undervolt) return fail("the undervolt is not a clock search; it has its own run");
+    if (const std::string tool = other_tool(); !tool.empty()) return fail(tool);
     if (!is_elevated()) return fail("optimizing changes clocks and power limits and needs administrator rights");
     const TuningLock lock;
     if (!lock.owned()) return fail("another optimize is already running (in the app or on the command line)");
@@ -430,6 +479,7 @@ UndervoltOutcome run_undervolt(const OptimizeHooks& hooks, bool on_saved_tune, c
     UndervoltOutcome out;
     auto log = [&](const std::string& m) { if (hooks.log) hooks.log(m); };
     auto fail = [&](const std::string& why) { out.error = why; return out; };
+    if (const std::string tool = other_tool(); !tool.empty()) return fail(tool);
     if (!is_elevated()) return fail("undervolting changes the card's voltage/frequency curve and needs administrator rights");
     const TuningLock lock;
     if (!lock.owned()) return fail("another optimize is already running (in the app or on the command line)");
@@ -873,6 +923,7 @@ AllInOneOutcome run_all_in_one(const OptimizeHooks& hooks) {
     auto log = [&](const std::string& m) { if (hooks.log) hooks.log(m); };
     auto stop = [&](const std::string& why) { out.error = why; return out; };
     auto aborted = [&] { return hooks.aborted && hooks.aborted(); };
+    if (const std::string tool = other_tool(); !tool.empty()) return stop(tool);
     if (!is_elevated()) return stop("tuning changes clocks, the voltage/frequency curve and the fans and needs administrator rights");
     // Held across the steps (each takes it again, on this thread), so that
     // the watchdog does not put a half-made tune back in between.

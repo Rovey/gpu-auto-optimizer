@@ -690,8 +690,8 @@ TEST_CASE("the margin applies to the confirmed core edge") {
 
 TEST_CASE("without a reconnect a failing bandwidth measurement never raises memory") {
     // As it was before the reset budget: the scan ends at the first failed
-    // measurement, here the one at +0. With a reconnect that case falls back
-    // to the stability climb (tested below).
+    // measurement, here the one at +0. With a reconnect that case leaves the
+    // memory at stock as well, and says why (tested below).
     Run run;
     run.card.bw_curve = [](int m) { return 500 + m * 0.1; };
     run.card.bw_fails = true;
@@ -2201,31 +2201,39 @@ TEST_CASE("no bandwidth is measured after a reset") {
     CHECK(run.card.max_mem_seen == 300);
 }
 
-TEST_CASE("a measurement that is unavailable from the start falls back to the stability climb") {
+TEST_CASE("a measurement that is unavailable from the start leaves the memory at stock") {
+    // A 3080 Ti, 0.4.3: the measurement failed at +0, the search climbed on
+    // stability alone to the first wrong result at +2300, and the machine froze
+    // in the confirm probes just below it. The bandwidth peak is what keeps a
+    // memory search away from there; without it nothing is searched.
     Run run = recovering();
     run.card.bw_curve = [](int m) { return 500 + m * 0.3; };
     run.card.bw_fails_at_zero = true;
     const auto r = run.go(Preset::BestOfMyGpu);
     REQUIRE(r.ok);
     CHECK(r.driver_resets == 0);
-    CHECK(run.card.bw_measurements == 1);   // a failed measurement never raises memory: stability alone does
-    // The +0 sample ran and is the first entry of the run, without a clock;
-    // the stability climb then goes +50 .. +850, and +800 is confirmed.
-    CHECK(mem_begins(run.card) == climb(50, 850, 50, {800}));
+    CHECK(run.card.bw_measurements == 1);
+    // The +0 sample ran and is the first entry of the run, without a clock.
+    // No memory offset was ever written.
+    CHECK(mem_begins(run.card).empty());
+    CHECK(run.card.max_mem_seen == 0);
     CHECK(clockless_begins(run.card) == 1);
     REQUIRE_FALSE(run.card.journal.empty());
     CHECK(run.card.journal.front().find("\"mem\":") == std::string::npos);
     CHECK(run.card.journal.front().find("\"core\":") == std::string::npos);
     CHECK(run.logged("core +0 / mem +0: STABLE"));
-    CHECK(r.mem_max_stable == 800);
-    CHECK(r.mem_confirmed == 800);
-    CHECK(r.mem_mhz == 550);
-    CHECK(r.core_max_stable == 150);
+    CHECK(r.mem_max_stable == 0);
+    CHECK(r.mem_confirmed == 0);
+    CHECK(r.mem_mhz == 0);
+    CHECK(r.core_max_stable == 150);   // the core is still searched
+    CHECK(r.core_mhz > 0);
     CHECK(run.card.rests == 0);
     CHECK(count_events(run.card, "health") == 0);
     CHECK(run.card.recover_calls == 0);
-    CHECK(run.logged("bandwidth measurement not available; searching memory by stability only"));
-    CHECK(run.logged("mem: highest stable +800"));
+    CHECK(run.logged("the bandwidth measurement does not work here; the memory is not overclocked"));
+    CHECK(run.logged("mem: left at stock"));
+    CHECK_FALSE(run.logged("searching memory by stability only"));
+    CHECK_FALSE(run.logged("mem: highest stable"));
     CHECK_FALSE(run.logged("bandwidth peak"));
     CHECK_FALSE(run.logged("the driver reset during this run"));
     check_journal_rules(run);
@@ -2238,21 +2246,21 @@ TEST_CASE("a measurement that fails at +0 because the device was lost is caught 
     const auto r = run.go(Preset::BestOfMyGpu);
     REQUIRE(r.ok);
     CHECK(r.driver_resets == 1);
-    CHECK(run.logged("bandwidth measurement not available; searching memory by stability only"));
+    CHECK(run.logged("the bandwidth measurement does not work here; the memory is not overclocked"));
     CHECK(run.card.bw_measurements == 1);
-    // Journal: +0 opened (without a clock) and closed, +50 opened and closed
-    // as SET FAILED. After them: the core search (+15 .. +165, the confirm
+    // Journal: +0 opened (without a clock) and closed. No memory offset is
+    // tried; the write of stock that follows the failed measurement is the
+    // next write, and it is what finds the reset: in the memory search, so the
+    // core keeps its own. After it: the core search (+15 .. +165, the confirm
     // probe) and the soak.
-    CHECK(mem_begins(run.card) == std::vector<int>{50});
+    CHECK(mem_begins(run.card).empty());
     CHECK(clockless_begins(run.card) == 1);
-    CHECK(run.card.count("\"begin\"") == 15);
+    CHECK(run.card.count("\"begin\"") == 14);
     CHECK(run.logged("core +0 / mem +0: STABLE"));
-    REQUIRE(run.card.journal.size() >= 4);
+    REQUIRE_FALSE(run.card.journal.empty());
     CHECK(run.card.journal[0].find("\"begin\"") != std::string::npos);
     CHECK(run.card.journal[0].find("\"mem\":") == std::string::npos);
-    CHECK(run.card.journal[2].find("\"mem\":50") != std::string::npos);
-    CHECK(run.card.journal[3].find("SET FAILED") != std::string::npos);
-    CHECK(run.card.count("SET FAILED") == 1);
+    CHECK(run.card.count("SET FAILED") == 0);
     CHECK(run.logged("failed; treated as a driver reset"));
     CHECK(first_events_after_lost(run.card, 5) == Events{"recover", "stock", "rest", "health", "begin"});
     CHECK(r.mem_mhz == 0);
@@ -2644,4 +2652,24 @@ TEST_CASE("a card that fails at stock for another reason gets no run") {
     CHECK(stock_refusal(stock_run(Verdict::DeviceLost, 12, 60)) == "the card is not stable at stock (DEVICE LOST)");
     CHECK(stock_refusal(stock_run(Verdict::NoTelemetry, 12, 60)) == "the card is not stable at stock (NO TELEMETRY)");
     CHECK(stock_refusal(stock_run(Verdict::Aborted, 12, 60)) == "aborted");
+}
+
+TEST_CASE("a run does not start while MSI Afterburner or RivaTuner runs") {
+    const std::string ab = other_tool_refusal({"explorer.exe", "MSIAfterburner.exe", "Discord.exe"});
+    CHECK(ab.find("MSI Afterburner is running") == 0);
+    CHECK(ab.find("Close it") != std::string::npos);
+    const std::string rtss = other_tool_refusal({"RTSS.exe"});
+    CHECK(rtss.find("RivaTuner Statistics Server (RTSS) is running") == 0);
+    // Windows does not care about the case of a file name.
+    CHECK_FALSE(other_tool_refusal({"msiafterburner.EXE"}).empty());
+    CHECK_FALSE(other_tool_refusal({"rtss.exe"}).empty());
+    // Afterburner starts RivaTuner with it: the one the user knows is named.
+    CHECK(other_tool_refusal({"RTSS.exe", "MSIAfterburner.exe"}).find("MSI Afterburner") == 0);
+}
+
+TEST_CASE("a run starts when neither runs, whatever else does") {
+    CHECK(other_tool_refusal({}).empty());
+    CHECK(other_tool_refusal({"explorer.exe", "Discord.exe", "GpuAutoOptimizer.exe", "gao.exe"}).empty());
+    // Only the programs themselves: not a file that merely carries the name.
+    CHECK(other_tool_refusal({"RTSSHooksLoader64.exe", "MSIAfterburner.exe.bak", "NotRTSS.exe", "Afterburner"}).empty());
 }

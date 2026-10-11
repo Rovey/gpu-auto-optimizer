@@ -35,6 +35,7 @@ static std::filesystem::path in_app_dir(const wchar_t* name) {
 std::filesystem::path journal_path() { return in_app_dir(L"journal.jsonl"); }
 std::filesystem::path config_path() { return in_app_dir(L"gao.json"); }
 std::filesystem::path boot_log_path() { return in_app_dir(L"boot.log"); }
+std::filesystem::path run_log_path() { return in_app_dir(L"run.log"); }
 
 // Owner Administrators; protected DACL: SYSTEM and Administrators full
 // control, Users read & execute, inherited by everything inside.
