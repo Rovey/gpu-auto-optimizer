@@ -595,10 +595,13 @@ bool enable_boot(std::string* message) {
         std::snprintf(hex, sizeof(hex), "%08lX", static_cast<unsigned long>(code));
         return say(std::string("could not create the task (Task Scheduler error 0x") + hex + ")", false);
     }
+    // Not a reason to fail: the task is there, and the tray icon still opens the app.
+    const bool in_start_menu = start_menu_entry_create() >= 0;
     Config cfg = load_config();
     cfg.boot_strikes = 0;
     if (!save_config(cfg)) return say("task created, but could not reset the strike counter", false);
     return say("boot-apply on: " + exe.string() + " --tray runs at every logon and keeps the tune applied (strikes reset)" +
+               (in_start_menu ? "" : "; the Start menu entry could not be made") +
                (cfg.profile ? "" : "; note: there is no saved profile yet, optimize first"), true);
 }
 
@@ -608,6 +611,7 @@ bool disable_boot(std::string* message) {
     std::string why;
     if (!prepare_state(&why)) return say(why, false);
     const bool task_removed = boot_task_remove() >= 0;
+    start_menu_entry_remove();
     const bool removed_now = uninstall_app();
     return say(std::string("boot-apply off: task ") + (task_removed ? "removed" : "not removed") + ", installed copy " +
                    (removed_now ? "removed" : "in use by the running tray app; it is removed at the next restart"),
@@ -640,6 +644,12 @@ bool logon_copy_outdated() {
     return !(installed && *installed > kVersionNumber);
 }
 
+void ensure_start_menu_entry() {
+    std::error_code ec;
+    if (is_elevated() && boot_task_exists() && !start_menu_entry_exists() && std::filesystem::exists(installed_tray_path(), ec))
+        start_menu_entry_create();
+}
+
 std::string update_logon_copy() {
     if (!is_elevated() || !logon_copy_outdated()) return {};
     std::string message;
@@ -655,6 +665,17 @@ UpdateCheck check_for_update() {
     if (!release) { out.error = "the answer did not describe a release"; return out; }
     if (*version_number(release->version) > kVersionNumber) out.release = std::move(release);
     return out;
+}
+
+bool own_folder_writable() {
+    const auto dir = own_dir();
+    if (dir.empty()) return false;
+    const auto probe = dir / (L"write-test-" + std::to_wstring(GetCurrentProcessId()) + L".tmp");
+    const HANDLE file = CreateFileW(probe.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW,
+                                    FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE, nullptr);
+    if (file == INVALID_HANDLE_VALUE) return false;
+    CloseHandle(file);
+    return true;
 }
 
 bool install_update(const ReleaseInfo& release, std::string* message) {

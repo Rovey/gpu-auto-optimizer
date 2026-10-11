@@ -4,6 +4,7 @@
 #define NOMINMAX
 #include <windows.h>
 #include <sddl.h>
+#include <shlobj.h>
 #include <taskschd.h>
 #include <wrl/client.h>
 #include <cstdlib>
@@ -191,6 +192,42 @@ bool boot_task_exists() {
     if (FAILED(root->GetFolder(folder_path.text, &folder))) return false;
     Microsoft::WRL::ComPtr<IRegisteredTask> task;
     return SUCCEEDED(folder->GetTask(name.text, &task));
+}
+
+namespace {
+std::filesystem::path start_menu_link() {
+    PWSTR dir = nullptr;
+    std::filesystem::path link;
+    if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_CommonPrograms, 0, nullptr, &dir))) link = std::filesystem::path(dir) / L"GPU Auto Optimizer.lnk";
+    CoTaskMemFree(dir);
+    return link;
+}
+}
+
+long start_menu_entry_create() {
+    const Com com;
+    if (!com.usable()) return com.hr;
+    const auto link = start_menu_link();
+    if (link.empty()) return E_FAIL;
+    Microsoft::WRL::ComPtr<IShellLinkW> shortcut;
+    HRESULT hr = CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&shortcut));
+    if (FAILED(hr)) return hr;
+    if (FAILED(hr = shortcut->SetPath(installed_tray_path().c_str()))) return hr;
+    if (FAILED(hr = shortcut->SetWorkingDirectory(installed_dir().c_str()))) return hr;
+    Microsoft::WRL::ComPtr<IPersistFile> file;
+    if (FAILED(hr = shortcut.As(&file))) return hr;
+    return file->Save(link.c_str(), TRUE);
+}
+
+bool start_menu_entry_remove() {
+    const auto link = start_menu_link();
+    return link.empty() || DeleteFileW(link.c_str()) || GetLastError() == ERROR_FILE_NOT_FOUND;
+}
+
+bool start_menu_entry_exists() {
+    std::error_code ec;
+    const auto link = start_menu_link();
+    return !link.empty() && std::filesystem::exists(link, ec);
 }
 
 }
