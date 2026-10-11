@@ -1,6 +1,6 @@
 # Planned: tune history, stability, sharing
 
-Three features that are decided on but not built, and one open design point at the end. This page records the choices made for each, so
+Three features that are decided on but not built, one open design point, and the design that answers it. This page records the choices made for each, so
 that whoever builds one does not have to make them again. Nothing here is in the code yet; the
 first step of the same request, testing a saved tune again after a driver update, is
 (`core/retest.*`, hardware check 86).
@@ -135,3 +135,76 @@ version 0.4.3):
 
 **Not decided.** All of the above. It is recorded before a second card of this kind is tested,
 not after.
+
+## Design: never hotter than at stock
+
+The answer proposed to the open point above. A design, not built. What is built already is the
+backstop next to it (a profile that promises speed keeps no result that is slower than stock) and
+this same rule for the undervolt profile, where it costs nothing: an undervolt has no power limit
+to lower and only makes a card cooler.
+
+**The rule.** A run's temperature ceiling is the profile's limit, or what the card reached in the
+measurement at stock when that is more, and never more than 85 C:
+
+    ceiling = max(profile limit, min(peak at stock, 85))
+
+On the reference card nothing changes: it reaches 67 C at stock, and every profile's limit is above
+that. On the tester's RTX 3080 Ti (86 C at stock) Best of my GPU would run with a ceiling of 85 C
+instead of 75. The power step then has no reason to go to 65 %, and the clocks are searched at the
+power the card has.
+
+**Where the ceiling is used.** Everywhere the profile's limit is used today: the power step (the
+highest power limit whose probe stays under it), the clock probes, the soak, and the fan
+controller's "100 % from here". The stock measurement and the health probes keep their fixed 85 C.
+
+**The fan curve moves with it.** A profile's curve is drawn against its limit: Normal reaches
+100 % at 75 C because 75 is where that profile stops. With a higher ceiling and the same curve the
+fans would run at 100 % for good, which is not a tune anybody keeps. So the curve is shifted by the
+same amount the ceiling went up: the fan-stop threshold and the first point stay where they are
+(the card idles as before), every point above them moves up by the difference, and the last one
+sits on the ceiling.
+
+    Normal, as it is:        50 C 35 %   60 C 45 %   70 C 65 %   75 C 100 %
+    Normal, ceiling 85 C:    50 C 35 %   70 C 45 %   80 C 65 %   85 C 100 %
+
+The fan tune of All in one aims 5 C under the ceiling, as it aims 5 C under the limit today.
+
+**What it costs, said plainly.**
+
+- **The card stays as warm as it was.** On the tester's card that is 83 to 85 C under load for as
+  long as the tune is applied, where the run that was built gave 73 C. The rule does not cool a
+  card; it stops the app from paying for coolness with speed in a profile that promises speed.
+- **It is not quieter either.** That card needs its fans near 100 % to stay under 85 C at full
+  power; the driver's own control held 66 % and accepted 86 C. Faster than stock, as warm, and
+  louder: that is what Best of my GPU can be on such a card. Cool, quiet and fast at once it cannot
+  be, and the app should say which of the three a profile gives up.
+- **The app sees one temperature.** NVML reports the core. The memory and the voltage regulators
+  of a card that runs at 85 C are hotter than that, and GDDR6X more than most. A higher ceiling
+  with a memory overclock on top heats exactly what cannot be measured.
+- **Speed:** expected to end above stock on that card. Not measured.
+
+**What the user sees.** One line when the measurement at stock ends, before anything is searched:
+that this card reached N C by itself, that the profile allows 75 C, and that on this card it
+allows N. And the result table, which already shows both temperatures and both fan speeds.
+
+**Rejected.**
+
+- **Asking the user to choose a limit.** A question in the middle of a one-click run, about a
+  number most people cannot judge.
+- **Keeping the fixed limits and relying on the backstop.** Honest, but then the speed profiles do
+  nothing at all for such a card.
+- **Raising the limits for every card.** Hotter cards for everybody, to help the few that are hot
+  already.
+
+**Not decided.**
+
+- **Quiet and Cool & efficient on such a card.** Their limits (80 and 65 C) cannot be met there
+  either, and they would lower the power limit a long way to try. They promise less heat, so a
+  higher ceiling is the wrong answer for them; saying "this card cannot be kept at 65 C" may be the
+  right one.
+- **Which temperature "at stock" is.** The measurement at stock leaves the fans to the driver
+  (86 C at 66 %). With the fans on the run's curve the same card reaches 83 C. The rule above takes
+  the first, capped at 85.
+- **A memory overclock under a raised ceiling:** allowed as today, or left at stock because of
+  what cannot be measured.
+- **Whether All in one is judged as a whole** against stock, as the two speed profiles are.
