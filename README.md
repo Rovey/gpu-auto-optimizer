@@ -203,7 +203,7 @@ flowchart LR
 | `gao --probe` | Live telemetry: clocks, temperature, fan, power, clock-offset ranges |
 | `gao --curve` | Prints the voltage/frequency curve as the driver reports it; changes nothing |
 | `gao --stress <seconds>` | Runs the stress test alone and prints its verdict; changes nothing |
-| `gao --bandwidth` | Measures the current memory bandwidth |
+| `gao --bandwidth [--after-load <sec>]` | Measures the current memory bandwidth and shows every run of the measurement; with `--after-load`, right after that many seconds of the stress load, as a run measures it |
 | `gao --update` | Installs the latest release into the folder `gao.exe` is in, if there is a newer one |
 | `gao --stress-recreate` | Runs the stress test, rebuilds its GPU device, runs it again; prints both scores and the rebuild time; changes nothing |
 
