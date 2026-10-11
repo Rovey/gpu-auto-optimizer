@@ -68,11 +68,16 @@ int best_bandwidth_offset(int lo, int hi, int step, int ceiling, const std::func
     for (int v = lo; v <= top; v += step) {
         MemSample s = sample(v);
         if (!s.stable) break;
-        // A drop is measured twice before it ends the scan: a single reading
-        // can land while the memory clock is still in a lower P-state.
-        if (s.gbps < best * (1 - kBandwidthDrop)) {
-            s = sample(v);
+        // A step that is further below the best than readings scatter is in
+        // doubt: it is read kBandwidthReadings times and the middle one counts.
+        // Only such a step: every reading is a copy that checks nothing, and
+        // near its edge the memory answers more of it with a driver reset.
+        if (s.gbps < best * (1 - kBandwidthTie)) {
+            std::vector<double> readings{s.gbps};
+            while (static_cast<int>(readings.size()) < kBandwidthReadings && (s = sample(v)).stable) readings.push_back(s.gbps);
             if (!s.stable) break;
+            std::sort(readings.begin(), readings.end());
+            s.gbps = readings[readings.size() / 2];
         }
         seen.emplace_back(v, s.gbps);
         best = std::max(best, s.gbps);
@@ -571,10 +576,10 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
             bool unavailable = false;
             const int peak = best_bandwidth_offset(0, bounds.mem_max_mhz, kMemStep, ceiling, [&](int v) {
                 MemSample m;
-                // kBandwidthReadings readings, and the step is their middle
-                // one. A reading that only did not settle is left out; any
-                // other failure ends the step at once.
-                std::vector<double> readings;
+                // One reading. One that only did not settle is taken again,
+                // kBandwidthReadings times at most; any other failure ends
+                // the step at once.
+                std::optional<double> gbps;
                 bool failed = false;
                 // The +0 sample is journaled without a clock, like a soak at
                 // stock: if the machine froze in it, an open entry that said
@@ -582,13 +587,13 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
                 const std::optional<int> mem_j = v > 0 ? std::optional<int>(v) : std::nullopt;
                 m.stable = explore(v, reset_at, [&] {
                     if (!is_stable(clock_candidate(std::nullopt, mem_j, 0, v, kClockProbeS, [&] {
-                            for (int i = 0; i < kBandwidthReadings && !failed; ++i) {
-                                if (const auto gbps = io.bandwidth()) readings.push_back(*gbps);
-                                else failed = !(io.bandwidth_unsettled && io.bandwidth_unsettled());
+                            for (int i = 0; i < kBandwidthReadings && !gbps && !failed; ++i) {
+                                gbps = io.bandwidth();
+                                failed = !gbps && !(io.bandwidth_unsettled && io.bandwidth_unsettled());
                             }
                         })))
                         return false;
-                    if (!failed && readings.size() >= 2) return true;
+                    if (gbps) return true;
                     // The candidate passed, the measurement failed: the step is unusable.
                     if (v > 0 && !failed) {
                         // The load computed and the readings disagreed: noise,
@@ -610,18 +615,10 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
                     return false;
                 });
                 if (m.stable) {
-                    std::string each;
-                    for (const double g : readings) {
-                        char one[32];
-                        std::snprintf(one, sizeof(one), "%s%.1f", each.empty() ? "" : " ", g);
-                        each += one;
-                    }
-                    std::sort(readings.begin(), readings.end());
-                    const size_t n = readings.size();
-                    m.gbps = n % 2 ? readings[n / 2] : (readings[n / 2 - 1] + readings[n / 2]) / 2;
+                    m.gbps = *gbps;
                     char buf[64];
-                    std::snprintf(buf, sizeof(buf), "mem +%d: bandwidth %.1f GB/s (", v, m.gbps);
-                    log(buf + each + ")");
+                    std::snprintf(buf, sizeof(buf), "mem +%d: bandwidth %.1f GB/s", v, m.gbps);
+                    log(buf);
                 }
                 return m;
             });

@@ -77,10 +77,13 @@ inline constexpr double kBandwidthDrop = 0.03;
 // ~0.4 % and one 50 MHz step is worth ~0.5 %, so a narrower band would let
 // noise pick the offset.
 inline constexpr double kBandwidthTie = 0.01;
-// A step of the memory scan is the middle one of this many readings, so one
-// reading that is off, or that did not settle, decides nothing. On the
-// reference card single readings ended scans at +250, at +1000 and not at all
-// on one day, and the runs saved +100, +650 and +1600 MHz (hardware check 94).
+// A step of the memory scan that is in doubt (more than kBandwidthTie below
+// the best) is the middle one of this many readings, so one reading that is
+// off decides nothing; and a reading that did not settle is taken again up to
+// this many times. On the reference card single readings ended scans at +250,
+// at +1000 and not at all on one day, and the runs saved +100, +650 and +1600
+// MHz (hardware check 94). Not every step: three readings at every step ended
+// both scans of hardware check 95 in a driver reset near the memory's edge.
 inline constexpr int kBandwidthReadings = 3;
 
 // A confirm probe that ends too hot keeps the clock edge (heat is the power
@@ -123,7 +126,8 @@ struct MemSample {
 
 // Scans lo, lo+step, ... (<= hi, < ceiling), sampling lo too. Stops at the
 // first unstable sample or once gbps falls more than kBandwidthDrop below the
-// best so far (a drop is re-measured once before it counts). Returns the
+// best so far (a step in doubt is sampled kBandwidthReadings times and its
+// middle reading counts). Returns the
 // lowest stable offset within kBandwidthTie of the best, so noise on a flat
 // curve never drifts the result upward; lo when no sample was stable.
 int best_bandwidth_offset(int lo, int hi, int step, int ceiling, const std::function<MemSample(int)>& sample);
