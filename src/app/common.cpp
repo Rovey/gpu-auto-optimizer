@@ -412,6 +412,12 @@ OptimizeOutcome run_optimize(Preset preset, const OptimizeHooks& hooks, const st
         log("the stress load could not be rebuilt: " + load->Error());
         return false;
     };
+    io.measuring = hooks.measuring;
+    // Whatever step the search announced last is over when it returns, however it returns.
+    struct StepDone {
+        const OptimizeHooks& hooks;
+        ~StepDone() { if (hooks.measuring) hooks.measuring("", 0); }
+    } step_done{hooks};
     if (hooks.active_gpu) hooks.active_gpu(&gpu);
     // The last line of defence: a fault that escapes the per-call guards (in
     // the stress load's D3D calls, say) must not kill the process with a

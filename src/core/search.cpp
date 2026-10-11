@@ -177,6 +177,7 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
     OptimizeResult r;
     std::string stopped;   // non-empty once the run must end; later probes become no-ops
     auto log = [&](const std::string& m) { if (io.log) io.log(m); };
+    auto step = [&](const std::string& what, double seconds) { if (io.measuring) io.measuring(what, seconds); };
     bool hw_suspect = false;         // the connections may be dead: a probe, a write or a measurement ended in a way a driver reset explains
     bool reconnect_futile = false;   // a reconnect failed, or did not help: the way out does not try another
     // The reset budget. These are only ever set with gpu.recover: without a
@@ -264,6 +265,7 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
         if (io.aborted && io.aborted()) return false;
         if (io.rest) {
             log("resting " + std::to_string(static_cast<int>(kRestAfterResetS)) + " s before the card is loaded again");
+            step("The driver was reset: resting before the card is loaded again", kRestAfterResetS);
             if (!io.rest(kRestAfterResetS)) return false;
         }
         return !(io.aborted && io.aborted());
@@ -309,6 +311,7 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
                 if (!load_ready) { log("the stress load is not ready yet"); continue; }
             }
             log("checking that the card is back: " + std::to_string(static_cast<int>(kHealthProbeS)) + " s at stock");
+            step("Checking that the card is back", kHealthProbeS);
             // Called directly, not through `probe`, which would count a reset
             // verdict as an event of its own. No stall floor: the load was
             // prepared just before, and five seconds are bounded already.
@@ -417,15 +420,23 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
     };
     if (obj.core_oc) log(range_text("core", bounds.core_max_mhz, bounds.core_from_card));
     if (obj.mem_oc) log(range_text("mem", bounds.mem_max_mhz, bounds.mem_from_card));
-    log("baseline: 30 s at stock");
-    const auto base = probe(kBaselineS, kSafetyTempC);
-    if (!base) return finish_fail(stopped);
-    r.baseline = *base;
-    log("baseline: " + describe(*base));
-    // The baseline runs at stock clocks: a reset there is nothing the search
-    // can work around.
-    if (reset_in_step) return finish_fail(at_stock_clocks());
-    if (base->verdict != Verdict::Stable) return finish_fail(std::string("stock is not stable (") + verdict_name(base->verdict) + ")");
+    if (stock && stock->verdict == Verdict::Stable && stock->score > 0) {
+        // Measured a moment ago, for longer and with the same load: another
+        // half minute at stock would say nothing new.
+        r.baseline = *stock;
+        log("baseline: the measurement at stock, " + describe(*stock));
+    } else {
+        log("baseline: 30 s at stock");
+        step("Baseline at stock", kBaselineS);
+        const auto base = probe(kBaselineS, kSafetyTempC);
+        if (!base) return finish_fail(stopped);
+        r.baseline = *base;
+        log("baseline: " + describe(*base));
+        // The baseline runs at stock clocks: a reset there is nothing the
+        // search can work around.
+        if (reset_in_step) return finish_fail(at_stock_clocks());
+        if (base->verdict != Verdict::Stable) return finish_fail(std::string("stock is not stable (") + verdict_name(base->verdict) + ")");
+    }
 
     // Power.
     int power_floor = 100;   // lowest power the soak may fall back to
@@ -456,6 +467,7 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
                     if (stopped.empty()) stopped = at_stock_clocks();
                     return std::nullopt;
                 }
+                step("Power limit " + std::to_string(pct) + " %", kPowerProbeS);
                 const auto s = probe(kPowerProbeS, kSafetyTempC);
                 if (s) { seen[pct] = *s; log("power " + std::to_string(pct) + " %: " + describe(*s)); }
                 if (reset_in_step && stopped.empty()) stopped = at_stock_clocks();
@@ -507,6 +519,11 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
             if (reset_in_step && stock_clocks && stopped.empty()) stopped = at_stock_clocks();
             return std::nullopt;
         }
+        // A search probe lasts seconds and has no countdown; a confirm probe has.
+        const bool confirm = seconds == kConfirmProbeS;
+        step(std::string(confirm ? "Confirming " : "Trying ") +
+                 (core_j ? "core clock +" + std::to_string(core) : "memory clock +" + std::to_string(mem)) + " MHz",
+             confirm ? seconds : 0);
         const auto s = probe(seconds, obj.max_temp_c);
         if (s && s->verdict == Verdict::Stable && extra) extra();
         if (!journal.complete(*id, closed_as(s))) {
@@ -702,6 +719,7 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
         }
         log("soak: " + std::to_string(static_cast<int>(kSoakS)) + " s at power " + std::to_string(r.power_pct) + " %, core +" + std::to_string(r.core_mhz) +
             ", mem +" + std::to_string(r.mem_mhz));
+        step("Final test of the result", kSoakS);
         const auto s = probe(kSoakS, obj.max_temp_c);
         if (!journal.complete(*id, closed_as(s)))
             return finish_fail("could not write the journal");
