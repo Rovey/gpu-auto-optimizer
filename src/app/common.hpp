@@ -11,6 +11,8 @@
 #include "core/types.hpp"
 #include "core/undervolt.hpp"
 #include "core/update.hpp"
+#include <cstdint>
+#include <filesystem>
 #include <functional>
 #include <optional>
 #include <string>
@@ -25,6 +27,16 @@ std::string now_text();   // local time, "YYYY-MM-DD HH:MM"
 Config load_config();
 bool save_config(const Config& c);
 void boot_log(const std::string& msg);
+// The lines of a run, shown as before and also kept on disk: run.log in the
+// state folder, each line flushed before the next step of the run. A machine
+// that freezes in a run takes the window and its log with it; this is what is
+// left. Elevated only (the folder is the administrators'); otherwise `show`
+// is returned as it is.
+std::function<void(const std::string&)> logged(std::function<void(const std::string&)> show);
+// The same, to a file of the caller's choosing. A file over kRunLogMaxBytes
+// is moved aside first (one older file is kept, as <file>.old).
+inline constexpr std::uintmax_t kRunLogMaxBytes = 1024 * 1024;
+std::function<void(const std::string&)> logged_to(const std::filesystem::path& file, std::function<void(const std::string&)> show);
 // Creates, or verifies and re-secures, the admin-only state folder. Every
 // elevated command that reads or writes state calls this first.
 bool prepare_state(std::string* why);

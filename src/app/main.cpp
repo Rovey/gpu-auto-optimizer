@@ -10,6 +10,7 @@
 #include "hw/boot_task.hpp"
 #include "hw/gpu_control.hpp"
 #include "hw/nvapi.hpp"
+#include "hw/nvidia_app.hpp"
 #include "hw/nvml.hpp"
 #include "hw/stress.hpp"
 #include <atomic>
@@ -265,7 +266,7 @@ static int update() {
 static int optimize(gao::Preset preset, const std::optional<gao::FanCurve>& fan_curve) {
     gao::app::OptimizeHooks hooks;
     hooks.aborted = [] { return g_abort.load(); };
-    hooks.log = [](const std::string& msg) { std::printf("  %s\n", msg.c_str()); };
+    hooks.log = gao::app::logged([](const std::string& msg) { std::printf("  %s\n", msg.c_str()); });
     hooks.active_gpu = [](const gao::GpuControl* gpu) {
         g_gpu = gpu;
         SetConsoleCtrlHandler(OnConsoleCtrl, gpu ? TRUE : FALSE);
@@ -304,7 +305,7 @@ static int optimize(gao::Preset preset, const std::optional<gao::FanCurve>& fan_
 static int undervolt(bool on_overclock) {
     gao::app::OptimizeHooks hooks;
     hooks.aborted = [] { return g_abort.load(); };
-    hooks.log = [](const std::string& msg) { std::printf("  %s\n", msg.c_str()); };
+    hooks.log = gao::app::logged([](const std::string& msg) { std::printf("  %s\n", msg.c_str()); });
     hooks.active_gpu = [](const gao::GpuControl* gpu) {
         g_gpu = gpu;
         SetConsoleCtrlHandler(OnConsoleCtrl, gpu ? TRUE : FALSE);
@@ -343,7 +344,7 @@ static int undervolt(bool on_overclock) {
 static int all_in_one() {
     gao::app::OptimizeHooks hooks;
     hooks.aborted = [] { return g_abort.load(); };
-    hooks.log = [](const std::string& msg) { std::printf("  %s\n", msg.c_str()); };
+    hooks.log = gao::app::logged([](const std::string& msg) { std::printf("  %s\n", msg.c_str()); });
     hooks.active_gpu = [](const gao::GpuControl* gpu) {
         g_gpu = gpu;
         SetConsoleCtrlHandler(OnConsoleCtrl, gpu ? TRUE : FALSE);
@@ -455,6 +456,10 @@ static int status() {
     std::printf("\n");
     if (cfg.fan_min_pct > 0) std::printf("fan minimum: %d %% (learned: the fans stall below it)\n", cfg.fan_min_pct);
     std::printf("boot-apply: %s\n", gao::boot_task_exists() ? "on (logon task registered)" : "off");
+    // No run starts while it is on (app/common.cpp).
+    const std::optional<bool> nvidia = gao::nvidia_auto_tuning();
+    std::printf("nvidia app: Automatic Tuning %s\n",
+                !nvidia ? "unknown (its setting could not be read)" : *nvidia ? "ON -- switch it off before a run" : "off");
     std::error_code ec;
     if (!std::filesystem::exists(gao::installed_exe_path(), ec)) std::printf("boot copy:  not installed\n");
     else if (gao::app::logon_copy_is_this_build()) std::printf("boot copy:  up to date\n");

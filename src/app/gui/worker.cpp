@@ -22,13 +22,13 @@ bool OptimizeWorker::start(Preset preset, std::optional<FanCurve> fan_curve) {
     thread_ = std::jthread([this, preset, fan_curve] {
         app::OptimizeHooks hooks;
         hooks.aborted = [this] { return abort_.load(); };
-        hooks.log = [this](const std::string& line) {
+        hooks.log = app::logged([this](const std::string& line) {
             {
                 std::lock_guard lock(mu_);
                 log_.push_back(line);
             }
             wake_();
-        };
+        });
         hooks.measuring = [this](const std::string& what, double seconds) {
             {
                 std::lock_guard lock(mu_);

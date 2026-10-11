@@ -122,7 +122,7 @@ Both columns are five minutes of full load, so the card is heated through on bot
 
 1. Download `GpuAutoOptimizer-<version>-win-x64.zip` from the [latest release](https://github.com/Rovey/gpu-auto-optimizer/releases/latest) and unzip it anywhere.
 2. Start **`GpuAutoOptimizer.exe`**.
-3. Open **Optimize** and press **Optimize GPU**: **All in one** is selected, and you can pick another profile first. Close games and other programs that use the graphics card before you do. The app asks for administrator rights, because it changes clocks and power limits.
+3. Open **Optimize** and press **Optimize GPU**: **All in one** is selected, and you can pick another profile first. Close games and other programs that use the graphics card before you do, and the tools that tune or draw on it: close MSI Afterburner and RivaTuner, switch **Automatic Tuning** off in the NVIDIA app (System, Performance), and keep the NVIDIA overlay (Alt+Z) closed during the run. The app asks for administrator rights, because it changes clocks and power limits.
 4. That is all. When the run is done the result is applied, saved, and kept at every logon. Untick **Keep the result applied at every logon** before the run if you only want to try it.
 
 > [!NOTE]
@@ -175,7 +175,7 @@ flowchart LR
 
 - **Every run starts with the card at stock for five minutes,** as long as the result is tested at the end, with the fans left to the NVIDIA driver. That is the "before" of the result: a card is not heated through after 30 s, so a shorter run would make every result look warmer and louder than stock. Some cards get hot there: the driver's own fan control lets them (a 3080 Ti reached 85 °C with its fans at 65 %). The measurement stops at 85 °C, what it measured until then is the "before", and the run goes on. From there every step keeps the fans on a curve that reaches 100 % at the profile's temperature limit.
 - **Stress test.** A DirectX 11 compute load in which the GPU checks every value it computes against a known answer. Each probe ends in a verdict: `STABLE`, `WRONG RESULT`, `DEVICE LOST`, `STALLED` (the values were right but the card computed almost nothing), `TOO HOT` or `NO TELEMETRY`.
-- **Memory comes first and stops at the bandwidth peak,** not at the first error. GDDR6 and GDDR6X retry failed transfers, so an overclocked memory bus loses speed long before it returns a wrong result. The search raises the offset 50 MHz at a time, measures bandwidth at each step and keeps the lowest offset within 1 % of the best. Where bandwidth cannot be measured, it climbs until a probe fails instead.
+- **Memory comes first and stops at the bandwidth peak,** not at the first error. GDDR6 and GDDR6X retry failed transfers, so an overclocked memory bus loses speed long before it returns a wrong result. The search raises the offset 50 MHz at a time, measures bandwidth at each step and keeps the lowest offset within 1 % of the best. Where bandwidth cannot be measured, the memory is left at stock: without that measurement nothing says where to stop, and the first wrong result comes far too late.
 - **The core search climbs from stock.** With the chosen memory offset applied, it raises the core offset 15 MHz at a time until a probe fails, and keeps the last value that passed. How far it may go comes from the range the driver reports for your card, so a card that can hold more is not stopped at a fixed limit.
 - **Each edge is confirmed.** The value a search ends on gets a 30 s probe, and a lower value is tried if it does not hold. The safety margin is applied to the confirmed value, and the result as a whole must pass the 300 s soak.
 - **A driver reset ends that clock's search.** On a card the search can push past its edge, a search resets the driver: the screen goes black for a moment. The run then reconnects to the driver, sets the card to stock, leaves it without load for 20 seconds and checks with a short probe at stock that it computes normally again. After that the search tries no new values for that clock: it keeps the last value that passed and confirms four steps below it. Each clock has its own search, so a reset in the memory search does not keep the core from being searched; a run can therefore reset the driver twice, once per clock. One reset more than that ends the run at stock with nothing saved, and so does a card that does not come back. Results on real cards are in [docs/hardware-checks.md](docs/hardware-checks.md), checks 51 and 52.
@@ -224,9 +224,11 @@ From 0.3.1 on, click **Update available** at the bottom left of the window. From
 </details>
 
 <details>
-<summary><b>Does it work alongside MSI Afterburner?</b></summary>
+<summary><b>Does it work alongside MSI Afterburner or the NVIDIA app?</b></summary>
 
-Yes, as long as only one of them applies settings. If Afterburner applies an offset while GPU Auto Optimizer keeps its tune applied, the watchdog notices, says so in a notification and leaves the settings alone.
+Not during a run: a run does not start while MSI Afterburner or RivaTuner Statistics Server (`MSIAfterburner.exe`, `RTSS.exe`) is running, and says which one to close. Close it completely, also its icon in the notification area, and switch off its start with Windows if it applies settings there. Outside a run they can coexist as long as only one of them applies settings: if Afterburner applies an offset while GPU Auto Optimizer keeps its tune applied, the watchdog notices, says so in a notification and leaves the settings alone.
+
+The NVIDIA app can stay installed. Two of its features get in the way of a run: **Automatic Tuning** (System, Performance) applies an overclock of its own and scans again from time to time, so switch it off, for a run and for as long as you keep a tune of this app applied; and the **overlay** (Alt+Z) draws on programs that use the card, so leave it closed while a run is going. A run does not start while Automatic Tuning is on, and `gao --status` shows what the app reads (`nvidia app: Automatic Tuning off`). The overlay it cannot see: that one is yours to keep closed.
 </details>
 
 <details>
@@ -268,7 +270,7 @@ Yes, with the **Undervolt** profile. It does not lock a voltage (that froze the 
 <details>
 <summary><b>Where does it keep its data?</b></summary>
 
-In `%ProgramData%\GpuAutoOptimizer`: `gao.json` (the saved profile), `journal.jsonl` (the crash journal) and `boot.log`. Users can read the folder; only administrators can write it, because the logon task runs with administrator rights.
+In `%ProgramData%\GpuAutoOptimizer`: `gao.json` (the saved profile), `journal.jsonl` (the crash journal), `boot.log`, and `run.log` (every line a run showed, written as it happened, so that it is still there after a crash; send it along with a problem report). Users can read the folder; only administrators can write it, because the logon task runs with administrator rights.
 </details>
 
 ## Building from source
