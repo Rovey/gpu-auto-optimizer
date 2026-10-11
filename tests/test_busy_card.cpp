@@ -46,9 +46,18 @@ TEST_CASE("a program's processes and engines add up, and a video is named") {
 
 TEST_CASE("many small processes of one program count together") {
     // Each below the threshold, the program above it.
-    const auto busy = busy_programs({{"app.exe", 1, "3D", 0.4}, {"app.exe", 2, "3D", 0.4}, {"APP.EXE", 3, "3D", 0.4}});
+    const auto busy = busy_programs({{"app.exe", 1, "3D", 0.2}, {"app.exe", 2, "3D", 0.2}, {"APP.EXE", 3, "3D", 0.2}});
     REQUIRE(busy.size() == 1);
-    CHECK(busy[0].pct == doctest::Approx(1.2));
+    CHECK(busy[0].pct == doctest::Approx(0.6));
+    CHECK(busy_text(busy) == "app (1 %)");   // never "0 %" for a program that is named
+}
+
+TEST_CASE("the editor is named in a look that catches it at half its usual share") {
+    // Two looks at the same idle editor, seconds apart, read 2.2 % and 1 %.
+    CHECK(busy_programs({{"Trae.exe", 1, "3D", 1.0}}).size() == 1);
+    CHECK(busy_programs({{"Trae.exe", 1, "3D", 0.6}}).size() == 1);
+    // What only stands there is not.
+    CHECK(busy_programs({{"msedgewebview2.exe", 1, "3D", 0.01}, {"explorer.exe", 2, "3D", 0.05}}).empty());
 }
 
 TEST_CASE("what is below the threshold is not named") {

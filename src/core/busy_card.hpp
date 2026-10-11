@@ -28,9 +28,10 @@ struct BusyProgram {
     bool video = false;    // it decodes or encodes video
 };
 
-// A program below this is not named. The desktop itself idles at 0.05 %, an
-// idle editor that still cost 8 % of the score at 2.2 %.
-inline constexpr double kBusyPct = 1.0;
+// A program below this is not named. Programs that only stand there idle at
+// 0.01 to 0.05 %; the idle editor that cost 8 % of the score read 2.2 % in
+// one look and 1 % in another, so the line is drawn well below it.
+inline constexpr double kBusyPct = 0.5;
 
 // The programs that use the card enough to matter, the heaviest first. Never
 // this tool itself, never what Windows needs to draw the desktop (nobody can
