@@ -113,7 +113,7 @@ One run of **Undervolt** on the same card. Clocks and power limit stay stock; th
 | Core clock under load | 2788 MHz | 2778 MHz |
 | Voltage the card reaches that clock at | 1100 mV | 990 mV |
 
-Both columns are five minutes of full load, so the card is heated through on both sides and the temperatures compare; the fans were left to the NVIDIA driver's own curve. The search lowered the voltage one curve point at a time until the card computed a wrong value (940 mV), confirmed the lowest value that held for 30 s (950 mV) and applied it with the safety margin (990 mV). The result then had to pass the five-minute soak before it was saved. The whole run took 12 minutes.
+Both columns are five minutes of full load, so the card is heated through on both sides and the temperatures compare; in this run the fans were left to the NVIDIA driver's own curve (the search now keeps them on the fan curve in use). The search lowered the voltage one curve point at a time until the card computed a wrong value (940 mV), confirmed the lowest value that held for 30 s (950 mV) and applied it with the safety margin (990 mV). The result then had to pass the five-minute soak before it was saved. The whole run took 12 minutes.
 
 > [!NOTE]
 > An undervolt is saved in place of an overclock, not next to it, so this is the other choice, not an extra. Every card has its own limits. The log of this run is in [docs/hardware-checks.md](docs/hardware-checks.md) (check 72).
@@ -173,7 +173,7 @@ flowchart LR
     G --> H[Save profile]
 ```
 
-- **Every run starts with the card at stock for five minutes,** as long as the result is tested at the end, with the fans left to the NVIDIA driver. That is the "before" of the result: a card is not heated through after 30 s, so a shorter run would make every result look warmer and louder than stock.
+- **Every run starts with the card at stock for five minutes,** as long as the result is tested at the end, with the fans left to the NVIDIA driver. That is the "before" of the result: a card is not heated through after 30 s, so a shorter run would make every result look warmer and louder than stock. Some cards get hot there: the driver's own fan control lets them (a 3080 Ti reached 85 °C with its fans at 65 %). The measurement stops at 85 °C, what it measured until then is the "before", and the run goes on. From there every step keeps the fans on a curve that reaches 100 % at the profile's temperature limit.
 - **Stress test.** A DirectX 11 compute load in which the GPU checks every value it computes against a known answer. Each probe ends in a verdict: `STABLE`, `WRONG RESULT`, `DEVICE LOST`, `STALLED` (the values were right but the card computed almost nothing), `TOO HOT` or `NO TELEMETRY`.
 - **Memory comes first and stops at the bandwidth peak,** not at the first error. GDDR6 and GDDR6X retry failed transfers, so an overclocked memory bus loses speed long before it returns a wrong result. The search raises the offset 50 MHz at a time, measures bandwidth at each step and keeps the lowest offset within 1 % of the best. Where bandwidth cannot be measured, it climbs until a probe fails instead.
 - **The core search climbs from stock.** With the chosen memory offset applied, it raises the core offset 15 MHz at a time until a probe fails, and keeps the last value that passed. How far it may go comes from the range the driver reports for your card, so a card that can hold more is not stopped at a fixed limit.
