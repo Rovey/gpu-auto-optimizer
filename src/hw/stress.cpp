@@ -370,7 +370,10 @@ std::optional<double> Stress::MeasureBandwidth() {
         UINT64 t0 = 0, t1 = 0;
         if (!wait(d.q_disjoint.Get(), &dj, sizeof(dj)) || !wait(d.q_begin.Get(), &t0, sizeof(t0)) ||
             !wait(d.q_end.Get(), &t1, sizeof(t1))) {
-            if (d.device->GetDeviceRemovedReason() != S_OK) d.device.Reset();
+            // Say which: the log line used to end in nothing here.
+            const HRESULT removed = d.device->GetDeviceRemovedReason();
+            error_ = removed != S_OK ? Hr("the device was lost during the copy", removed) : "the timing of the copy did not come back";
+            if (removed != S_OK) d.device.Reset();
             return std::nullopt;
         }
         if (dj.Disjoint || dj.Frequency == 0 || t1 <= t0) {   // clock changed mid-run: discard
