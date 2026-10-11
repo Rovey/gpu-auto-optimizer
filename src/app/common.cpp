@@ -396,7 +396,7 @@ OptimizeOutcome run_optimize(Preset preset, const OptimizeHooks& hooks, const st
     // exception passes through the guard to the catch below.
     bool crashed = false;
     try {
-        crashed = !guarded([&] { out.result = optimize(gpu, objectives_for(preset), journal, io); });
+        crashed = !guarded([&] { out.result = optimize(gpu, objectives_for(preset), journal, io, out.stock); });
     } catch (...) {   // never leave a candidate applied, whatever went wrong
         if (hooks.active_gpu) hooks.active_gpu(nullptr);
         if (gpu.reset_to_stock) gpu.reset_to_stock();
@@ -495,6 +495,18 @@ UndervoltOutcome run_undervolt(const OptimizeHooks& hooks, bool on_saved_tune, c
     if (!lock.owned()) return fail("another optimize is already running (in the app or on the command line)");
     std::string why;
     if (!prepare_state(&why)) return fail(why);
+    // The card at stock first, as every run measures it: the "before" of the
+    // result, with the fans left to the driver, stopped at kStockTempC and
+    // kept when it was, and followed by a cool-down (measure_stock). With
+    // drivers of its own, before this run makes its own, as in run_optimize.
+    // Not on top of the saved tune: the reference there is that overclock.
+    std::optional<StabilityResult> stock_run;
+    if (!on_saved_tune) {
+        log("the card at stock, five minutes");
+        const StockOutcome measured = measure_stock(hooks);
+        if (!measured.error.empty()) return fail(measured.error);
+        stock_run = measured.result;
+    }
     GuardedGpu hw(kGpu);   // guarded driver calls and a reconnect, as in run_optimize
     if (!hw.Init(&why)) return fail(why);
     auto load = std::make_unique<Stress>();   // on the heap: left alone after an access violation
@@ -552,6 +564,7 @@ UndervoltOutcome run_undervolt(const OptimizeHooks& hooks, bool on_saved_tune, c
     // tune, if it is this card's and this driver's (strikes only gate the
     // logon apply).
     UndervoltBase base;
+    base.measured = stock_run;
     std::optional<Profile> over;
     if (on_saved_tune) {
         Config cfg = load_config();

@@ -17,6 +17,9 @@ struct Objectives {
     bool  core_oc = true;
     bool  mem_oc = true;
     bool  power = true;
+    // The profile promises speed: a result that is slower than the card was
+    // at stock is not kept (core/search.hpp, kNotSlowerScore).
+    bool  faster_than_stock = false;
 };
 
 Objectives objectives_for(Preset preset);

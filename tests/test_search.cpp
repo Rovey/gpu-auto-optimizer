@@ -76,6 +76,9 @@ struct FakeCard {
     int noisy_power_pct = -1;        // a 20 s probe at this power reads 10 % low
     int soak_extra_heat = 0;         // a 300 s probe peaks this much hotter than a 20 s one
     int confirm_extra_heat = 0;      // a 30 s probe peaks this much hotter than a 20 s one
+    int extra_heat = 0;              // every probe peaks this much hotter: a card that runs warm
+    double hot_after_health_s = -1;  // >= 0: the first 30 s probe after a health probe is too hot after this many seconds
+    bool hot_from_health = false;    // armed by that health probe
     int abort_in_probe_s = -1;       // a probe of this length is cut short by a stop request
     bool abort_on_soak = false;      // Ctrl+C arrives while the soak probe runs
     bool aborted_now = false;
@@ -108,6 +111,7 @@ struct FakeCard {
     std::vector<std::string> events; // "recover", "stock", "rest", "health", "begin" in the order they happen
     bool abort_during_rest = false;  // a stop request arrives while the search rests
     int rests = 0;
+    int abort_on_rest = -1;          // a stop request comes during this rest (1 = the first)
     bool with_prepare = false;       // the run offers OptimizeIo::prepare_load
     int prepare_fails = 0;           // this many preparations return false
     int prepares = 0;
@@ -232,6 +236,14 @@ struct FakeCard {
             // The 5 s probe is the health probe after a driver reset.
             const bool health = seconds == 5;
             if (health) events.push_back("health");
+            if (health && hot_after_health_s >= 0) hot_from_health = true;
+            if (seconds == 30 && hot_from_health) {   // the card was above the limit when the probe began
+                hot_from_health = false;
+                r.seconds = hot_after_health_s;
+                r.peak_temp_c = max_temp + 1;
+                r.verdict = Verdict::TooHot;
+                return r;
+            }
             if (seconds == abort_in_probe_s) { r.verdict = Verdict::Aborted; return r; }
             if (seconds == 3 && blind_probes > 0) { --blind_probes; r.verdict = Verdict::NoTelemetry; return r; }
             if (seconds == 3 && core == blind_at_core) { r.verdict = Verdict::NoTelemetry; return r; }
@@ -251,7 +263,7 @@ struct FakeCard {
                 r.verdict = Verdict::DeviceLost;
                 return r;
             }
-            r.peak_temp_c = static_cast<int>(40 + 0.3 * power) + (seconds == 300 ? soak_extra_heat : 0) +
+            r.peak_temp_c = static_cast<int>(40 + 0.3 * power) + extra_heat + (seconds == 300 ? soak_extra_heat : 0) +
                             (seconds == 30 ? confirm_extra_heat : 0);
             if (seconds == 300 && abort_on_soak) aborted_now = true;
             r.score = 1000.0 * std::min(power, 90) / 90;
@@ -277,6 +289,7 @@ struct Run {
     std::vector<std::string> log;
     int abort_after_probes = -1;
     bool no_rest = false;            // the application gives the search no way to wait
+    std::optional<StabilityResult> stock;   // the measurement at stock that went before the run, when there was one
     OptimizeResult go(Preset preset, GpuControl gpu) {
         Journal j(card.journal, [this](const std::string& l) {
             if (l.find("\"complete\"") != std::string::npos && card.completes_ok >= 0 && card.completes_ok-- == 0)
@@ -293,7 +306,7 @@ struct Run {
             io.rest = [this](double) {
                 ++card.rests;
                 card.events.push_back("rest");
-                if (card.abort_during_rest) { card.aborted_now = true; return false; }
+                if (card.abort_during_rest || card.rests == card.abort_on_rest) { card.aborted_now = true; return false; }
                 return true;
             };
         if (card.with_prepare)
@@ -321,7 +334,7 @@ struct Run {
                 return card.bw_curve(card.mem);
             };
         if (card.bw_curve) io.bandwidth_unsettled = [this] { return card.bw_unsettled; };
-        return optimize(gpu, objectives_for(preset), j, io);
+        return optimize(gpu, objectives_for(preset), j, io, stock);
     }
     OptimizeResult go(Preset preset) { return go(preset, card.gpu()); }
     bool logged(const std::string& what) const { return count_logged(what) > 0; }
@@ -2672,4 +2685,149 @@ TEST_CASE("a run starts when neither runs, whatever else does") {
     CHECK(other_tool_refusal({"explorer.exe", "Discord.exe", "GpuAutoOptimizer.exe", "gao.exe"}).empty());
     // Only the programs themselves: not a file that merely carries the name.
     CHECK(other_tool_refusal({"RTSSHooksLoader64.exe", "MSIAfterburner.exe.bak", "NotRTSS.exe", "Afterburner"}).empty());
+}
+
+// The core offsets of a run's 30 s confirm probes, in the order they ran.
+static std::vector<int> core_confirms(const FakeCard& card) {
+    std::vector<int> out;
+    for (const std::string& p : card.probe_order) {
+        if (p.rfind("30:", 0) != 0) continue;
+        const auto core_at = p.find(':', 3) + 1;
+        const int core = std::stoi(p.substr(core_at, p.find(':', core_at) - core_at));
+        if (core != 0) out.push_back(core);   // core 0 is the memory's confirm probe
+    }
+    return out;
+}
+
+TEST_CASE("a confirm probe that is too hot before the clock was tested confirms nothing") {
+    // A 3080 Ti, 0.4.5: the driver reset at core +300, the health probe at
+    // stock power left the card at 76 C, and `confirm core +225: TOO HOT`
+    // ended within a second. That counted as holding, and +225 was confirmed
+    // by a probe that had tested nothing.
+    Run run = lost_at_135();
+    run.card.hot_after_health_s = 0.6;
+    const auto r = run.go(Preset::BestOfMyGpu);
+    REQUIRE(r.ok);
+    CHECK(r.driver_resets == 1);
+    // The reset came at +135, +120 was the last value that passed, and the
+    // confirm starts four steps below it. That probe ends too hot at once and
+    // does not count; the card cools, and one step lower runs its 30 s.
+    CHECK(core_confirms(run.card) == std::vector<int>{60, 45});
+    CHECK(r.core_confirmed == 45);
+    CHECK(r.core_mhz <= 45);
+    CHECK(run.logged("confirm core +60 / mem +550: TOO HOT"));
+    CHECK(run.logged("too hot after 0.6 s, before the clock was tested: not confirmed"));
+    CHECK(run.card.rests == 2);   // after the reset, and to cool down before the next try
+    check_journal_rules(run);
+}
+
+TEST_CASE("a confirm probe that got too hot after the clock was tested still keeps the clock edge") {
+    Run run = lost_at_135();
+    run.card.hot_after_health_s = kConfirmMinS;
+    const auto r = run.go(Preset::BestOfMyGpu);
+    REQUIRE(r.ok);
+    CHECK(core_confirms(run.card) == std::vector<int>{60});
+    CHECK(r.core_confirmed == 60);
+    CHECK(run.card.rests == 1);
+    CHECK_FALSE(run.logged("not confirmed"));
+}
+
+TEST_CASE("a stop request while the card cools after such a confirm probe ends the run at stock") {
+    Run run = lost_at_135();
+    run.card.hot_after_health_s = 0.6;
+    run.card.abort_on_rest = 2;   // the second rest is the cool-down
+    const auto r = run.go(Preset::BestOfMyGpu);
+    CHECK_FALSE(r.ok);
+    CHECK(r.reason == "aborted");
+    CHECK(r.stock_restored);
+    CHECK(core_confirms(run.card) == std::vector<int>{60});
+}
+
+namespace {
+
+// A card that is warm before anything is changed: 15 C above the usual one, so
+// that the profile's 75 C only holds at a power limit of 65 %. The fake card
+// scores by its power limit (1000 it/s from 90 % up), so that costs speed, as
+// it did on an RTX 3080 Ti: 4749 it/s after the run, 4937 at stock.
+Run warm_card(double stock_score) {
+    Run run;
+    run.card.extra_heat = 15;
+    StabilityResult stock;
+    stock.verdict = Verdict::Stable;
+    stock.seconds = 300;
+    stock.score = stock_score;
+    stock.peak_temp_c = 85;
+    run.stock = stock;
+    return run;
+}
+
+}
+
+TEST_CASE("a profile that is after speed keeps nothing when the result is slower than stock") {
+    Run run = warm_card(1000);
+    const auto r = run.go(Preset::BestOfMyGpu);
+    CAPTURE(r.reason);
+    CHECK_FALSE(r.ok);
+    CHECK(r.reason.find("slower than stock") != std::string::npos);
+    CHECK(r.reason.find("722 it/s against 1000") != std::string::npos);
+    CHECK(r.reason.find("power limit went down to 65 %") != std::string::npos);
+    CHECK(r.reason.find("Undervolt") != std::string::npos);
+    // Not applied: the card is at stock again.
+    CHECK(r.stock_restored);
+    CHECK(run.card.core == 0);
+    CHECK(run.card.mem == 0);
+    CHECK(run.card.power == 100);
+    // The search itself ran to its end: the result was tested before it was judged.
+    CHECK(run.logged("soak: STABLE"));
+    check_journal_rules(run);
+}
+
+TEST_CASE("max performance keeps nothing either when the card scored more at stock") {
+    // Its limit is 83 C, so this card keeps a power limit of 90 %: the fake
+    // card's full 1000 it/s. The card scored more than that at stock.
+    Run run = warm_card(1100);
+    const auto r = run.go(Preset::MaxPerformance);
+    CAPTURE(r.reason);
+    CHECK_FALSE(r.ok);
+    CHECK(r.reason.find("slower than stock: 1000 it/s against 1100") != std::string::npos);
+    CHECK(r.stock_restored);
+    CHECK(run.card.core == 0);
+    CHECK(run.card.power == 100);
+}
+
+TEST_CASE("a profile that is after speed keeps a result that is faster than stock, or as fast") {
+    Run faster = warm_card(700);
+    const auto r = faster.go(Preset::BestOfMyGpu);
+    REQUIRE(r.ok);
+    CHECK(r.power_pct == 65);
+    CHECK(faster.card.power == 65);   // applied
+    CHECK(faster.card.core == r.core_mhz);
+    // Within one percent of stock is the scatter of two five-minute runs, not a slower card.
+    Run level = warm_card(728);       // 722 against 728: 0.8 % less
+    CHECK(level.go(Preset::BestOfMyGpu).ok);
+    Run just_slower = warm_card(735); // 1.8 % less
+    CHECK_FALSE(just_slower.go(Preset::BestOfMyGpu).ok);
+}
+
+TEST_CASE("the profiles that give speed away on purpose keep their result when it is slower than stock") {
+    // Quiet and Cool & efficient lower the power limit for less noise and
+    // heat. All in one goes on to an undervolt and a fan tune after this step.
+    for (const Preset preset : {Preset::Quiet, Preset::CoolAndEfficient, Preset::AllInOne}) {
+        Run run = warm_card(1000);
+        if (preset == Preset::CoolAndEfficient) run.card.extra_heat = 5;    // its limit is 65 C
+        const auto r = run.go(preset);
+        CAPTURE(std::string(preset_name(preset)));
+        CAPTURE(r.reason);
+        REQUIRE(r.ok);
+        CHECK(r.soak.score < 1000);
+        CHECK(run.card.power == r.power_pct);
+    }
+}
+
+TEST_CASE("without a measurement at stock there is nothing to be slower than") {
+    Run run = warm_card(1000);
+    run.stock.reset();
+    CHECK(run.go(Preset::BestOfMyGpu).ok);
+    Run unscored = warm_card(0);   // a measurement that scored nothing says nothing
+    CHECK(unscored.go(Preset::BestOfMyGpu).ok);
 }

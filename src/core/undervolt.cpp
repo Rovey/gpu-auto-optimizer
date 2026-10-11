@@ -40,11 +40,14 @@ UndervoltResult find_undervolt(const GpuControl& gpu, Journal& journal, const Un
         if (base.mem_mhz != 0 && !(gpu.set_mem_offset && gpu.set_mem_offset(base.mem_mhz))) return false;
         return true;
     };
+    // What stops a probe: the profile's limit, or, once the reference is
+    // known, what the card reached in it when that was more (see below).
+    int limit_c = max_temp_c;
     // A probe, announced when it is long enough to be worth a countdown.
     auto probe = [&](const char* what, double seconds, double stall_below) {
         const bool announced = what && seconds >= kUvConfirmS && io.measuring;
         if (announced) io.measuring(what, seconds);
-        const StabilityResult s = io.probe(seconds, max_temp_c, stall_below);
+        const StabilityResult s = io.probe(seconds, limit_c, stall_below);
         if (announced) io.measuring("", 0);
         return s;
     };
@@ -75,15 +78,48 @@ UndervoltResult find_undervolt(const GpuControl& gpu, Journal& journal, const Un
 
     if (base.measured) {
         r.baseline = *base.measured;
-        log("baseline: the overclock's own run: " + describe(verdict_name(r.baseline.verdict), r.baseline));
+        log(std::string("baseline: ") + (overclocked ? "the overclock's own run: " : "the measurement at stock: ") +
+            describe(verdict_name(r.baseline.verdict), r.baseline));
+        // A run that was made before this search and handed over: what it
+        // may be is what a measurement at stock may be. One that the
+        // temperature stopped is not a card that failed (stock_refusal).
+        if (const std::string why = stock_refusal(r.baseline); !why.empty()) return finish_fail(why);
     } else {
         log("baseline: " + std::to_string(static_cast<int>(kUvBaselineS)) + " s " + at_base);
         r.baseline = probe(overclocked ? "Measuring the card with the overclock" : "Measuring the card at stock", kUvBaselineS, 0.0);
         log("baseline: " + describe(verdict_name(r.baseline.verdict), r.baseline));
+        if (r.baseline.verdict == Verdict::Aborted) return finish_fail("aborted");
+        if (r.baseline.verdict == Verdict::TooHot)
+            return finish_fail("the card got hotter than " + std::to_string(max_temp_c) + " C " + at_base);
+        if (r.baseline.verdict != Verdict::Stable)
+            return finish_fail(std::string("the card is not stable ") + at_base + " (" + verdict_name(r.baseline.verdict) + ")");
     }
-    if (r.baseline.verdict == Verdict::Aborted) return finish_fail("aborted");
-    if (r.baseline.verdict != Verdict::Stable)
-        return finish_fail(std::string("the card is not stable ") + at_base + " (" + verdict_name(r.baseline.verdict) + ")");
+    // An undervolt makes a card cooler than it was, never hotter. So a
+    // candidate is not stopped below the temperature the card reached in the
+    // reference: on a card that is above the profile's limit before anything
+    // is changed, every candidate would end TOO HOT and read as "this card
+    // holds no undervolt". kStockTempC stays what nothing goes beyond.
+    limit_c = std::max(max_temp_c, std::min(r.baseline.peak_temp_c, kStockTempC));
+    if (limit_c > max_temp_c)
+        log("the card reached " + std::to_string(r.baseline.peak_temp_c) + " C " + at_base + ": candidates are stopped at " +
+            std::to_string(limit_c) + " C, not at the profile's " + std::to_string(max_temp_c) + " C");
+    if (base.measured) {
+        // The reference was measured before this search began, and this
+        // search's own load has not run yet. Its first seconds are slower
+        // than the card is: the load sizes its batches and the card clocks
+        // up from idle. A 3 s candidate that begins there averages a clock
+        // far below the target and reads SLOW (hardware check 92: 2323 MHz
+        // on a card that runs 2790), which ends the descent at its first
+        // step. So the load runs a few seconds at the reference's settings
+        // first. Only whether the card computes is taken from it.
+        log("warming the load up: " + std::to_string(static_cast<int>(kUvWarmUpS)) + " s " + at_base);
+        const StabilityResult warm = io.probe(kUvWarmUpS, limit_c, 0.0);
+        if (warm.verdict == Verdict::Aborted) return finish_fail("aborted");
+        if (warm.verdict == Verdict::TooHot)
+            return finish_fail("the card got hotter than " + std::to_string(limit_c) + " C " + at_base);
+        if (warm.verdict != Verdict::Stable)
+            return finish_fail(std::string("the card is not stable ") + at_base + " (" + verdict_name(warm.verdict) + ")");
+    }
     if (r.baseline.avg_core_mhz <= 0 || r.baseline.score <= 0) return finish_fail("the card did not report its clock under load");
     // Read now, with the card warm from the baseline: the built-in curve can
     // sit a step lower hot than cold, and the candidates are counted on it.
@@ -168,7 +204,7 @@ UndervoltResult find_undervolt(const GpuControl& gpu, Journal& journal, const Un
             if (!io.rest(kRestAfterResetS)) { stopped = "aborted"; return false; }
         }
         if (io.prepare_load && !io.prepare_load()) { stopped = "the stress load could not be rebuilt after a driver reset"; return false; }
-        const StabilityResult health = io.probe(kHealthProbeS, max_temp_c, 0.0);
+        const StabilityResult health = io.probe(kHealthProbeS, limit_c, 0.0);
         log("health: " + describe(verdict_name(health.verdict), health));
         if (health.verdict == Verdict::Aborted) { stopped = "aborted"; return false; }
         if (is_reset_verdict(health.verdict)) { ++r.driver_resets; stopped = "the card was not usable when checked after a driver reset"; return false; }

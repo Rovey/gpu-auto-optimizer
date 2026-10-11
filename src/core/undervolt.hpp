@@ -36,6 +36,12 @@ inline constexpr double kUvProbeS = 3, kUvConfirmS = 30, kUvSoakS = 300;
 // of the soak for no reason but the clock. It also means the clock to keep
 // and the built-in curve are read on a warm card, as the result will run.
 inline constexpr double kUvBaselineS = kUvSoakS;
+// When the reference is handed over, the search's own load runs this long at
+// the reference's settings before the first candidate. A load that has not
+// run yet is slower in its first seconds than the card is (it sizes its
+// batches, the card clocks up from idle), and a 3 s candidate that begins
+// there reads SLOW on a card that is fine.
+inline constexpr double kUvWarmUpS = 5;
 inline constexpr int kUvConfirmTries = 3;
 inline constexpr int kUvSoakAttempts = 3;
 // A candidate must run the target clock within what the built-in curve moves
@@ -57,8 +63,11 @@ struct UndervoltBase {
     int power_pct = 100;
     int core_mhz = 0;
     int mem_mhz = 0;
-    // The overclock's own long run under load (its soak), when the caller
-    // has one: it is the reference then, and nothing is measured again.
+    // A long run under load that the caller already has: the measurement at
+    // stock that goes before every run, or, on top of an overclock, that
+    // overclock's own soak. It is the reference then, and nothing is measured
+    // again. A measurement at stock that the temperature stopped is one
+    // (stock_refusal in core/search.hpp says which are not).
     std::optional<StabilityResult> measured;
     // > 0: the clock to keep, when that is to be less than the card runs in
     // the reference: a balance between the overclock and the undervolt,
@@ -91,7 +100,7 @@ struct UndervoltResult {
     int applied_index = -1;        // its slot on the curve
     int raise_khz = 0;             // how far the applied point runs above its built-in frequency
     int driver_resets = 0;
-    StabilityResult baseline;      // 30 s at stock
+    StabilityResult baseline;      // the reference: at stock, or with the overclock
     StabilityResult after;         // the soak, with the result applied
 };
 

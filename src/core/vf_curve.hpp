@@ -128,7 +128,9 @@ bool remove_vf_shape(const GpuControl& gpu, std::string* why);
 // by the offsets alone, never by frequencies: the built-in curve moves with
 // temperature. FlatTop: no point below the anchor has an offset and the
 // anchor is raised; or the anchor is not raised and every point above it is
-// stored at or below it, some lower (an anchor that already ran the target).
+// stored at or below the base offset, some lower (an anchor that already ran
+// the target; on a cooler card it is stored a step or two below the base
+// offset itself, never more than kVfTailDropKhz).
 // Other: anything else that is not stock, a plain core
 // offset (the same on every point) included. base_raw: the offset the
 // points below the anchor carry when the flat top sits on a core offset.

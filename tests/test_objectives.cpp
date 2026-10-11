@@ -65,3 +65,9 @@ TEST_CASE("all in one searches its clocks as the default preset does") {
     CHECK(all.power);
     CHECK(std::string(preset_name(Preset::AllInOne)) == "all");
 }
+
+TEST_CASE("only the two profiles that promise speed must not end slower than stock") {
+    CHECK(objectives_for(Preset::BestOfMyGpu).faster_than_stock);
+    CHECK(objectives_for(Preset::MaxPerformance).faster_than_stock);
+    for (Preset p : {Preset::Quiet, Preset::CoolAndEfficient, Preset::Undervolt, Preset::AllInOne}) CHECK_FALSE(objectives_for(p).faster_than_stock);
+}

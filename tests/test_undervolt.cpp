@@ -28,6 +28,13 @@ struct UvCard {
     bool write_ok = true;
     int write_fails_above_khz = -1;   // >= 0: a curve write that raises a point by more than this fails
     bool baseline_ok = true;
+    int stock_temp_c = 65;        // under load at stock, with the fans on the run's curve
+    // The load has not run yet: it still sizes its batches and the card clocks
+    // up from idle, so a short probe that starts here averages a clock far
+    // below what the card runs (hardware check 92: 2323 MHz for 2790). Any
+    // probe ends it; a long one hides it in its average.
+    bool cold_load = true;
+    std::vector<int> probe_limits;   // the temperature limit each probe was given
     int abort_at_probe = -1;
     bool aborted_now = false;
     bool with_recover = true;
@@ -112,23 +119,27 @@ struct UvCard {
             g.recover = [this] { ++recovers; dead = false; std::fill(raw.begin(), raw.end(), 0); core = mem = 0; power = 100; return true; };
         return g;
     }
-    StabilityResult probe(double seconds) {
+    StabilityResult probe(double seconds, int max_temp = 1000) {
         ++probes;
         probe_seconds.push_back(seconds);
+        probe_limits.push_back(max_temp);
         StabilityResult s;
         s.seconds = seconds;
         if (probes == abort_at_probe) { aborted_now = true; s.verdict = Verdict::Aborted; return s; }
         const std::size_t op = operating_point();
         // At stock the power limit holds the clock between two points of the curve.
-        const int f = level() ? stock_load_khz + raw.front() : slow ? freq(op) - 105000 : freq(op);
+        const bool cold = cold_load && seconds < 30;
+        cold_load = false;
+        const int f = (level() ? stock_load_khz + raw.front() : slow ? freq(op) - 105000 : freq(op)) - (cold ? 420000 : 0);
         const int raise = freq(op) - base_khz[op];
         probe_raise_mhz.push_back(raise / 1000);
         const double v = volt_uv[op] / static_cast<double>(volt_uv[stock_point()]);
         s.avg_core_mhz = f / 1000;
         s.score = 5700.0 * f / stock_load_khz;
         s.avg_power_w = static_cast<int>(std::lround(188 * v * v));
-        s.peak_temp_c = 65;
+        s.peak_temp_c = static_cast<int>(std::lround(40 + (stock_temp_c - 40) * v * v));
         if (!baseline_ok && at_stock()) { s.verdict = Verdict::WrongResult; return s; }
+        if (s.peak_temp_c > max_temp) { s.seconds = std::min(seconds, 1.0); s.verdict = Verdict::TooHot; return s; }
         const int lost_above = seconds >= 30 && long_lost_above_khz >= 0 ? long_lost_above_khz : lost_above_khz;
         if (lost_above >= 0 && raise > lost_above && losses_left > 0) {
             --losses_left;
@@ -145,7 +156,7 @@ struct UvCard {
     UndervoltResult go(std::vector<std::string> earlier_journal = {}) {
         Journal j(earlier_journal, [this](const std::string& line) { journal.push_back(line); return true; });
         UndervoltIo io;
-        io.probe = [this](double seconds, int, double) { return probe(seconds); };
+        io.probe = [this](double seconds, int max_temp, double) { return probe(seconds, max_temp); };
         io.aborted = [this] { return aborted_now; };
         io.log = [this](const std::string& m) { log.push_back(m); };
         io.rest = [this](double) { ++rests; return true; };
@@ -473,7 +484,9 @@ TEST_CASE("find_undervolt over an overclock: its own five-minute run is the refe
     card.base = UndervoltBase{100, 60, 0, soak};
     const auto r = card.go();
     REQUIRE(r.ok);
-    CHECK(card.probe_seconds.front() == kUvProbeS);   // straight to the first candidate
+    // No five minutes of its own: a few seconds to get the load going, then the candidates.
+    CHECK(card.probe_seconds.front() == kUvWarmUpS);
+    CHECK(card.probe_seconds[1] == kUvProbeS);
     CHECK(r.baseline.score == 5900);
     CHECK(r.freq_khz == 2805000);
     CHECK(card.measuring.front() == "Confirming the lowest voltage|30");
@@ -559,4 +572,128 @@ TEST_CASE("find_undervolt at a chosen clock: when the margin allows no more rais
     for (std::size_t i = anchor + 1; i < card.raw.size(); ++i) CHECK(card.freq(i) < 2760000);
     CHECK(curve_state(*card.gpu().read_vf_curve(), r.applied_uv, 60000) == CurveState::FlatTop);
     CHECK(card.probe_seconds.back() == kUvSoakS);   // soaked like any other result
+}
+
+namespace {
+
+// The card at stock as every run measures it first (app/common.cpp, measure_stock): five minutes
+// with the fans left to the NVIDIA driver, stopped at kStockTempC.
+StabilityResult stock_run(Verdict verdict, double seconds, int peak_temp_c) {
+    StabilityResult s;
+    s.verdict = verdict;
+    s.seconds = seconds;
+    s.peak_temp_c = peak_temp_c;
+    s.score = 5600;
+    s.avg_core_mhz = 2760;
+    s.avg_power_w = 188;
+    return s;
+}
+
+}
+
+TEST_CASE("find_undervolt: a card that runs hot at stock is not refused, and its candidates are not stopped for being hot") {
+    // A 3080 Ti: 86 C at stock with the driver's fans, and still 83 C with the
+    // fans at 100 %. The undervolt profile measured stock itself with a limit
+    // of 75 C and ended there: `the card is not stable at stock (TOO HOT)`.
+    // Nothing is unstable, and an undervolt only makes that card cooler.
+    UvCard card;
+    card.stock_temp_c = 83;
+    card.base.measured = stock_run(Verdict::TooHot, 159, 86);   // stopped at the hard limit, kept as the "before"
+    const auto r = card.go();
+    REQUIRE(r.ok);
+    CHECK(r.baseline.verdict == Verdict::TooHot);
+    CHECK(r.baseline.seconds == 159);
+    CHECK(card.probe_seconds.front() == kUvWarmUpS);   // stock is not measured a second time: the load only warms up
+    CHECK(card.probe_seconds[1] == kUvProbeS);
+    // No probe is stopped at the profile's 75 C: the card was hotter than that
+    // before anything was changed. The hard limit is what is left.
+    REQUIRE_FALSE(card.probe_limits.empty());
+    for (const int limit : card.probe_limits) CHECK(limit == kStockTempC);
+    CHECK(card.logged("baseline: the measurement at stock"));
+    CHECK(card.logged("the card reached 86 C at stock: candidates are stopped at 85 C, not at the profile's 75 C"));
+    CHECK(r.after.peak_temp_c < 83);   // cooler than it was
+    CHECK(card.applied_raise_mhz() > 0);
+}
+
+TEST_CASE("find_undervolt: on a card that stays under the profile's limit at stock, that limit is what stops a probe") {
+    UvCard card;
+    card.base.measured = stock_run(Verdict::Stable, 300, 67);
+    const auto r = card.go();
+    REQUIRE(r.ok);
+    CHECK(r.baseline.seconds == 300);
+    for (const int limit : card.probe_limits) CHECK(limit == 75);
+    CHECK(card.logged("baseline: the measurement at stock"));
+    CHECK_FALSE(card.logged("candidates are stopped at"));
+}
+
+TEST_CASE("find_undervolt: a card that was warmer at stock than the profile allows is held to what it reached, not to the hard limit") {
+    UvCard card;
+    card.stock_temp_c = 78;
+    card.base.measured = stock_run(Verdict::Stable, 300, 80);   // five minutes at 80 C: never hotter than that
+    const auto r = card.go();
+    REQUIRE(r.ok);
+    for (const int limit : card.probe_limits) CHECK(limit == 80);
+}
+
+TEST_CASE("find_undervolt: a measurement at stock that measured nothing starts no search") {
+    UvCard card;
+    card.base.measured = stock_run(Verdict::TooHot, 4, 88);   // hot before it got going
+    const auto r = card.go();
+    CHECK_FALSE(r.ok);
+    CHECK(r.reason.find("cool down") != std::string::npos);
+    CHECK(card.probes == 0);
+    CHECK(card.at_stock());
+}
+
+TEST_CASE("find_undervolt over an overclock: a reference that got too hot says so, and does not call the card unstable") {
+    UvCard card;
+    card.stock_temp_c = 83;
+    card.base = UndervoltBase{100, 60, 0};   // no run of its own: the search measures with the overclock, at the profile's limit
+    const auto r = card.go();
+    CHECK_FALSE(r.ok);
+    CHECK(r.reason.find("hotter than 75 C with the overclock") != std::string::npos);
+    CHECK(r.reason.find("not stable") == std::string::npos);
+    CHECK(card.at_stock());
+}
+
+TEST_CASE("find_undervolt: with the reference handed over, the first candidate is not judged on a load that has not run yet") {
+    // Hardware check 92, and every All in one run before it: the reference
+    // came from an earlier run, the search's own load started with the first
+    // 3 s candidate, and that read `SLOW  clock=2323 MHz` on a card that runs
+    // 2790. The search ended with "the card held no undervolt", or, in All in
+    // one, kept the overclock's curve cut off and nothing below it.
+    UvCard card;
+    card.base.measured = stock_run(Verdict::Stable, 300, 65);
+    const auto r = card.go();
+    REQUIRE(r.ok);
+    CHECK_FALSE(card.logged("SLOW"));
+    CHECK(card.probe_raise_mhz.front() == 0);        // the warm-up runs at stock
+    CHECK(card.probe_raise_mhz[1] > 0);              // and the first candidate after it
+    CHECK(card.applied_raise_mhz() > 15);            // a descent, not one step
+    CHECK(card.logged("warming the load up"));
+    // The same search with the reference measured by itself needs no warm-up: its five minutes are one.
+    UvCard own;
+    REQUIRE(own.go().ok);
+    CHECK(own.probe_seconds.front() == kUvBaselineS);
+    CHECK(own.probe_seconds[1] == kUvProbeS);
+    CHECK_FALSE(own.logged("warming the load up"));
+    CHECK(own.applied_raise_mhz() == card.applied_raise_mhz());
+}
+
+TEST_CASE("find_undervolt: a card that fails while the load warms up starts no search") {
+    UvCard card;
+    card.base.measured = stock_run(Verdict::Stable, 300, 65);
+    card.baseline_ok = false;   // wrong results at stock
+    const auto r = card.go();
+    CHECK_FALSE(r.ok);
+    CHECK(r.reason == "the card is not stable at stock (WRONG RESULT)");
+    CHECK(card.probes == 1);
+    CHECK(card.at_stock());
+    // A stop request there ends the run as everywhere else.
+    UvCard stopped;
+    stopped.base.measured = stock_run(Verdict::Stable, 300, 65);
+    stopped.abort_at_probe = 1;
+    const auto s2 = stopped.go();
+    CHECK_FALSE(s2.ok);
+    CHECK(s2.reason == "aborted");
 }

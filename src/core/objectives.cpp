@@ -6,11 +6,11 @@ Objectives objectives_for(const Preset preset) {
     switch (preset) {
         case Preset::Quiet:            return {80, 0.4f, true,  true,  true};
         case Preset::CoolAndEfficient: return {65, 0.3f, false, false, true};
-        case Preset::MaxPerformance:   return {83, 1.0f, true,  true,  true};
+        case Preset::MaxPerformance:   return {83, 1.0f, true,  true,  true,  true};
         case Preset::Undervolt:        return {75, 0.7f, false, false, false};
         case Preset::AllInOne:         return {75, 0.7f, true,  true,  true};
         case Preset::BestOfMyGpu:
-        default:                       return {75, 0.7f, true,  true,  true};
+        default:                       return {75, 0.7f, true,  true,  true,  true};
     }
 }
 
