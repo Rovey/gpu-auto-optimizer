@@ -347,18 +347,16 @@ void tuning_card(const UiState& s, const UiActions& act) {
     begin_card("tuning");
     heading("Current tuning");
     const float gap = ImGui::GetStyle().ItemSpacing.x;
-    int rows = s.applied ? 5 : 2;
-    if (s.applied && s.profile && s.profile->undervolt) ++rows;
-    if (s.profile && (!s.profile_driver_ok || !s.profile_gpu_ok)) ++rows;
-    if (s.strikes > 0) ++rows;
-    const float row_h = em() + ImGui::GetStyle().CellPadding.y * 2;
-    const float h = std::max(em() * 9.6f, rows * row_h + em() * 1.8f);
-    const float right_w = std::max(em() * 17, ImGui::GetContentRegionAvail().x * 0.36f);
-
-    begin_card("values", h, kInner, ImGui::GetContentRegionAvail().x - right_w - gap);
-    if (ImGui::BeginTable("rows", 2, ImGuiTableFlags_SizingFixedFit)) {
-        ImGui::TableSetupColumn("label", ImGuiTableColumnFlags_WidthFixed, em() * 10);
-        ImGui::TableSetupColumn("value", ImGuiTableColumnFlags_WidthStretch);
+    // The rows first, and the card after them: a value that wraps takes more
+    // than one line, and a card that counted rows cut the last one off.
+    struct Row {
+        const char* label;
+        std::string value;
+        ImVec4 color;
+    };
+    std::vector<Row> rows;
+    auto row = [&rows](const char* label, const std::string& value, const ImVec4& color = kText) { rows.push_back({label, value, color}); };
+    {
         if (s.applied) {
             const AppliedState& a = *s.applied;
             // With an undervolt saved the curve has its say too: the offsets read +0 under a flat top.
@@ -366,20 +364,20 @@ void tuning_card(const UiState& s, const UiActions& act) {
             const bool stock = a.core_mhz == 0 && a.mem_mhz == 0 && a.power_pct >= 99 && a.power_pct <= 101 &&
                                (!undervolt || s.curve == CurveState::Stock);
             const bool ours = s.profile && tune_applied(*s.profile, a, s.curve);
-            if (ours) tuning_row("Applied now", std::string(title_of(s.profile->preset)) + " (the saved tune)", kGood);
-            else if (stock) tuning_row("Applied now", "Stock");
-            else tuning_row("Applied now", "Set by another program", kWarn);
+            if (ours) row("Applied now", std::string(title_of(s.profile->preset)) + " (the saved tune)", kGood);
+            else if (stock) row("Applied now", "Stock");
+            else row("Applied now", "Set by another program", kWarn);
             if (undervolt)
-                tuning_row("Undervolt", ours ? undervolt_text(*s.profile->undervolt)
+                row("Undervolt", ours ? undervolt_text(*s.profile->undervolt)
                                          : s.curve == CurveState::Stock ? "Not applied"
                                          : s.curve ? "Not applied (the curve carries other offsets)"
                                                    : "Unknown (the curve could not be read)",
                            ours ? kText : kDim);
-            tuning_row("Core clock offset", offset(a.core_mhz));
-            tuning_row("Memory clock offset", offset(a.mem_mhz));
-            tuning_row("Power limit", std::to_string(a.power_pct) + " %");
+            row("Core clock offset", offset(a.core_mhz));
+            row("Memory clock offset", offset(a.mem_mhz));
+            row("Power limit", std::to_string(a.power_pct) + " %");
         } else {
-            tuning_row("Applied now", "Unknown (the driver does not report it)", kDim);
+            row("Applied now", "Unknown (the driver does not report it)", kDim);
         }
         if (s.profile) {
             const Profile& p = *s.profile;
@@ -389,23 +387,40 @@ void tuning_card(const UiState& s, const UiActions& act) {
                 if (p.power_pct != 100) tune += ", " + std::to_string(p.power_pct) + " %";
                 if (p.mem_mhz != 0) tune += ", memory " + offset(p.mem_mhz);
             }
-            tuning_row("Saved tune", std::string(title_of(p.preset)) + ": " + tune + " (" + p.saved_at + ")");
+            row("Saved tune", std::string(title_of(p.preset)) + ": " + tune + " (" + p.saved_at + ")");
             if (!s.profile_gpu_ok)
-                tuning_row("", "Tuned on " + std::string(s.profile_driver_ok ? "" : "driver " + p.driver + " and ") +
+                row("", "Tuned on " + std::string(s.profile_driver_ok ? "" : "driver " + p.driver + " and ") +
                                    "another card. Optimize again before relying on it.",
                            kWarn);
             else if (!s.profile_driver_ok)
-                tuning_row("", "The driver was updated: this tune was tested on " + p.driver +
+                row("", "The driver was updated: this tune was tested on " + p.driver +
                                    (s.driver.empty() ? "" : ", and this is " + s.driver) +
                                    ". It is not applied until it has been tested again.",
                            kWarn);
         } else {
-            tuning_row("Saved tune", "None yet. Pick a profile and optimize.", kDim);
+            row("Saved tune", "None yet. Pick a profile and optimize.", kDim);
         }
         if (s.strikes > 0)
-            tuning_row("Crash strikes", std::to_string(s.strikes) + " of " + std::to_string(kMaxBootStrikes) +
+            row("Crash strikes", std::to_string(s.strikes) + " of " + std::to_string(kMaxBootStrikes) +
                                             " (apply at logon stops at " + std::to_string(kMaxBootStrikes) + ")",
                        kWarn);
+    }
+    const ImGuiStyle& style = ImGui::GetStyle();
+    const float right_w = std::max(em() * 17, ImGui::GetContentRegionAvail().x * 0.36f);
+    const float left_w = ImGui::GetContentRegionAvail().x - right_w - gap;
+    const float label_w = em() * 10;
+    // What is left for a value: the card's padding and the table's cell padding off both columns.
+    const float value_w = std::max(em() * 8, left_w - em() * 0.9f * 2 - label_w - style.CellPadding.x * 4);
+    float rows_h = 0;
+    for (const Row& r : rows)
+        rows_h += std::max(em(), ImGui::CalcTextSize(r.value.c_str(), nullptr, false, value_w).y) + style.CellPadding.y * 2;
+    const float h = std::max(em() * 9.6f, rows_h + em() * 1.8f);
+
+    begin_card("values", h, kInner, left_w);
+    if (ImGui::BeginTable("rows", 2, ImGuiTableFlags_SizingFixedFit)) {
+        ImGui::TableSetupColumn("label", ImGuiTableColumnFlags_WidthFixed, label_w);
+        ImGui::TableSetupColumn("value", ImGuiTableColumnFlags_WidthStretch);
+        for (const Row& r : rows) tuning_row(r.label, r.value, r.color);
         ImGui::EndTable();
     }
     end_card();
