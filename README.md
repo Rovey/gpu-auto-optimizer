@@ -38,7 +38,7 @@ The one time it asks for you again is after a driver update: a tune belongs to t
 What else is in it:
 
 - **Five more profiles** for when you want one thing only: Best of my GPU, Cool & efficient, Quiet, Max performance and Undervolt.
-- **You see what it does:** during a run the window draws the card's voltage/frequency curve as the run writes it, over the card's own, and counts every long measurement down.
+- **You see what it does:** during a run the window draws the card's voltage/frequency curve as the run writes it, over the card's own, says which step the run is at, and counts every long one down.
 - **Fan curves:** the measured one, Silent, Normal, Cool or Aggressive, or your own; fans stop at idle without cycling on and off, the app learns the lowest speed your fans can actually hold, and the fans go back to the driver on exit, sleep, logoff and crashes.
 - **Native and small:** two C++ programs, under 2 MB together, with no installer, no runtime and no driver or service.
 
@@ -122,7 +122,7 @@ Both columns are five minutes of full load, so the card is heated through on bot
 
 1. Download `GpuAutoOptimizer-<version>-win-x64.zip` from the [latest release](https://github.com/Rovey/gpu-auto-optimizer/releases/latest) and unzip it anywhere.
 2. Start **`GpuAutoOptimizer.exe`**.
-3. Open **Optimize** and press **Optimize GPU**: **All in one** is selected, and you can pick another profile first. Close games and other programs that use the graphics card before you do, and the tools that tune or draw on it: close MSI Afterburner and RivaTuner, switch **Automatic Tuning** off in the NVIDIA app (System, Performance), and keep the NVIDIA overlay (Alt+Z) closed during the run. The app asks for administrator rights, because it changes clocks and power limits.
+3. Open **Optimize** and press **Optimize GPU**: **All in one** is selected, and you can pick another profile first. Close games and other programs that use the graphics card before you do, and the tools that tune or draw on it: close MSI Afterburner and RivaTuner, switch **Automatic Tuning** off in the NVIDIA app (System, Performance), and keep the NVIDIA overlay (Alt+Z) closed during the run. The app asks for administrator rights, because it changes clocks and power limits. The run looks for itself first: when other programs are using the card it names them (an editor or a browser that stands open is enough to cost several percent) and asks whether to check again, go on anyway or cancel. It closes nothing for you.
 4. That is all. When the run is done the result is applied, saved, and kept at every logon. Untick **Keep the result applied at every logon** before the run if you only want to try it.
 
 > [!NOTE]
@@ -167,8 +167,7 @@ The undervolt is saved in place of an overclock, not next to it: on the card a c
 
 ```mermaid
 flowchart LR
-    S[Stock<br/>300 s, to compare with] --> A[Baseline<br/>30 s at stock]
-    A --> B[Power limit]
+    S[Stock<br/>300 s: the "before",<br/>and what probes are judged by] --> B[Power limit]
     B --> C[Memory offset<br/>bandwidth peak, confirmed,<br/>safety margin]
     C --> D[Core offset<br/>single steps, confirmed,<br/>safety margin]
     D --> G[Soak<br/>300 s]
@@ -206,6 +205,7 @@ flowchart LR
 | `gao --curve` | Prints the voltage/frequency curve as the driver reports it; changes nothing |
 | `gao --stress <seconds>` | Runs the stress test alone and prints its verdict; changes nothing |
 | `gao --bandwidth [--after-load <sec>]` | Measures the current memory bandwidth and shows every run of the measurement; with `--after-load`, right after that many seconds of the stress load, as a run measures it |
+| `gao --busy` | Shows the other programs that use the card right now, as a run looks for them before it starts; changes nothing |
 | `gao --update` | Installs the latest release into the folder `gao.exe` is in, if there is a newer one |
 | `gao --stress-recreate` | Runs the stress test, rebuilds its GPU device, runs it again; prints both scores and the rebuild time; changes nothing |
 
@@ -228,7 +228,7 @@ From 0.3.1 on, click **Update available** at the bottom left of the window. From
 <details>
 <summary><b>Does it work alongside MSI Afterburner or the NVIDIA app?</b></summary>
 
-Not during a run: a run does not start while MSI Afterburner or RivaTuner Statistics Server (`MSIAfterburner.exe`, `RTSS.exe`) is running, and says which one to close. Close it completely, also its icon in the notification area, and switch off its start with Windows if it applies settings there. Outside a run they can coexist as long as only one of them applies settings: if Afterburner applies an offset while GPU Auto Optimizer keeps its tune applied, the watchdog notices, says so in a notification and leaves the settings alone.
+Not during a run: a run does not start while MSI Afterburner or RivaTuner Statistics Server (`MSIAfterburner.exe`, `RTSS.exe`) is running, and says which one to close. Close it completely, also its icon in the notification area, and switch off its start with Windows if it applies settings there. Outside a run they can coexist as long as only one of them applies settings: if Afterburner applies an offset while GPU Auto Optimizer keeps its tune applied, the watchdog notices, says so in a notification and leaves the settings alone. Other programs that merely use the card (a browser, an editor, a video) are a different matter: they change nothing on it, so a run is not refused next to them. It names them and asks, because they make everything it measures lower and less steady. On the command line it stops with that list; add `--busy-ok` as the last argument to go on as it is.
 
 The NVIDIA app can stay installed. Two of its features get in the way of a run: **Automatic Tuning** (System, Performance) applies an overclock of its own and scans again from time to time, so switch it off, for a run and for as long as you keep a tune of this app applied; and the **overlay** (Alt+Z) draws on programs that use the card, so leave it closed while a run is going. A run does not start while Automatic Tuning is on, and `gao --status` shows what the app reads (`nvidia app: Automatic Tuning off`). The overlay it cannot see: that one is yours to keep closed.
 </details>

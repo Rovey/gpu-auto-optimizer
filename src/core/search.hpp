@@ -218,6 +218,10 @@ struct OptimizeIo {
     // Makes the stress load ready for a probe after a driver reset (a fresh
     // device), outside any timing. False: not ready yet. Empty: nothing to do.
     std::function<bool()> prepare_load;
+    // What the search does now, for whoever shows it: the step, and how long
+    // it lasts when that is known (0: a few seconds, or as long as it takes).
+    // Optional.
+    std::function<void(const std::string& what, double seconds)> measuring;
 };
 
 struct OptimizeResult {
@@ -254,8 +258,10 @@ struct OptimizeResult {
 // card.
 inline constexpr double kNotSlowerScore = 0.99;
 
-// stock: the measurement at stock that went before the run, when there was
-// one: what a profile that promises speed must not end slower than.
+// stock: the card measured at stock just before, by the caller and with the
+// same load. When it was stable it is the baseline, and the search takes none
+// of its own. Stable or stopped by the temperature, it is what a profile that
+// promises speed must not end slower than.
 OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& journal, const OptimizeIo& io,
                         const std::optional<StabilityResult>& stock = {});
 

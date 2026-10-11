@@ -60,6 +60,8 @@ add_library(core STATIC
   src/core/boot.cpp
   src/core/retest.hpp
   src/core/retest.cpp
+  src/core/busy_card.hpp
+  src/core/busy_card.cpp
   src/core/task_xml.hpp
   src/core/task_xml.cpp
   src/core/watchdog.hpp
@@ -87,9 +89,10 @@ add_library(hw STATIC
   src/hw/boot_task.hpp src/hw/boot_task.cpp
   src/hw/update_io.hpp src/hw/update_io.cpp
   src/hw/nvidia_app.hpp src/hw/nvidia_app.cpp
+  src/hw/gpu_users.hpp src/hw/gpu_users.cpp
 )
 target_include_directories(hw PUBLIC src)
-target_link_libraries(hw PUBLIC core d3d11 dxgi d3dcompiler shell32 ole32 oleaut32 taskschd winhttp bcrypt version
+target_link_libraries(hw PUBLIC core d3d11 dxgi d3dcompiler shell32 ole32 oleaut32 taskschd winhttp bcrypt version pdh
                       PRIVATE gao_warnings gao_hardening)
 
 # UI-independent application logic shared by both executables.
@@ -145,6 +148,7 @@ add_executable(core_tests
   tests/test_stability.cpp
   tests/test_journal.cpp
   tests/test_search.cpp
+  tests/test_busy_card.cpp
   tests/test_boot.cpp
   tests/test_retest.cpp
   tests/test_task_xml.cpp
@@ -165,6 +169,7 @@ add_executable(app_tests
   tests/test_driver_fault.cpp
   tests/test_run_log.cpp
   tests/test_nvidia_app.cpp
+  tests/test_gpu_users.cpp
 )
 target_link_libraries(app_tests PRIVATE app doctest gao_warnings)
 add_test(NAME app_tests COMMAND app_tests)

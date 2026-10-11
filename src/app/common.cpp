@@ -12,6 +12,7 @@
 #include "hw/app_files.hpp"
 #include "hw/boot_task.hpp"
 #include "hw/gpu_control.hpp"
+#include "hw/gpu_users.hpp"
 #include "hw/nvapi.hpp"
 #include "hw/nvidia_app.hpp"
 #include "hw/nvml.hpp"
@@ -189,6 +190,24 @@ std::string other_tool() {
     if (nvidia_auto_tuning().value_or(false)) return kAutoTuningRefusal;
     return {};
 }
+// How long a look at what else uses the card lasts, in samples a second apart.
+constexpr int kBusyLookS = 3;
+
+// The look at what else uses the card, and the question about it, before a
+// run (core/busy_card.hpp). A run that is one step of a longer one does not
+// ask again.
+BusyGate busy_before_run(const OptimizeHooks& hooks) {
+    if (hooks.busy_asked) return {};
+    return busy_gate(
+        [&] {
+            if (hooks.measuring) hooks.measuring("Looking at what else uses the card", kBusyLookS);
+            auto use = gpu_use(kBusyLookS);
+            if (hooks.measuring) hooks.measuring("", 0);
+            return use;
+        },
+        hooks.busy, [&](const std::string& m) { if (hooks.log) hooks.log(m); });
+}
+
 // After a measurement at stock that the temperature stopped: without load,
 // this far below it before the run loads the card again, or this long. The
 // steps that follow have limits of their own.
@@ -288,6 +307,8 @@ struct FanRelease {
 
 }
 
+std::vector<BusyProgram> busy_now() { return busy_programs(gpu_use(kBusyLookS)); }
+
 OptimizeOutcome run_optimize(Preset preset, const OptimizeHooks& hooks, const std::optional<FanCurve>& fan_curve,
                              const std::optional<StabilityResult>& known_stock) {
     OptimizeOutcome out;
@@ -300,6 +321,8 @@ OptimizeOutcome run_optimize(Preset preset, const OptimizeHooks& hooks, const st
     if (!lock.owned()) return fail("another optimize is already running (in the app or on the command line)");
     std::string why;
     if (!prepare_state(&why)) return fail(why);
+    const BusyGate busy = busy_before_run(hooks);
+    if (!busy.refusal.empty()) return fail(busy.refusal);
     // Before the search and with drivers of its own, so that only one stress
     // load exists at a time. The lock is taken again there, on this thread.
     if (known_stock) {
@@ -394,6 +417,12 @@ OptimizeOutcome run_optimize(Preset preset, const OptimizeHooks& hooks, const st
         log("the stress load could not be rebuilt: " + load->Error());
         return false;
     };
+    io.measuring = hooks.measuring;
+    // Whatever step the search announced last is over when it returns, however it returns.
+    struct StepDone {
+        const OptimizeHooks& hooks;
+        ~StepDone() { if (hooks.measuring) hooks.measuring("", 0); }
+    } step_done{hooks};
     if (hooks.active_gpu) hooks.active_gpu(&gpu);
     // The last line of defence: a fault that escapes the per-call guards (in
     // the stress load's D3D calls, say) must not kill the process with a
@@ -466,6 +495,13 @@ OptimizeOutcome run_optimize(Preset preset, const OptimizeHooks& hooks, const st
     }
     if (hooks.active_gpu) hooks.active_gpu(nullptr);
     out.ran = true;
+    // A second look, now that the load is off the card: a program that
+    // started or stopped using it during the run moved the numbers by several
+    // percent, and the measurement at stock was taken without that.
+    if (!hooks.busy_asked && !(hooks.aborted && hooks.aborted())) {
+        out.busy_note = busy_change(busy.programs, busy_programs(gpu_use(kBusyLookS)));
+        if (!out.busy_note.empty()) log("note: " + out.busy_note + "; its numbers and the ones at stock were not measured on the same card");
+    }
     if (!out.result.ok) return out;
 
     const std::string driver = hw.DriverVersion(), gpu_id = hw.GpuUuid();
@@ -501,6 +537,7 @@ UndervoltOutcome run_undervolt(const OptimizeHooks& hooks, bool on_saved_tune, c
     if (!lock.owned()) return fail("another optimize is already running (in the app or on the command line)");
     std::string why;
     if (!prepare_state(&why)) return fail(why);
+    if (const BusyGate busy = busy_before_run(hooks); !busy.refusal.empty()) return fail(busy.refusal);
     // The card at stock first, as every run measures it: the "before" of the
     // result, with the fans left to the driver, stopped at kStockTempC and
     // kept when it was, and followed by a cool-down (measure_stock). With
@@ -956,6 +993,7 @@ RetestOutcome run_retest(const OptimizeHooks& hooks) {
     if (!lock.owned()) return fail("another optimize is already running (in the app or on the command line)");
     std::string why;
     if (!prepare_state(&why)) return fail(why);
+    if (const BusyGate busy = busy_before_run(hooks); !busy.refusal.empty()) return fail(busy.refusal);
     GuardedGpu hw(kGpu);
     if (!hw.Init(&why)) return fail(why);
     auto load = std::make_unique<Stress>();
@@ -1024,17 +1062,20 @@ RetestOutcome run_retest(const OptimizeHooks& hooks) {
     return out;
 }
 
-AllInOneOutcome run_all_in_one(const OptimizeHooks& hooks) {
+AllInOneOutcome run_all_in_one(const OptimizeHooks& outer) {
     AllInOneOutcome out;
-    auto log = [&](const std::string& m) { if (hooks.log) hooks.log(m); };
+    auto log = [&](const std::string& m) { if (outer.log) outer.log(m); };
     auto stop = [&](const std::string& why) { out.error = why; return out; };
-    auto aborted = [&] { return hooks.aborted && hooks.aborted(); };
+    auto aborted = [&] { return outer.aborted && outer.aborted(); };
     if (const std::string tool = other_tool(); !tool.empty()) return stop(tool);
     if (!is_elevated()) return stop("tuning changes clocks, the voltage/frequency curve and the fans and needs administrator rights");
     // Held across the steps (each takes it again, on this thread), so that
     // the watchdog does not put a half-made tune back in between.
     const TuningLock lock;
     if (!lock.owned()) return stop("another optimize is already running (in the app or on the command line)");
+    if (const BusyGate busy = busy_before_run(outer); !busy.refusal.empty()) return stop(busy.refusal);
+    OptimizeHooks hooks = outer;   // for the steps: the question about other programs has been asked
+    hooks.busy_asked = true;
 
     log("step 1 of 5: the card at stock, five minutes");
     const StockOutcome stock = measure_stock(hooks);
