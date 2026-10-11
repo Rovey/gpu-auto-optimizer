@@ -28,9 +28,14 @@ constexpr double kTargetBatchMs = 250.0;
 constexpr int kMaxDispatches = 2048;
 constexpr UINT kBwBytes = 256u * 1024 * 1024;   // per buffer; far above the 4070's 36 MB L2
 constexpr UINT kBwGroups = 1024;
-constexpr int kBwDispatches = 64;
+// Dispatches per timed run: 128 GB copied, about 0.3 s on the reference
+// RTX 4070. A run of 64 (75 ms) was short enough for whatever else the machine
+// did to land in one run and not in the next: readings scattered by 0.4 to
+// 0.7 % (standard deviation) and one in 24 did not settle; with 256 it is
+// 0.2 % and none (hardware check 95).
+constexpr int kBwDispatches = 256;
 constexpr size_t kBwRuns = 3;          // consecutive runs that must agree
-constexpr int kBwMaxRuns = 20;         // ~1.5 s at full speed; more if clocks are low
+constexpr int kBwMaxRuns = 20;         // ~6 s at full speed; more if clocks are low
 constexpr double kBwSettle = 0.01;     // agree = within 1 %
 
 // Grid-stride copy of 16-byte elements between two raw buffers.

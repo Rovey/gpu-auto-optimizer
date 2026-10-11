@@ -67,11 +67,21 @@ int apply_margin(int max, int step, float perf_push);
 // Memory overclocks fail by losing bandwidth before they fail by producing
 // errors: GDDR6X/GDDR6 retry bad transfers. The memory search therefore looks
 // for the bandwidth peak, not the stability ceiling.
-inline constexpr double kBandwidthDrop = 0.01;   // stop once 1 % below the best
+// The scan stops once a step is this far below the best. It was 1 %, and that
+// is less than the readings move by themselves: on the reference RTX 4070
+// they sit about 1.8 % higher for tens of seconds at a time, at any offset,
+// and such a stretch ended a scan wherever it began or ended (hardware check
+// 95). A peak that is real falls further than that within a step or two.
+inline constexpr double kBandwidthDrop = 0.03;
 // Within 1 % of the best counts as the best: measured noise on the 4070 is
 // ~0.4 % and one 50 MHz step is worth ~0.5 %, so a narrower band would let
 // noise pick the offset.
 inline constexpr double kBandwidthTie = 0.01;
+// A step of the memory scan is the middle one of this many readings, so one
+// reading that is off, or that did not settle, decides nothing. On the
+// reference card single readings ended scans at +250, at +1000 and not at all
+// on one day, and the runs saved +100, +650 and +1600 MHz (hardware check 94).
+inline constexpr int kBandwidthReadings = 3;
 
 // A confirm probe that ends too hot keeps the clock edge (heat is the power
 // step's and the soak's business), but only when the clock was loaded this
