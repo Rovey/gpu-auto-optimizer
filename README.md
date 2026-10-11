@@ -155,6 +155,8 @@ Keeping the result applied copies the app to `%ProgramFiles%\GpuAutoOptimizer\` 
 
 The safety margin: the search finds the highest stable offset and applies a fraction of it (70 % for Best of my GPU), always at least one step below the edge.
 
+**Best of my GPU** and **Max performance** promise speed, so they keep a result only when it is at least as fast as the card was at stock (within 1 %, the scatter of two five-minute runs). On a card that is warmer at stock than the profile allows, the power limit has to come down to meet the temperature, and that can cost more than the clocks win back. The run then says so, applies and saves nothing, and leaves the card at stock; **Undervolt** is the profile for such a card. Quiet and Cool & efficient give a little speed away on purpose and are not judged this way.
+
 The undervolt is saved in place of an overclock, not next to it: on the card a core offset and the curve are one table. The card's built-in curve moves with temperature, so the points above the one the card runs on are stored a little lower than it: a warm card then gives up one 15 MHz clock step instead of going to a higher voltage, which had cost about 12 W. During a run the window draws the curve as the run writes it:
 
 <div align="center">
