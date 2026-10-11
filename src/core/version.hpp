@@ -3,8 +3,8 @@
 // (app.rc, the exe's file properties) cannot read C++.
 #define GAO_VERSION_MAJOR 0
 #define GAO_VERSION_MINOR 4
-#define GAO_VERSION_PATCH 6
-#define GAO_VERSION_STRING "0.4.6"
+#define GAO_VERSION_PATCH 7
+#define GAO_VERSION_STRING "0.4.7"
 
 #ifndef RC_INVOKED
 #include <string_view>
