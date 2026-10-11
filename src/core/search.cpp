@@ -172,7 +172,8 @@ bool is_reset_verdict(Verdict v) {
 }
 }
 
-OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& journal, const OptimizeIo& io) {
+OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& journal, const OptimizeIo& io,
+                        const std::optional<StabilityResult>& stock) {
     OptimizeResult r;
     std::string stopped;   // non-empty once the run must end; later probes become no-ops
     auto log = [&](const std::string& m) { if (io.log) io.log(m); };
@@ -713,6 +714,24 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
         if (io.aborted && io.aborted()) return finish_fail("aborted");
         if (s->verdict == Verdict::Stable) {
             r.soak = *s;
+            // Tested, and still not kept: a profile that promises speed has
+            // nothing to offer a card it made slower. That happens where the
+            // card is warmer at stock than the profile allows: the power
+            // limit has to come down to meet the temperature, and that costs
+            // more than the clocks win back (an RTX 3080 Ti: 4749 it/s after
+            // the run, 4937 at stock). Applying it and calling it done would
+            // be a lie about what the profile is for.
+            if (obj.faster_than_stock && stock && stock->score > 0 && s->score < kNotSlowerScore * stock->score) {
+                char why[400];
+                std::snprintf(why, sizeof(why), "the result is slower than stock: %.0f it/s against %.0f (%+.1f %%). %s Nothing was saved or applied. "
+                              "If the card runs warm, the Undervolt profile is the one that helps: the same speed on less power",
+                              s->score, stock->score, (s->score / stock->score - 1) * 100,
+                              r.power_pct < 100
+                                  ? ("To stay under " + std::to_string(obj.max_temp_c) + " C the power limit went down to " +
+                                     std::to_string(r.power_pct) + " %, and that costs more speed than the clocks win back.").c_str()
+                                  : "The clocks this card holds do not make it faster.");
+                return finish_fail(why);
+            }
             r.ok = true;
             if (gpu.recover && r.driver_resets > 0) log("the driver reset during this run; the search stopped exploring there");
             return r;

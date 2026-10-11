@@ -195,6 +195,15 @@ struct OptimizeResult {
 // The whole tuning run (spec §3): baseline, power, memory, core, soak. Leaves
 // the result applied when ok; any !ok return leaves the card at stock, or
 // says in stock_restored that it could not.
-OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& journal, const OptimizeIo& io);
+// A profile that promises speed (Objectives::faster_than_stock) keeps its
+// result only when the soak scored at least this share of the measurement at
+// stock. One percent is the scatter of two five-minute runs, not a slower
+// card.
+inline constexpr double kNotSlowerScore = 0.99;
+
+// stock: the measurement at stock that went before the run, when there was
+// one: what a profile that promises speed must not end slower than.
+OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& journal, const OptimizeIo& io,
+                        const std::optional<StabilityResult>& stock = {});
 
 }
