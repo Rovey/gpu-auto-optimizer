@@ -5,18 +5,70 @@
 #include "hw/gpu_control.hpp"
 #include "hw/nvapi.hpp"
 #include "hw/nvml.hpp"
+#include <atomic>
+#include <string>
+#include <cstdio>
 #include <optional>
 #include <utility>
 
 namespace gao::app {
 
+namespace {
+// The stack at the last caught fault, taken in the exception filter: the
+// frames of the fault are still there then. Plain data, nothing allocated.
+struct FaultSite {
+    void* frames[32];
+    unsigned short count = 0;
+};
+thread_local FaultSite t_fault;
+std::atomic<void (*)(const std::string&)> g_fault_log{nullptr};
+
+int fault_filter(unsigned long code) {
+    if (code != EXCEPTION_ACCESS_VIOLATION) return EXCEPTION_CONTINUE_SEARCH;
+    t_fault.count = RtlCaptureStackBackTrace(0, 32, t_fault.frames, nullptr);
+    return EXCEPTION_EXECUTE_HANDLER;
+}
+
+void fault_log(const std::string& line) {
+    if (const auto sink = g_fault_log.load()) sink(line);
+}
+}
+
 bool guarded(void (*fn)(void*), void* ctx) {
     __try {
         fn(ctx);
         return true;
-    } __except (GetExceptionCode() == EXCEPTION_ACCESS_VIOLATION ? EXCEPTION_EXECUTE_HANDLER : EXCEPTION_CONTINUE_SEARCH) {
+    } __except (fault_filter(GetExceptionCode())) {
         return false;
     }
+}
+
+std::string last_fault() {
+    std::string out;
+    for (unsigned i = 0; i < t_fault.count; ++i) {
+        HMODULE module = nullptr;
+        char path[MAX_PATH] = "?";
+        if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                               static_cast<const char*>(t_fault.frames[i]), &module))
+            GetModuleFileNameA(module, path, MAX_PATH);
+        std::string name = path;
+        if (const auto slash = name.find_last_of("\\/"); slash != std::string::npos) name.erase(0, slash + 1);
+        char site[32];
+        std::snprintf(site, sizeof(site), "+0x%llx",
+                      static_cast<unsigned long long>(static_cast<const char*>(t_fault.frames[i]) - reinterpret_cast<const char*>(module)));
+        if (!out.empty()) out += " < ";
+        out += name + site;
+    }
+    return out;
+}
+
+void set_fault_log(void (*sink)(const std::string&)) { g_fault_log = sink; }
+
+bool guarded_driver(void (*fn)(void*), void* ctx) {
+    if (guarded(fn, ctx)) return true;
+    Nvml::Abandon();
+    fault_log("a call into a driver library faulted: " + last_fault());
+    return false;
 }
 
 namespace {
@@ -32,15 +84,16 @@ GuardedGpu::~GuardedGpu() {
     inner_ = {};
     Nvml* nvml = nvml_.release();
     Nvapi* nvapi = nvapi_.release();
-    guarded([nvml] { delete nvml; });
-    guarded([nvapi] { delete nvapi; });
+    guarded_driver([nvml] { delete nvml; });
+    guarded_driver([nvapi] { delete nvapi; });
 }
 
 // Stops using the libraries and shuts them down. The only call into a library
 // that may just have faulted is its destructor, under the guard: if that
 // faults as well, the object and the loaded DLL are leaked, as in the tray's
-// hw_lost(). Leaves fresh, uninitialised objects, which answer every call
-// with a failure without reaching the driver.
+// hw_lost(). After a fault NVML's destructor no longer calls into the library
+// at all (Nvml::Abandon). Leaves fresh, uninitialised objects, which answer
+// every call with a failure without reaching the driver.
 void GuardedGpu::Disconnect() {
     live_ = false;
     inner_ = {};   // its callbacks refer to the objects deleted below
@@ -48,8 +101,8 @@ void GuardedGpu::Disconnect() {
     Nvapi* nvapi = nvapi_.release();
     nvml_ = std::make_unique<Nvml>();
     nvapi_ = std::make_unique<Nvapi>();
-    guarded([nvml] { delete nvml; });
-    guarded([nvapi] { delete nvapi; });
+    guarded_driver([nvml] { delete nvml; });
+    guarded_driver([nvapi] { delete nvapi; });
 }
 
 // Initialises the fresh objects Disconnect (or the constructor) left and
@@ -60,14 +113,14 @@ bool GuardedGpu::Connect(std::string* why) {
         return false;
     };
     bool ok = false;
-    if (!guarded([&] { ok = nvml_->Init(); })) return fail("NVML init failed: access violation inside the driver library");
+    if (!guarded_driver([&] { ok = nvml_->Init(); })) return fail("NVML init failed: access violation inside the driver library");
     if (!ok) return fail("NVML init failed: " + nvml_->Error());
     ok = false;
-    if (!guarded([&] { ok = nvapi_->Init(); })) return fail("NVAPI init failed: access violation inside the driver library");
+    if (!guarded_driver([&] { ok = nvapi_->Init(); })) return fail("NVAPI init failed: access violation inside the driver library");
     if (!ok) return fail("NVAPI init failed: " + nvapi_->Error());
     // make_gpu_control asks NVML what the card supports: driver calls as well.
     GpuControl built;
-    if (!guarded([&] { built = make_gpu_control(*nvml_, *nvapi_, gpu_); }))
+    if (!guarded_driver([&] { built = make_gpu_control(*nvml_, *nvapi_, gpu_); }))
         return fail("NVML init failed: access violation while querying the card");
     inner_ = std::move(built);
     live_ = true;
@@ -81,7 +134,7 @@ template <class R, class Fn> R GuardedGpu::Call(R fail, Fn fn) {
     const std::lock_guard<std::mutex> lock(mutex_);
     if (!live_) return fail;
     R out = fail;
-    if (guarded([&] { out = fn(); })) return out;
+    if (guarded_driver([&] { out = fn(); })) return out;
     live_ = false;
     inner_ = {};   // nothing calls into the faulted libraries again; recover deletes them
     return fail;
@@ -170,7 +223,7 @@ bool GuardedGpu::Init(std::string* why) {
 bool GuardedGpu::FanAuto() {
     const std::lock_guard<std::mutex> lock(mutex_);
     bool ok = false;
-    if (live_ && !guarded([&] { ok = inner_.set_fan_auto && inner_.set_fan_auto(); })) {
+    if (live_ && !guarded_driver([&] { ok = inner_.set_fan_auto && inner_.set_fan_auto(); })) {
         ok = false;
         live_ = false;
         inner_ = {};   // as in Call: the faulted libraries are not called again
@@ -185,7 +238,7 @@ bool GuardedGpu::FanAuto() {
 bool GuardedGpu::DeliverFanAuto() {
     if (!fan_auto_owed_ || !inner_.set_fan_auto) return true;
     bool ok = false;
-    if (!guarded([&] { ok = inner_.set_fan_auto(); })) return false;
+    if (!guarded_driver([&] { ok = inner_.set_fan_auto(); })) return false;
     if (ok) fan_auto_owed_ = false;   // still owed otherwise; the next recover tries again
     return true;
 }
@@ -204,13 +257,24 @@ bool GuardedGpu::Recover() {
         const std::lock_guard<std::mutex> lock(mutex_);
         Disconnect();
     }
+    std::string why;   // of the last attempt
     for (int attempt = 0; attempt < kRecoverAttempts; ++attempt) {
         Sleep(kRecoverWaitMs);   // before the first attempt too: the driver needs a moment
         const std::lock_guard<std::mutex> lock(mutex_);
         Telemetry t;
-        if (Connect(nullptr) && inner_.read && guarded([&] { t = inner_.read(); }) && t.ok && DeliverFanAuto()) return true;
+        if (!Connect(&why)) {
+        } else if (!inner_.read || !guarded_driver([&] { t = inner_.read(); })) {
+            why = "the telemetry read faulted";
+        } else if (!t.ok) {
+            why = "NVML and NVAPI initialised, but the card's clock or temperature could not be read";
+        } else if (!DeliverFanAuto()) {
+            why = "handing the fans back to the driver faulted";
+        } else {
+            return true;
+        }
         Disconnect();   // not back yet; never reuse a half-initialised library
     }
+    fault_log("reconnecting to the driver failed " + std::to_string(kRecoverAttempts) + " times; the last time: " + why);
     return false;
 }
 

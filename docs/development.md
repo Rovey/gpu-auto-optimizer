@@ -123,7 +123,7 @@ The applied offset is always at least one step below the confirmed edge. Profile
 
 ## Testing
 
-`core_tests` covers `src/core/` and runs in CI on a GitHub-hosted `windows-2025` runner, once normally and once under AddressSanitizer. CI also builds both executables, so a link error in the hardware layer is caught there.
+`core_tests` covers `src/core/`, and `app_tests` the part of `src/app/` that can be tested with the driver libraries stood in for. Both run in CI on a GitHub-hosted `windows-2025` runner, once normally and once under AddressSanitizer. CI also builds both executables, so a link error in the hardware layer is caught there.
 
 The hardware layer cannot run in CI (the runner has no GPU). It is checked by hand on the reference RTX 4070 through [hardware-checks.md](hardware-checks.md); record the results there.
 

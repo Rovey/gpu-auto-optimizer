@@ -142,3 +142,24 @@ TEST_CASE("a tune that stays applied without a driver reset is never counted") {
     for (int i = 0; i < 10; ++i) CHECK(w.check(tuned(), kOurs, true, true, t0 + i * 1min) == WatchAction::None);
     CHECK_FALSE(w.gave_up());
 }
+
+TEST_CASE("the resets counted so far go with a process that restarts itself") {
+    Watchdog before;
+    CHECK(before.recent(t0) == 0);
+    CHECK(before.check(tuned(), kStock, true, true, t0) == WatchAction::Reapply);
+    CHECK(before.check(tuned(), kStock, true, true, t0 + 10min) == WatchAction::Reapply);
+    CHECK(before.recent(t0 + 20min) == 2);
+    CHECK(before.recent(t0 + 65min) == 1);   // the first one is over an hour old
+    // The next process starts from that count instead of from nothing.
+    Watchdog after;
+    after.seed(2, t0 + 20min);
+    CHECK(after.check(tuned(), kStock, true, true, t0 + 21min) == WatchAction::Reapply);
+    CHECK(after.check(tuned(), kStock, true, true, t0 + 22min) == WatchAction::GiveUpUnstable);
+    // A count from a command line is not trusted beyond what a watchdog can hold.
+    Watchdog full, none;
+    full.seed(1000, t0);
+    CHECK(full.recent(t0) == Watchdog::kMaxReappliesPerHour);
+    CHECK(full.check(tuned(), kStock, true, true, t0 + 1min) == WatchAction::GiveUpUnstable);
+    none.seed(-5, t0);
+    CHECK(none.recent(t0) == 0);
+}

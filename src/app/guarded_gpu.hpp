@@ -27,6 +27,24 @@ template <class F> bool guarded(F f) {
     return guarded([](void* p) { (*static_cast<F*>(p))(); }, &f);
 }
 
+// `guarded`, for calls into NVML or NVAPI. A fault there also marks NVML as
+// never to be shut down in this process again (Nvml::Abandon): the call that
+// faulted never left the library, and its shutdown would wait for it for
+// ever. Which of the two libraries faulted is not known here; leaving NVML
+// loaded when it was NVAPI costs nothing. The tray app then restarts itself.
+bool guarded_driver(void (*fn)(void*), void* ctx);
+// Where the access violation `guarded` last caught on this thread happened:
+// the faulting instruction and its callers, each as module+offset. Empty when
+// it has caught none.
+std::string last_fault();
+// Where a fault in a driver call, and a reconnect that failed, are written
+// down: one line each. Set once at startup (the apps use boot_log); without
+// it nothing is written. A caught fault otherwise leaves no trace at all.
+void set_fault_log(void (*sink)(const std::string&));
+template <class F> bool guarded_driver(F f) {
+    return guarded_driver([](void* p) { (*static_cast<F*>(p))(); }, &f);
+}
+
 // NVML and NVAPI for one GPU, behind a GpuControl whose callbacks run guarded
 // and whose `recover` re-creates both libraries.
 class GuardedGpu {

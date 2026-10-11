@@ -8,7 +8,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # would load first. Static linking also drops the redistributable dependency.
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
-# AddressSanitizer build (the `asan` preset), run on core_tests in CI. It
+# AddressSanitizer build (the `asan` preset), run on the tests in CI. It
 # applies to every target: MSVC refuses to link sanitized and unsanitized
 # objects together (annotate_string/annotate_vector mismatch).
 option(GAO_ASAN "Build everything with AddressSanitizer" OFF)
@@ -154,4 +154,13 @@ add_executable(core_tests
 target_link_libraries(core_tests PRIVATE core doctest gao_warnings)
 add_test(NAME core_tests COMMAND core_tests)
 
-set_target_properties(core hw app gao GpuAutoOptimizer core_tests PROPERTIES COMPILE_WARNING_AS_ERROR ON)
+# The app layer where it can be tested without a GPU: the driver libraries are
+# stood in for, never loaded.
+add_executable(app_tests
+  tests/test_main.cpp
+  tests/test_driver_fault.cpp
+)
+target_link_libraries(app_tests PRIVATE app doctest gao_warnings)
+add_test(NAME app_tests COMMAND app_tests)
+
+set_target_properties(core hw app gao GpuAutoOptimizer core_tests app_tests PROPERTIES COMPILE_WARNING_AS_ERROR ON)

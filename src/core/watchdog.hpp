@@ -38,6 +38,13 @@ public:
                       bool gpu_matches, Clock::time_point now, const std::optional<CurveState>& curve = std::nullopt,
                       bool driver_reset = false);
     bool gave_up() const { return gave_up_; }
+    // For a process that restarts itself and goes on keeping the tune applied:
+    // the resets counted in the last hour, and that count handed to the
+    // watchdog of the next process (never more than a watchdog can hold).
+    // There they count as if they had just happened, so the tune is given up
+    // no later than it would have been without the restart.
+    int recent(Clock::time_point now);
+    void seed(int resets, Clock::time_point now);
 
 private:
     bool count(Clock::time_point now);   // false: one too many within the hour

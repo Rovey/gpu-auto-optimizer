@@ -1,4 +1,5 @@
 #include "core/watchdog.hpp"
+#include <algorithm>
 #include <cstdlib>
 
 namespace gao {
@@ -19,9 +20,17 @@ bool tune_applied(const Profile& p, const AppliedState& seen, const std::optiona
     return core_is_ours(p, seen, curve) && seen.mem_mhz == p.mem_mhz && power_is(seen, p.power_pct);
 }
 
-bool Watchdog::count(Clock::time_point now) {
+int Watchdog::recent(Clock::time_point now) {
     while (!reapplies_.empty() && now - reapplies_.front() >= std::chrono::hours(1)) reapplies_.pop_front();
-    if (static_cast<int>(reapplies_.size()) >= kMaxReappliesPerHour) {
+    return static_cast<int>(reapplies_.size());
+}
+
+void Watchdog::seed(int resets, Clock::time_point now) {
+    reapplies_.assign(static_cast<std::size_t>(std::clamp(resets, 0, kMaxReappliesPerHour)), now);
+}
+
+bool Watchdog::count(Clock::time_point now) {
+    if (recent(now) >= kMaxReappliesPerHour) {
         gave_up_ = true;
         return false;
     }
