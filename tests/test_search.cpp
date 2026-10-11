@@ -2615,3 +2615,33 @@ TEST_CASE("confirm_edge steps down by what step_down says") {
     CHECK(confirm_edge(150, 0, 15, 3, [](int v) { return v <= 135; }, {}) == 135);
     CHECK(confirm_edge(150, 0, 15, 3, [](int v) { return v <= 135; }) == 135);
 }
+
+// The measurement at stock that goes before a run (the fans are the NVIDIA driver's).
+static StabilityResult stock_run(Verdict verdict, double seconds, int peak_temp_c) {
+    StabilityResult s;
+    s.verdict = verdict;
+    s.seconds = seconds;
+    s.peak_temp_c = peak_temp_c;
+    return s;
+}
+
+TEST_CASE("a card that gets hot at stock with the driver's fans is not refused: the run goes on") {
+    CHECK(stock_refusal(stock_run(Verdict::Stable, 300, 67)).empty());
+    // A 3080 Ti: 85 C under full load with the driver holding its fans at 65 %. Nothing is wrong with it.
+    CHECK(stock_refusal(stock_run(Verdict::TooHot, 140, kStockTempC + 1)).empty());
+    CHECK(stock_refusal(stock_run(Verdict::TooHot, kStockMinS, kStockTempC + 1)).empty());
+}
+
+TEST_CASE("a card that was hot before the measurement at stock got going is asked to cool down first") {
+    const std::string why = stock_refusal(stock_run(Verdict::TooHot, 4, 88));
+    CHECK(why.find("88 C") != std::string::npos);
+    CHECK(why.find("cool down") != std::string::npos);
+    CHECK(why.find("not stable") == std::string::npos);
+}
+
+TEST_CASE("a card that fails at stock for another reason gets no run") {
+    CHECK(stock_refusal(stock_run(Verdict::WrongResult, 12, 60)) == "the card is not stable at stock (WRONG RESULT)");
+    CHECK(stock_refusal(stock_run(Verdict::DeviceLost, 12, 60)) == "the card is not stable at stock (DEVICE LOST)");
+    CHECK(stock_refusal(stock_run(Verdict::NoTelemetry, 12, 60)) == "the card is not stable at stock (NO TELEMETRY)");
+    CHECK(stock_refusal(stock_run(Verdict::Aborted, 12, 60)) == "aborted");
+}

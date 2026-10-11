@@ -112,6 +112,15 @@ SearchBounds search_bounds(const GpuControl& gpu) {
     return b;
 }
 
+std::string stock_refusal(const StabilityResult& stock) {
+    if (stock.verdict == Verdict::Stable) return {};
+    if (stock.verdict == Verdict::Aborted) return "aborted";
+    if (stock.verdict != Verdict::TooHot) return std::string("the card is not stable at stock (") + verdict_name(stock.verdict) + ")";
+    if (stock.seconds >= kStockMinS) return {};
+    return "the card was at " + std::to_string(stock.peak_temp_c) + " C after " + std::to_string(static_cast<int>(stock.seconds)) +
+           " s at stock; let it cool down and start again";
+}
+
 namespace {
 constexpr int kCoreStep = 15;
 constexpr int kMemStep = 50;

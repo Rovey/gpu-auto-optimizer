@@ -129,13 +129,24 @@ struct KeepAwake {
     ~KeepAwake() { SetThreadExecutionState(ES_CONTINUOUS); }
 };
 
-constexpr int kStockTempC = 85;        // a card at stock is only stopped by this
 constexpr double kLongRunS = 300;      // as the soaks: the two sides of the comparison last equally long
+// After a measurement at stock that the temperature stopped: without load,
+// this far below it before the run loads the card again, or this long. The
+// steps that follow have limits of their own.
+constexpr int kCoolDownC = 15;
+constexpr int kCoolDownMaxS = 60;
 
 struct StockOutcome {
-    std::string error;       // why it did not run
+    std::string error;       // why no run follows: it did not run, was stopped, or the card failed at stock
     StabilityResult result;
 };
+
+std::string stock_line(const StabilityResult& s) {
+    char line[400];
+    std::snprintf(line, sizeof(line), "  stock: %s  score=%.0f it/s  clock=%d MHz  peak=%d C  fan=%s  power=%d W", verdict_name(s.verdict),
+                  s.score, s.avg_core_mhz, s.peak_temp_c, reading(s.end_fan_pct, " %").c_str(), s.avg_power_w);
+    return line;
+}
 
 StockOutcome measure_stock(const OptimizeHooks& hooks) {
     StockOutcome out;
@@ -160,15 +171,61 @@ StockOutcome measure_stock(const OptimizeHooks& hooks) {
         (void)load.release();   // as in run_optimize: a load that faulted is left alone
         return fail("access violation while the card was measured at stock");
     }
+    auto log = [&](const std::string& m) { if (hooks.log) hooks.log(m); };
+    log(stock_line(out.result));
+    out.error = stock_refusal(out.result);
+    if (!out.error.empty() || out.result.verdict != Verdict::TooHot) return out;
+    // The driver's own fan control let the card reach the limit. That is the
+    // "before"; the run goes on, with the fans on a curve from here.
+    log("  the card reached " + std::to_string(out.result.peak_temp_c) + " C at stock with the driver's own fan control (fans at " +
+        reading(out.result.end_fan_pct, " %") + "): the measurement stopped there, after " +
+        std::to_string(static_cast<int>(out.result.seconds)) + " s. The run goes on with the fans on a curve.");
+    if (hooks.measuring) hooks.measuring("Letting the card cool down", kCoolDownMaxS);
+    for (int i = 0; i < kCoolDownMaxS * 4 && !(hooks.aborted && hooks.aborted()); ++i) {
+        const Telemetry t = gpu.read();
+        if (!t.ok || t.temp_c <= kStockTempC - kCoolDownC) break;
+        Sleep(250);
+    }
+    if (hooks.measuring) hooks.measuring("", 0);
     return out;
 }
 
-std::string stock_line(const StabilityResult& s) {
-    char line[400];
-    std::snprintf(line, sizeof(line), "  stock: %s  score=%.0f it/s  clock=%d MHz  peak=%d C  fan=%s  power=%d W", verdict_name(s.verdict),
-                  s.score, s.avg_core_mhz, s.peak_temp_c, reading(s.end_fan_pct, " %").c_str(), s.avg_power_w);
-    return line;
+// One reading of a run, with the fans moved along their curve.
+Telemetry read_with_fans(const GpuControl& gpu, FanDriver& fans, const OptimizeHooks& hooks) {
+    const Telemetry t = gpu.read();
+    const FanMode before = fans.state().mode;
+    const FanState now = fans.tick(t.temp_c, t.power_w, std::chrono::steady_clock::now());
+    if (now.mode != before && now.mode == FanMode::Failed && hooks.log) hooks.log("fans: a write did not verify; the driver has them again");
+    if (now.mode != before && now.mode == FanMode::Foreign && hooks.log) hooks.log("fans: another program set them; leaving them alone");
+    return t;
 }
+
+// The fans of a run back to the driver, on every exit: done, aborted, failed
+// or thrown.
+struct FanRelease {
+    FanDriver& f;
+    const GuardedGpu& hw;
+    const GpuControl& gpu;
+    const OptimizeHooks& hooks;
+    ~FanRelease() {
+        f.release();
+        // A hand-back that did not reach the driver, from a fan driver
+        // that failed earlier or from the release() above, is remembered
+        // by `hw`; the fans may still be at a manual speed. One more
+        // attempt, and only then: a hand-back that was delivered is not
+        // repeated, it would take the fans from another program that set
+        // them since. Hand back only, never a speed.
+        if (hw.FanAutoOwed() && gpu.set_fan_auto) gpu.set_fan_auto();
+        if (!hw.FanAutoOwed()) return;
+        // No reconnect at exit, so nothing will deliver it any more. A
+        // destructor must not throw; the line is lost if it cannot be built.
+        try {
+            if (hooks.log)
+                hooks.log("fans: could not be handed back to the driver; they may still be at a manual speed -- run `gao --fan auto`");
+        } catch (...) {
+        }
+    }
+};
 
 }
 
@@ -191,10 +248,6 @@ OptimizeOutcome run_optimize(Preset preset, const OptimizeHooks& hooks, const st
         log("the card at stock, five minutes");
         const StockOutcome measured = measure_stock(hooks);
         if (!measured.error.empty()) return fail(measured.error);
-        log(stock_line(measured.result));
-        if (measured.result.verdict == Verdict::Aborted) return fail("aborted");
-        if (measured.result.verdict != Verdict::Stable)
-            return fail(std::string("the card is not stable at stock (") + verdict_name(measured.result.verdict) + ")");
         out.stock = measured.result;
     }
     // Every driver call of the run goes through `hw`: guarded against a fault
@@ -212,30 +265,7 @@ OptimizeOutcome run_optimize(Preset preset, const OptimizeHooks& hooks, const st
     // finds hold at the temperatures that curve produces.
     const FanCurve curve = fan_curve.value_or(default_curve(preset));
     FanDriver fans(gpu, curve, objectives_for(preset).max_temp_c, fan_min_for(load_config(), hw.GpuUuid(), gpu.fan_min_pct));
-    struct FanRelease {
-        FanDriver& f;
-        const GuardedGpu& hw;
-        const GpuControl& gpu;
-        const OptimizeHooks& hooks;
-        ~FanRelease() {   // every exit: done, aborted, failed or thrown
-            f.release();
-            // A hand-back that did not reach the driver, from a fan driver
-            // that failed earlier or from the release() above, is remembered
-            // by `hw`; the fans may still be at a manual speed. One more
-            // attempt, and only then: a hand-back that was delivered is not
-            // repeated, it would take the fans from another program that set
-            // them since. Hand back only, never a speed.
-            if (hw.FanAutoOwed() && gpu.set_fan_auto) gpu.set_fan_auto();
-            if (!hw.FanAutoOwed()) return;
-            // No reconnect at exit, so nothing will deliver it any more. A
-            // destructor must not throw; the line is lost if it cannot be built.
-            try {
-                if (hooks.log)
-                    hooks.log("fans: could not be handed back to the driver; they may still be at a manual speed -- run `gao --fan auto`");
-            } catch (...) {
-            }
-        }
-    } fan_release{fans, hw, gpu, hooks};
+    const FanRelease fan_release{fans, hw, gpu, hooks};
     if (!gpu.set_fan_pct) log("fans: not controllable on this card; the driver keeps them");
 
     const auto path = journal_path();
@@ -260,16 +290,8 @@ OptimizeOutcome run_optimize(Preset preset, const OptimizeHooks& hooks, const st
     } keep_awake;
     OptimizeIo io;
     io.probe = [&](double seconds, int max_temp, double stall_below) {
-        auto read = [&] {
-            const Telemetry t = gpu.read();
-            const FanMode before = fans.state().mode;
-            const FanState now = fans.tick(t.temp_c, t.power_w, std::chrono::steady_clock::now());
-            if (now.mode != before && now.mode == FanMode::Failed) log("fans: a write did not verify; the driver has them again");
-            if (now.mode != before && now.mode == FanMode::Foreign) log("fans: another program set them; leaving them alone");
-            return t;
-        };
-        return run_stability([&] { return load->Batch(); }, read, seconds, max_temp, hooks.aborted,
-                             stall_below);
+        return run_stability([&] { return load->Batch(); }, [&] { return read_with_fans(gpu, fans, hooks); }, seconds, max_temp,
+                             hooks.aborted, stall_below);
     };
     io.aborted = hooks.aborted;
     io.log = hooks.log;
@@ -418,6 +440,17 @@ UndervoltOutcome run_undervolt(const OptimizeHooks& hooks, bool on_saved_tune, c
     auto load = std::make_unique<Stress>();   // on the heap: left alone after an access violation
     if (!load->Init()) return fail("stress init failed: " + load->Error());
     const GpuControl& gpu = hw.control();
+    // The fans follow a curve for the whole search, as in run_optimize: the
+    // one in use (the overclock's own, in an all-in-one run), or the preset's.
+    // Left to the driver, some cards get hotter under this load than the
+    // search allows (a 3080 Ti reached 85 C at stock with its fans at 65 %),
+    // and every probe would end TOO HOT.
+    const Objectives obj = objectives_for(Preset::Undervolt);
+    const Config at_start = load_config();
+    const FanCurve fan_curve = active_fan_curve(at_start).value_or(default_curve(Preset::Undervolt));
+    FanDriver fans(gpu, fan_curve, obj.max_temp_c, fan_min_for(at_start, hw.GpuUuid(), gpu.fan_min_pct));
+    const FanRelease fan_release{fans, hw, gpu, hooks};
+    if (!gpu.set_fan_pct) log("fans: not controllable on this card; the driver keeps them");
 
     const auto path = journal_path();
     if (path.empty()) return fail("the ProgramData folder could not be resolved; cannot keep the crash journal");
@@ -433,7 +466,8 @@ UndervoltOutcome run_undervolt(const OptimizeHooks& hooks, bool on_saved_tune, c
     } keep_awake;
     UndervoltIo io;
     io.probe = [&](double seconds, int max_temp, double stall_below) {
-        return run_stability([&] { return load->Batch(); }, [&] { return gpu.read(); }, seconds, max_temp, hooks.aborted, stall_below);
+        return run_stability([&] { return load->Batch(); }, [&] { return read_with_fans(gpu, fans, hooks); }, seconds, max_temp,
+                             hooks.aborted, stall_below);
     };
     io.aborted = hooks.aborted;
     io.log = hooks.log;
@@ -470,7 +504,6 @@ UndervoltOutcome run_undervolt(const OptimizeHooks& hooks, bool on_saved_tune, c
         log("on top of the saved tune: power " + std::to_string(base.power_pct) + " %, core +" + std::to_string(base.core_mhz) +
             " MHz, mem +" + std::to_string(base.mem_mhz) + " MHz");
     }
-    const Objectives obj = objectives_for(Preset::Undervolt);
     if (hooks.active_gpu) hooks.active_gpu(&gpu);
     bool crashed = false;
     try {
@@ -505,14 +538,18 @@ UndervoltOutcome run_undervolt(const OptimizeHooks& hooks, bool on_saved_tune, c
     }
     Config cfg = load_config();
     Profile p{Preset::Undervolt, 100, 0, 0, driver, gpu_id, now_text()};
-    // The search left the fans to the driver and tested no curve. The curve
-    // the fans followed before stays theirs: an undervolt only makes the
-    // card cooler than the tune that curve was tested with.
+    // The curve the fans followed before stays theirs: it is the one the
+    // search ran with.
     if (cfg.profile) p.fan_curve = cfg.profile->fan_curve;
     if (over) {   // the overclock it was searched on keeps everything it had; the undervolt joins it
         p = *over;
         p.saved_at = now_text();
         if (how.save_as) p.preset = *how.save_as;
+    }
+    // Only a curve that actually drove the fans counts as tested.
+    if (gpu.set_fan_pct && fans.state().mode != FanMode::Failed && fans.state().mode != FanMode::Foreign) {
+        if (!p.fan_curve) p.fan_curve = fan_curve;
+        cfg.fan_control = true;
     }
     p.undervolt = UndervoltTune{out.result.applied_uv, out.result.freq_khz, out.result.raise_khz};
     cfg.profile = p;
@@ -844,12 +881,8 @@ AllInOneOutcome run_all_in_one(const OptimizeHooks& hooks) {
 
     log("step 1 of 5: the card at stock, five minutes");
     const StockOutcome stock = measure_stock(hooks);
-    if (!stock.error.empty()) return stop(stock.error);
     out.stock = stock.result;
-    log(stock_line(out.stock));
-    if (out.stock.verdict == Verdict::Aborted) return stop("aborted");
-    if (out.stock.verdict != Verdict::Stable)
-        return stop(std::string("the card is not stable at stock (") + verdict_name(out.stock.verdict) + ")");
+    if (!stock.error.empty()) return stop(stock.error);
     out.ran = true;
 
     log("step 2 of 5: the overclock");
