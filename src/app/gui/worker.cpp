@@ -152,6 +152,7 @@ bool OptimizeWorker::start_demo(bool ask) {
         stock.end_fan_pct = 70;
         stock.avg_power_w = 185;
         stock.avg_core_mhz = 2793;
+        stock.avg_mem_mhz = 10501;
         bool ok = step("Measuring the card at stock", 12, "  stock: STABLE  score=5311 it/s  clock=2793 MHz  peak=66 C  fan=70 %  power=185 W") &&
                   step("The baseline", 4, "baseline: STABLE  score=5259 it/s  peak=66 C  power=179 W") &&
                   step("The power limit", 5, "power: 105 %");
@@ -190,6 +191,7 @@ bool OptimizeWorker::start_demo(bool ask) {
         out.result.soak.end_fan_pct = 62;
         out.result.soak.avg_power_w = 196;
         out.result.soak.avg_core_mhz = 2928;
+        out.result.soak.avg_mem_mhz = 12001;
         out.saved = false;
         out.save_note = "this was a demo. Nothing was measured, applied or saved.";
         // What the second look of a real run says when a program went away under it.
