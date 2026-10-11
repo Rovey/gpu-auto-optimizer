@@ -2,6 +2,7 @@
 #include "app/common.hpp"
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <functional>
 #include <mutex>
 #include <optional>
@@ -30,6 +31,8 @@ public:
         std::string measuring;
         double measuring_seconds = 0;   // its length
         double measuring_spent = 0;     // how long it has been running
+        // The run waits for an answer: these programs use the card (core/busy_card.hpp). Empty: no question.
+        std::vector<BusyProgram> busy_question;
         bool ended() const { return outcome || undervolt || all_in_one || retest; }
         // The run got as far as the search: it ended at its result or at stock.
         bool ran() const {
@@ -50,7 +53,8 @@ public:
 
     bool start(Preset preset, std::optional<FanCurve> fan_curve);   // false when a run is already active
     bool start_retest();                                            // the saved tune, five minutes; false likewise
-    void abort() { abort_ = true; }     // the run restores stock before it ends
+    void abort();                       // the run restores stock before it ends
+    void answer_busy(BusyAnswer answer);   // to the question in Snapshot::busy_question
     bool running() const { return running_; }
     Snapshot snapshot() const;
 
@@ -66,6 +70,9 @@ private:
     std::string measuring_;
     double measuring_seconds_ = 0;
     std::chrono::steady_clock::time_point measuring_from_;
+    std::vector<BusyProgram> busy_question_;
+    std::optional<BusyAnswer> busy_answer_;
+    std::condition_variable busy_cv_;
     std::atomic<bool> running_{false};
     std::atomic<bool> abort_{false};
     std::jthread thread_;

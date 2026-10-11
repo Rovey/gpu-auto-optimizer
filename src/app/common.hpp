@@ -3,6 +3,7 @@
 // and tray): everything between the core/hw layers and a user interface.
 // Nothing here prints; callers decide how to show messages.
 #include "core/boot.hpp"
+#include "core/busy_card.hpp"
 #include "core/config.hpp"
 #include "core/fan_curve.hpp"
 #include "core/fan_tune.hpp"
@@ -78,7 +79,17 @@ struct OptimizeHooks {
     // A long measurement starts (what it is, its length in seconds) or has
     // ended ("", 0). The undervolt run reports them; see UndervoltIo.
     std::function<void(const std::string& what, double seconds)> measuring;
+    // Asked before a run when other programs use the card (core/busy_card.hpp):
+    // go on with them, look again, or do not start. Empty: nobody to ask; the
+    // run goes on and its log says what was there.
+    std::function<BusyAnswer(const std::vector<BusyProgram>&)> busy;
+    // The run is one step of a longer one that has asked already.
+    bool busy_asked = false;
 };
+
+// The programs that use the card right now, as a run would find them before
+// it starts: a look of a few seconds. Changes nothing; needs no elevation.
+std::vector<BusyProgram> busy_now();
 
 struct OptimizeOutcome {
     bool ran = false;          // false: stopped before tuning; `error` says why
@@ -91,6 +102,10 @@ struct OptimizeOutcome {
     StabilityResult stock;     // valid when ran
     bool saved = false;        // the profile was saved for --apply / boot-apply
     std::string save_note;     // why it was not saved, when !saved
+    // Other programs started or stopped using the card while the run went on:
+    // what changed, as a sentence. Its numbers and the ones at stock were then
+    // not measured on the same card. Empty: nothing changed.
+    std::string busy_note;
 };
 
 // --optimize from start to end: state folder, drivers, journal checks, the

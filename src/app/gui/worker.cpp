@@ -4,7 +4,21 @@
 namespace gao::gui {
 
 OptimizeWorker::~OptimizeWorker() {
-    abort_ = true;   // a closing window never leaves a candidate applied: the run resets to stock
+    abort();   // a closing window never leaves a candidate applied: the run resets to stock
+}
+
+void OptimizeWorker::abort() {
+    abort_ = true;
+    busy_cv_.notify_all();   // a run that waits for an answer stops waiting
+}
+
+void OptimizeWorker::answer_busy(BusyAnswer answer) {
+    {
+        std::lock_guard lock(mu_);
+        if (busy_question_.empty()) return;
+        busy_answer_ = answer;
+    }
+    busy_cv_.notify_all();
 }
 
 bool OptimizeWorker::launch(bool retest, std::function<void(const app::OptimizeHooks&)> job) {
@@ -19,6 +33,8 @@ bool OptimizeWorker::launch(bool retest, std::function<void(const app::OptimizeH
         retest_.reset();
         is_retest_ = retest;
         measuring_.clear();
+        busy_question_.clear();
+        busy_answer_.reset();
     }
     abort_ = false;
     thread_ = std::jthread([this, job = std::move(job)] {
@@ -39,6 +55,21 @@ bool OptimizeWorker::launch(bool retest, std::function<void(const app::OptimizeH
                 measuring_from_ = std::chrono::steady_clock::now();
             }
             wake_();
+        };
+        // Other programs use the card: the window shows the question, and
+        // the run waits here for its answer. Aborting answers it too.
+        hooks.busy = [this](const std::vector<BusyProgram>& programs) {
+            std::unique_lock lock(mu_);
+            busy_question_ = programs;
+            busy_answer_.reset();
+            lock.unlock();
+            wake_();
+            lock.lock();
+            busy_cv_.wait(lock, [this] { return busy_answer_.has_value() || abort_.load(); });
+            const BusyAnswer answer = busy_answer_.value_or(BusyAnswer::Stop);
+            busy_question_.clear();
+            busy_answer_.reset();
+            return answer;
         };
         job(hooks);
         {
@@ -87,6 +118,7 @@ bool OptimizeWorker::start_retest() {
 OptimizeWorker::Snapshot OptimizeWorker::snapshot() const {
     std::lock_guard lock(mu_);
     Snapshot s{running_.load(), log_, outcome_, undervolt_, all_in_one_, retest_, is_retest_};
+    s.busy_question = busy_question_;
     if (!measuring_.empty()) {
         s.measuring = measuring_;
         s.measuring_seconds = measuring_seconds_;

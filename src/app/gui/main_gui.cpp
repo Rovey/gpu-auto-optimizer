@@ -504,6 +504,7 @@ void act_retest() {
 }
 
 void act_abort() { g.worker->abort(); }
+void act_answer_busy(gao::BusyAnswer answer) { g.worker->answer_busy(answer); }
 
 void restart_elevated(const wchar_t* arguments) {
     wchar_t self[MAX_PATH];
@@ -672,6 +673,7 @@ void render() {
     act.optimize = act_optimize;
     act.retest = act_retest;
     act.abort = act_abort;
+    act.answer_busy = act_answer_busy;
     act.restart_elevated = act_restart_elevated;
     act.apply_profile = act_apply;
     act.revert_to_stock = act_revert;
