@@ -988,13 +988,14 @@ bool optimize_result(const app::OptimizeOutcome& o) {
                   r.core_confirmed, r.mem_confirmed);
     wrapped(kDim, line);
     ImGui::Spacing();
-    comparison(r.baseline, r.soak, [&](auto row) {
-        row("Score", score_text(r.baseline.score), against(r.baseline.score, r.soak.score, "it/s"));
-        row("Core clock", reading(r.baseline.avg_core_mhz, " MHz"), reading(r.soak.avg_core_mhz, " MHz"));
-        row("Memory clock", reading(r.baseline.avg_mem_mhz, " MHz"), reading(r.soak.avg_mem_mhz, " MHz"));
-        row("Peak temperature", reading(r.baseline.peak_temp_c, " \xC2\xB0""C"), reading(r.soak.peak_temp_c, " \xC2\xB0""C"));
-        row("Fan speed at the end", reading(r.baseline.end_fan_pct, " %"), reading(r.soak.end_fan_pct, " %"));
-        row("Power", reading(r.baseline.avg_power_w, " W"), reading(r.soak.avg_power_w, " W"));
+    const StabilityResult& before = o.stock;   // five minutes, like the soak
+    comparison(before, r.soak, [&](auto row) {
+        row("Score", score_text(before.score), against(before.score, r.soak.score, "it/s"));
+        row("Core clock", reading(before.avg_core_mhz, " MHz"), reading(r.soak.avg_core_mhz, " MHz"));
+        row("Memory clock", reading(before.avg_mem_mhz, " MHz"), reading(r.soak.avg_mem_mhz, " MHz"));
+        row("Peak temperature", reading(before.peak_temp_c, " \xC2\xB0""C"), reading(r.soak.peak_temp_c, " \xC2\xB0""C"));
+        row("Fan speed at the end", reading(before.end_fan_pct, " %"), reading(r.soak.end_fan_pct, " %"));
+        row("Power", reading(before.avg_power_w, " W"), reading(r.soak.avg_power_w, " W"));
     });
     return true;
 }

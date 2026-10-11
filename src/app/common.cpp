@@ -119,7 +119,61 @@ std::string decision_text(BootDecision d, const Config& c, const std::string& dr
     return "unknown";
 }
 
-OptimizeOutcome run_optimize(Preset preset, const OptimizeHooks& hooks, const std::optional<FanCurve>& fan_curve) {
+namespace {
+
+// The card at stock under load, five minutes: the "before" of every result.
+// It brings its own drivers and stress load, like the searches, and leaves the
+// fans to the NVIDIA driver.
+struct KeepAwake {
+    KeepAwake() { SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED); }
+    ~KeepAwake() { SetThreadExecutionState(ES_CONTINUOUS); }
+};
+
+constexpr int kStockTempC = 85;        // a card at stock is only stopped by this
+constexpr double kLongRunS = 300;      // as the soaks: the two sides of the comparison last equally long
+
+struct StockOutcome {
+    std::string error;       // why it did not run
+    StabilityResult result;
+};
+
+StockOutcome measure_stock(const OptimizeHooks& hooks) {
+    StockOutcome out;
+    auto fail = [&](const std::string& why) { out.error = why; return out; };
+    const TuningLock lock;
+    if (!lock.owned()) return fail("another optimize is already running (in the app or on the command line)");
+    std::string why;
+    if (!prepare_state(&why)) return fail(why);
+    GuardedGpu hw(kGpu);
+    if (!hw.Init(&why)) return fail(why);
+    auto load = std::make_unique<Stress>();
+    if (!load->Init()) return fail("stress init failed: " + load->Error());
+    const GpuControl& gpu = hw.control();
+    if (!gpu.reset_to_stock || !gpu.reset_to_stock()) return fail("could not set the card to stock");
+    const KeepAwake keep_awake;
+    if (hooks.measuring) hooks.measuring("Measuring the card at stock", kLongRunS);
+    const bool crashed = !guarded([&] {
+        out.result = run_stability([&] { return load->Batch(); }, [&] { return gpu.read(); }, kLongRunS, kStockTempC, hooks.aborted);
+    });
+    if (hooks.measuring) hooks.measuring("", 0);
+    if (crashed) {
+        (void)load.release();   // as in run_optimize: a load that faulted is left alone
+        return fail("access violation while the card was measured at stock");
+    }
+    return out;
+}
+
+std::string stock_line(const StabilityResult& s) {
+    char line[400];
+    std::snprintf(line, sizeof(line), "  stock: %s  score=%.0f it/s  clock=%d MHz  peak=%d C  fan=%s  power=%d W", verdict_name(s.verdict),
+                  s.score, s.avg_core_mhz, s.peak_temp_c, reading(s.end_fan_pct, " %").c_str(), s.avg_power_w);
+    return line;
+}
+
+}
+
+OptimizeOutcome run_optimize(Preset preset, const OptimizeHooks& hooks, const std::optional<FanCurve>& fan_curve,
+                             const std::optional<StabilityResult>& known_stock) {
     OptimizeOutcome out;
     auto log = [&](const std::string& m) { if (hooks.log) hooks.log(m); };
     auto fail = [&](const std::string& why) { out.error = why; return out; };
@@ -129,6 +183,20 @@ OptimizeOutcome run_optimize(Preset preset, const OptimizeHooks& hooks, const st
     if (!lock.owned()) return fail("another optimize is already running (in the app or on the command line)");
     std::string why;
     if (!prepare_state(&why)) return fail(why);
+    // Before the search and with drivers of its own, so that only one stress
+    // load exists at a time. The lock is taken again there, on this thread.
+    if (known_stock) {
+        out.stock = *known_stock;
+    } else {
+        log("the card at stock, five minutes");
+        const StockOutcome measured = measure_stock(hooks);
+        if (!measured.error.empty()) return fail(measured.error);
+        log(stock_line(measured.result));
+        if (measured.result.verdict == Verdict::Aborted) return fail("aborted");
+        if (measured.result.verdict != Verdict::Stable)
+            return fail(std::string("the card is not stable at stock (") + verdict_name(measured.result.verdict) + ")");
+        out.stock = measured.result;
+    }
     // Every driver call of the run goes through `hw`: guarded against a fault
     // inside the driver DLLs, and reconnected by gpu.recover after a driver
     // reset. `gpu` is never reassigned, so the references the fan driver, the
@@ -629,48 +697,9 @@ bool install_update(const ReleaseInfo& release, std::string* message) {
 
 namespace {
 
-// The card at stock under load, and the card with the saved tune under load
-// while its fans are tuned: the two measuring steps of the all-in-one run.
-// Each brings its own drivers and stress load, like the searches.
-struct KeepAwake {
-    KeepAwake() { SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED); }
-    ~KeepAwake() { SetThreadExecutionState(ES_CONTINUOUS); }
-};
-
-constexpr int kStockTempC = 85;        // a card at stock is only stopped by this
-constexpr double kLongRunS = 300;      // as the soaks: the two sides of the comparison last equally long
-
-struct StockOutcome {
-    std::string error;       // why it did not run
-    StabilityResult result;
-};
-
-StockOutcome measure_stock(const OptimizeHooks& hooks) {
-    StockOutcome out;
-    auto fail = [&](const std::string& why) { out.error = why; return out; };
-    const TuningLock lock;
-    if (!lock.owned()) return fail("another optimize is already running (in the app or on the command line)");
-    std::string why;
-    if (!prepare_state(&why)) return fail(why);
-    GuardedGpu hw(kGpu);
-    if (!hw.Init(&why)) return fail(why);
-    auto load = std::make_unique<Stress>();
-    if (!load->Init()) return fail("stress init failed: " + load->Error());
-    const GpuControl& gpu = hw.control();
-    if (!gpu.reset_to_stock || !gpu.reset_to_stock()) return fail("could not set the card to stock");
-    const KeepAwake keep_awake;
-    if (hooks.measuring) hooks.measuring("Measuring the card at stock", kLongRunS);
-    const bool crashed = !guarded([&] {
-        out.result = run_stability([&] { return load->Batch(); }, [&] { return gpu.read(); }, kLongRunS, kStockTempC, hooks.aborted);
-    });
-    if (hooks.measuring) hooks.measuring("", 0);
-    if (crashed) {
-        (void)load.release();   // as in run_optimize: a load that faulted is left alone
-        return fail("access violation while the card was measured at stock");
-    }
-    return out;
-}
-
+// The card with the saved tune under load while its fans are tuned: a
+// measuring step of the all-in-one run. It brings its own drivers and stress
+// load, like the searches and like measure_stock above.
 struct FanStepOutcome {
     std::string error;       // why the step ended without a result; the card is at stock then
     FanTuneResult fan;
@@ -793,18 +822,14 @@ AllInOneOutcome run_all_in_one(const OptimizeHooks& hooks) {
     const StockOutcome stock = measure_stock(hooks);
     if (!stock.error.empty()) return stop(stock.error);
     out.stock = stock.result;
-    char line[400];
-    std::snprintf(line, sizeof(line), "  stock: %s  score=%.0f it/s  clock=%d MHz  peak=%d C  fan=%s  power=%d W", verdict_name(out.stock.verdict),
-                  out.stock.score, out.stock.avg_core_mhz, out.stock.peak_temp_c, reading(out.stock.end_fan_pct, " %").c_str(),
-                  out.stock.avg_power_w);
-    log(line);
+    log(stock_line(out.stock));
     if (out.stock.verdict == Verdict::Aborted) return stop("aborted");
     if (out.stock.verdict != Verdict::Stable)
         return stop(std::string("the card is not stable at stock (") + verdict_name(out.stock.verdict) + ")");
     out.ran = true;
 
     log("step 2 of 5: the overclock");
-    out.overclock = run_optimize(Preset::AllInOne, hooks);
+    out.overclock = run_optimize(Preset::AllInOne, hooks, {}, out.stock);
     if (!out.overclock.ran) return stop(out.overclock.error);
     if (!out.overclock.result.ok) return stop("the overclock: " + out.overclock.result.reason);
     if (!out.overclock.saved) return stop("the overclock could not be saved: " + out.overclock.save_note);
@@ -841,6 +866,7 @@ AllInOneOutcome run_all_in_one(const OptimizeHooks& hooks) {
         // taking 11 % of the graphics card cost 6 % (hardware check 75).
         const StabilityResult before = out.now;
         out.now = fan.final;
+        char line[400];
         if (before.score > 0 && out.now.score < 0.97 * before.score && out.now.avg_core_mhz >= before.avg_core_mhz - 30) {
             std::snprintf(line, sizeof(line),
                           "the final test scored %.0f it/s where the same settings scored %.0f a few minutes earlier, at the same "

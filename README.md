@@ -165,13 +165,15 @@ The undervolt is saved in place of an overclock, not next to it: on the card a c
 
 ```mermaid
 flowchart LR
-    A[Baseline<br/>30 s at stock] --> B[Power limit]
+    S[Stock<br/>300 s, to compare with] --> A[Baseline<br/>30 s at stock]
+    A --> B[Power limit]
     B --> C[Memory offset<br/>bandwidth peak, confirmed,<br/>safety margin]
     C --> D[Core offset<br/>single steps, confirmed,<br/>safety margin]
     D --> G[Soak<br/>300 s]
     G --> H[Save profile]
 ```
 
+- **Every run starts with the card at stock for five minutes,** as long as the result is tested at the end, with the fans left to the NVIDIA driver. That is the "before" of the result: a card is not heated through after 30 s, so a shorter run would make every result look warmer and louder than stock.
 - **Stress test.** A DirectX 11 compute load in which the GPU checks every value it computes against a known answer. Each probe ends in a verdict: `STABLE`, `WRONG RESULT`, `DEVICE LOST`, `STALLED` (the values were right but the card computed almost nothing), `TOO HOT` or `NO TELEMETRY`.
 - **Memory comes first and stops at the bandwidth peak,** not at the first error. GDDR6 and GDDR6X retry failed transfers, so an overclocked memory bus loses speed long before it returns a wrong result. The search raises the offset 50 MHz at a time, measures bandwidth at each step and keeps the lowest offset within 1 % of the best. Where bandwidth cannot be measured, it climbs until a probe fails instead.
 - **The core search climbs from stock.** With the chosen memory offset applied, it raises the core offset 15 MHz at a time until a probe fails, and keeps the last value that passed. How far it may go comes from the range the driver reports for your card, so a card that can hold more is not stopped at a fixed limit.
