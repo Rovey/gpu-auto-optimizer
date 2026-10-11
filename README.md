@@ -14,7 +14,7 @@
 
 [**Download**](https://github.com/Rovey/gpu-auto-optimizer/releases/latest) · [What one click does](#one-click-then-nothing) · [How it works](#how-it-works) · [Command line](#command-line) · [FAQ](#faq)
 
-<img src="docs/images/hero.svg" width="860" alt="One click on the reference RTX 4070: 1.6 % more speed on 8 % less power, with the fans at 62 % instead of 73 %. Best of my GPU alone: 4.5 % more speed. Undervolt alone: 20 % less power, 8 °C cooler.">
+<img src="docs/images/hero.svg" width="860" alt="One click on the reference RTX 4070: 0.8 % more speed on 10 % less power, with the fans at 52 % instead of 70 %. Best of my GPU alone: 4.5 % more speed. Undervolt alone: 20 % less power, 8 °C cooler.">
 
 <img src="docs/images/dashboard.png" width="860" alt="The GPU Auto Optimizer dashboard: live telemetry, the current tuning, the profiles and the log">
 
@@ -46,22 +46,22 @@ What else is in it:
 
 <div align="center">
 
-<img src="docs/images/all-in-one-result.png" width="860" alt="The result screen of an All in one run on the reference RTX 4070: core +135 MHz, memory +1500 MHz, power limit 105 %, 2850 MHz at 1035 mV, fans 52 % at 70 °C; score 5728 to 5820 iterations per second, power 196 to 180 watts, fan speed 73 to 62 percent">
+<img src="docs/images/all-in-one-result.png" width="860" alt="The result screen of an earlier All in one run on the reference RTX 4070: core +135 MHz, memory +1500 MHz, power limit 105 %, 2850 MHz at 1035 mV, fans 52 % at 70 °C; score 5728 to 5820 iterations per second, power 196 to 180 watts, fan speed 73 to 62 percent">
 
 </div>
 
-**All in one** is the default: it overclocks, undervolts on top of that, measures the quietest fan curve and tests the whole for five minutes. One run on the reference card, both columns five minutes of full load:
+**All in one** is the default: it overclocks, undervolts on top of that, measures the quietest fan curve and tests the whole for five minutes. One run on the reference card, both columns five minutes of full load (the picture above is of an earlier run and shows that run's numbers):
 
 | | Stock | After one click |
 |---|---|---|
-| Stress-test score | 5728 it/s | **5820 it/s (+1.6 %)** |
-| Power under load | 196 W | **180 W (−8.2 %)** |
-| Fan speed | 73 % | **62 %** |
-| Temperature | 67 °C | 71 °C |
-| Core clock under load | 2789 MHz | 2835 MHz |
-| Memory clock under load | 10495 MHz | 12000 MHz |
+| Stress-test score | 5309 it/s | **5353 it/s (+0.8 %)** |
+| Power under load | 185 W | **166 W (−10.3 %)** |
+| Fan speed | 70 % | **52 %** |
+| Temperature | 66 °C | 70 °C |
+| Core clock under load | 2787 MHz | 2835 MHz |
+| Memory clock under load | 10474 MHz | 11051 MHz |
 
-A little faster, on less power, with slower fans. The card is warmer because the fans are allowed to be: the fan tune aims for 70 °C, 5 °C under the profile's limit, and found that 52 % holds it. With the NVIDIA driver's own fan curve the same settings ran at 63 °C on 176 W. The run took 34 minutes. A second run gave 0.9 % more score on 10.8 % less power, with the fans at 55 %.
+As fast or a little faster, on a tenth less power, with much slower fans. The card is warmer because the fans are allowed to be: the fan tune aims for 70 °C, 5 °C under the profile's limit, and found that 52 % holds it. Before the fan tune, with the fans on the profile's own curve, the same settings ran at 66 °C on 163 W. The run took 31 minutes. Two earlier runs gave 1.6 % more score on 8.2 % less power with the fans at 62 %, and 0.9 % more on 10.8 % less with the fans at 55 %. How much memory offset a run finds differs from run to run on this card (+550 in this one, +1500 in the first of those); the score barely moves with it.
 
 The gains are smaller than those of the two sections below, and that is the point of it. An overclock and an undervolt do not add up: an overclock moves the whole voltage/frequency curve, so at every clock the card already runs on less voltage, and with the same safety margin there is nothing left to take off. They are two ends of one line. All in one takes the middle, where the card beats stock on both counts; **Best of my GPU** and **Undervolt** are the ends.
 
@@ -70,7 +70,7 @@ The gains are smaller than those of the two sections below, and that is the poin
 </div>
 
 > [!NOTE]
-> Close games and other programs that use the graphics card before a run. In an earlier run an emulator on 11 % of the card cost 6 % of the score; the run now says so when its final test does not match the step before it. The logs are in [docs/hardware-checks.md](docs/hardware-checks.md) (checks 75 and 76).
+> Close games and other programs that use the graphics card before a run. In an earlier run an emulator on 11 % of the card cost 6 % of the score; the run now says so when its final test does not match the step before it. The logs are in [docs/hardware-checks.md](docs/hardware-checks.md) (checks 75, 76 and 94).
 
 ## All of the speed instead: +4.5 % performance
 
