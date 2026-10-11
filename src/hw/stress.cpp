@@ -28,6 +28,12 @@ constexpr double kTargetBatchMs = 250.0;
 constexpr int kMaxDispatches = 2048;
 constexpr UINT kBwBytes = 256u * 1024 * 1024;   // per buffer; far above the 4070's 36 MB L2
 constexpr UINT kBwGroups = 1024;
+// Dispatches per timed run: 32 GB copied, about 75 ms on the reference RTX
+// 4070. Readings of it scatter by 0.2 % on a card that is left alone, and by
+// 0.4 to 3 % when another program uses the card (hardware checks 95 and 96).
+// A run four times as long was tried for steadier readings and taken out
+// again: it was no steadier on a quiet card, and with it memory at its edge
+// lost the device in five scans out of five, once the machine with it.
 constexpr int kBwDispatches = 64;
 constexpr size_t kBwRuns = 3;          // consecutive runs that must agree
 constexpr int kBwMaxRuns = 20;         // ~1.5 s at full speed; more if clocks are low
@@ -365,7 +371,10 @@ std::optional<double> Stress::MeasureBandwidth() {
         UINT64 t0 = 0, t1 = 0;
         if (!wait(d.q_disjoint.Get(), &dj, sizeof(dj)) || !wait(d.q_begin.Get(), &t0, sizeof(t0)) ||
             !wait(d.q_end.Get(), &t1, sizeof(t1))) {
-            if (d.device->GetDeviceRemovedReason() != S_OK) d.device.Reset();
+            // Say which: the log line used to end in nothing here.
+            const HRESULT removed = d.device->GetDeviceRemovedReason();
+            error_ = removed != S_OK ? Hr("the copy", removed) + ": the device was lost" : "the timing of the copy did not come back";
+            if (removed != S_OK) d.device.Reset();
             return std::nullopt;
         }
         if (dj.Disjoint || dj.Frequency == 0 || t1 <= t0) {   // clock changed mid-run: discard

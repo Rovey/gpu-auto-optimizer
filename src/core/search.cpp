@@ -61,26 +61,59 @@ int apply_margin(int max, int step, float perf_push) {
     return std::max(0, std::min(steps * step, max - step));
 }
 
-int best_bandwidth_offset(int lo, int hi, int step, int ceiling, const std::function<MemSample(int)>& sample) {
-    const int top = std::min(hi, ceiling - 1);
+MemScanEnd bandwidth_scan(int lo, int hi, int step, int ceiling, const std::function<MemSample(int)>& sample) {
+    MemScanEnd end{lo, MemScanEnd::Why::Limit};
+    auto middle = [](std::vector<double> of) {   // of an even number: the lower one
+        std::sort(of.begin(), of.end());
+        return of[(of.size() - 1) / 2];
+    };
+    std::vector<double> steps;   // the reading of every step that passed
+    double best = 0;
+    for (int v = lo; v <= std::min(hi, ceiling - 1); v += step) {
+        MemSample s = sample(v);
+        // A reading that would end the scan is in doubt: the step is read
+        // kBandwidthReadings times and the middle one counts. Only such a
+        // step: three readings at every step cost two minutes a scan and
+        // decided nothing a single reading did not (hardware check 95).
+        if (s.stable && s.gbps < best * (1 - kBandwidthDrop)) {
+            std::vector<double> readings{s.gbps};
+            while (static_cast<int>(readings.size()) < kBandwidthReadings && (s = sample(v)).stable) readings.push_back(s.gbps);
+            s.gbps = middle(readings);
+        }
+        if (!s.stable) { end.why = MemScanEnd::Why::Failed; break; }
+        end.top = v;
+        if (s.gbps < best * (1 - kBandwidthDrop)) { end.why = MemScanEnd::Why::Dropped; break; }
+        // The best is the highest middle of three steps in a row, not the
+        // highest reading: one reading that came out high would be a best
+        // every later step is held against, and the highest of fifty readings
+        // that scatter is always such a one.
+        steps.push_back(s.gbps);
+        best = std::max(best, middle({steps.end() - static_cast<std::ptrdiff_t>(std::min<size_t>(steps.size(), 3)), steps.end()}));
+    }
+    return end;
+}
+
+int second_pass_top(const MemScanEnd& end, int lo, int step, int known_edge) {
+    // The lowest offset that is known, or has to be assumed, not to hold.
+    int bound = end.top + step;
+    if (end.why == MemScanEnd::Why::Limit && known_edge != INT_MAX && known_edge > bound) bound = known_edge;
+    return std::max(lo, bound - step - kPeakMarginSteps * step);
+}
+
+int bandwidth_peak_below(int top, int lo, int step, const std::function<MemSample(int)>& sample) {
     std::vector<std::pair<int, double>> seen;
     double best = 0;
-    for (int v = lo; v <= top; v += step) {
-        MemSample s = sample(v);
+    for (int v = top; v >= lo; v -= step) {
+        const MemSample s = sample(v);
         if (!s.stable) break;
-        // A drop is measured twice before it ends the scan: a single reading
-        // can land while the memory clock is still in a lower P-state.
-        if (s.gbps < best * (1 - kBandwidthDrop)) {
-            s = sample(v);
-            if (!s.stable) break;
-        }
         seen.emplace_back(v, s.gbps);
         best = std::max(best, s.gbps);
-        if (s.gbps < best * (1 - kBandwidthDrop)) break;
+        if (s.gbps < best * (1 - kBandwidthTie)) break;
     }
+    int peak = top;
     for (const auto& [v, gbps] : seen)
-        if (gbps >= best * (1 - kBandwidthTie)) return v;
-    return lo;
+        if (gbps >= best * (1 - kBandwidthTie)) peak = std::min(peak, v);
+    return peak;
 }
 
 int confirm_edge(int edge, int lo, int step, int tries, const std::function<bool(int)>& holds,
@@ -580,25 +613,49 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
     // Memory comes first, at core 0: the core climb is where a card is most
     // likely to give out, and it must not keep the memory from being tuned.
     if (obj.mem_oc) {
-        const int ceiling = journal.ceilings().mem_mhz;
+        int ceiling = journal.ceilings().mem_mhz;
+        // Where the memory gave out in an earlier scan on this card and
+        // driver, the scan does not go again: it stops as far below it as
+        // confirming starts below a reset. A card whose bandwidth rises until
+        // its memory fails would otherwise end every run in a wrong result or
+        // a driver reset (hardware check 95).
+        if (const int edge = journal.mem_edge(); edge != INT_MAX) {
+            const int top = std::max(0, edge - kResetBackoffSteps * kMemStep);
+            log("mem: the memory gave out at " + offset_text(edge) + " in an earlier run on this card and driver; the scan stops at " +
+                offset_text(top));
+            ceiling = std::min(ceiling, top + 1);
+        }
         int reset_at = -1;   // the memory offset at which a reset event ended the scan
+        int gave_out_at = 0; // the offset whose candidate computed a wrong result
         const bool by_bandwidth = static_cast<bool>(io.bandwidth);
         bool left_at_stock = false;   // the measurement does not work: nothing was searched
         if (by_bandwidth) {
             bool unavailable = false;
-            const int peak = best_bandwidth_offset(0, bounds.mem_max_mhz, kMemStep, ceiling, [&](int v) {
+            // One step of either pass: the candidate, then the reading while
+            // it is still applied. `again`: in the second pass.
+            const auto sample = [&](int v, bool again) {
                 MemSample m;
+                // One reading. One that only did not settle is taken again,
+                // kBandwidthReadings times at most; any other failure ends
+                // the step at once.
                 std::optional<double> gbps;
+                bool failed = false;
                 // The +0 sample is journaled without a clock, like a soak at
                 // stock: if the machine froze in it, an open entry that said
                 // memory 0 would read as "never search memory again".
                 const std::optional<int> mem_j = v > 0 ? std::optional<int>(v) : std::nullopt;
                 m.stable = explore(v, reset_at, [&] {
-                    if (!is_stable(clock_candidate(std::nullopt, mem_j, 0, v, kClockProbeS, [&] { gbps = io.bandwidth(); })))
-                        return false;
+                    const auto verdict = clock_candidate(std::nullopt, mem_j, 0, v, kClockProbeS, [&] {
+                        for (int i = 0; i < kBandwidthReadings && !gbps && !failed; ++i) {
+                            gbps = io.bandwidth();
+                            failed = !gbps && !(io.bandwidth_unsettled && io.bandwidth_unsettled());
+                        }
+                    });
+                    if (verdict == Verdict::WrongResult) gave_out_at = v;
+                    if (!is_stable(verdict)) return false;
                     if (gbps) return true;
                     // The candidate passed, the measurement failed: the step is unusable.
-                    if (v > 0 && io.bandwidth_unsettled && io.bandwidth_unsettled()) {
+                    if (v > 0 && !failed) {
                         // The load computed and the readings disagreed: noise,
                         // not the card giving out. The scan ends with the best
                         // of what was measured; the core is still searched.
@@ -620,11 +677,21 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
                 if (m.stable) {
                     m.gbps = *gbps;
                     char buf[64];
-                    std::snprintf(buf, sizeof(buf), "mem +%d: bandwidth %.1f GB/s", v, m.gbps);
+                    std::snprintf(buf, sizeof(buf), "mem +%d: bandwidth %.1f GB/s%s", v, m.gbps, again ? ", read again" : "");
                     log(buf);
                 }
                 return m;
-            });
+            };
+            const MemScanEnd end = bandwidth_scan(0, bounds.mem_max_mhz, kMemStep, ceiling, [&](int v) { return sample(v, false); });
+            int peak = second_pass_top(end, 0, kMemStep, journal.mem_edge());
+            // The second pass, when there is something to read and the scan
+            // left the card in a state to read it: not after a reset event
+            // (nothing new is explored then, and confirming starts
+            // kResetBackoffSteps below `peak`), not on a stopped run.
+            if (!unavailable && stopped.empty() && !explored_enough && peak > 0) {
+                log("mem: the scan passed " + offset_text(end.top) + "; reading again from " + offset_text(peak) + " down");
+                peak = bandwidth_peak_below(peak, 0, kMemStep, [&](int v) { return sample(v, true); });
+            }
             // An unavailable measurement ended the scan at +0, and nothing
             // is searched without it. Memory that corrects its own errors
             // computes right far beyond the point where it stops getting
@@ -641,6 +708,12 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
                 reset_event(why);
             }
             left_at_stock = unavailable;
+            // The edge of this card's memory, for the runs after this one. A
+            // reset event counts as much as a wrong result: the scan ended
+            // there because the memory did.
+            if (reset_at > 0) gave_out_at = reset_at;
+            if (gave_out_at > 0 && !journal.note_mem_edge(gave_out_at))
+                log("warning: the memory's edge could not be written to the journal; the next run will find it again");
         }
         if (!by_bandwidth) {
             r.mem_max_stable = climb_to_edge(0, bounds.mem_max_mhz, kMemStep, kMemStride, ceiling, [&](int v) {
@@ -650,7 +723,7 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
         if (!stopped.empty()) return finish_fail(stopped);
         if (reset_at >= 0)
             log("mem: the driver reset at " + offset_text(reset_at) + "; using " + offset_text(r.mem_max_stable) +
-                (by_bandwidth ? ", the best of the values that passed" : ", the last value that passed"));
+                (by_bandwidth ? ", well below the values that passed" : ", the last value that passed"));
         r.mem_confirmed = confirm_edge(confirm_from(r.mem_max_stable, kMemStep, reset_at), 0, kMemStep, kConfirmTries, [&](int v) {
             return holds(clock_candidate(std::nullopt, v, 0, v, kConfirmProbeS));
         }, confirm_step_down);
