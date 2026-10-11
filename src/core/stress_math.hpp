@@ -1,5 +1,6 @@
 #pragma once
 #include <cstdint>
+#include <string>
 #include <vector>
 
 namespace gao {
@@ -23,5 +24,12 @@ std::vector<float> make_stress_matrix(std::uint32_t seed, int n = kStressN);
 // C = A * B, row-major, n x n.
 std::vector<float> reference_matmul(const std::vector<float>& a,
                                     const std::vector<float>& b, int n = kStressN);
+
+// The runs of one bandwidth measurement in one line, for a log: how many gave
+// a reading and between which values, and how many were thrown away. A run is
+// its GB/s, or 0 when the driver's timer called it unusable (the clock changed
+// under it). What a measurement that never settled looked like is the only
+// way to tell why it did not.
+std::string bandwidth_runs_text(const std::vector<double>& runs);
 
 }

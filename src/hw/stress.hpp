@@ -3,6 +3,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace gao {
 
@@ -45,6 +46,9 @@ public:
     // but the runs never agreed (other programs using the card, say); false
     // when the device was lost or a timing query failed.
     bool BandwidthUnsettled() const { return bw_unsettled_; }
+    // The runs of the last MeasureBandwidth(), in order: GB/s, or 0 for a run
+    // the timer called unusable (core/stress_math.hpp, bandwidth_runs_text).
+    const std::vector<double>& BandwidthRuns() const { return bw_runs_; }
     const std::string& Error() const { return error_; }
     const std::string& AdapterName() const { return adapter_name_; }
 
@@ -54,6 +58,7 @@ private:
     StressSelftest selftest_ = StressSelftest::None;
     std::string error_;
     bool bw_unsettled_ = false;
+    std::vector<double> bw_runs_;
     std::string adapter_name_;
     int dispatches_ = 1;
     bool CreateDevice();
