@@ -36,6 +36,12 @@ inline constexpr double kUvProbeS = 3, kUvConfirmS = 30, kUvSoakS = 300;
 // of the soak for no reason but the clock. It also means the clock to keep
 // and the built-in curve are read on a warm card, as the result will run.
 inline constexpr double kUvBaselineS = kUvSoakS;
+// When the reference is handed over, the search's own load runs this long at
+// the reference's settings before the first candidate. A load that has not
+// run yet is slower in its first seconds than the card is (it sizes its
+// batches, the card clocks up from idle), and a 3 s candidate that begins
+// there reads SLOW on a card that is fine.
+inline constexpr double kUvWarmUpS = 5;
 inline constexpr int kUvConfirmTries = 3;
 inline constexpr int kUvSoakAttempts = 3;
 // A candidate must run the target clock within what the built-in curve moves

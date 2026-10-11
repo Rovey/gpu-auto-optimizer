@@ -103,6 +103,23 @@ UndervoltResult find_undervolt(const GpuControl& gpu, Journal& journal, const Un
     if (limit_c > max_temp_c)
         log("the card reached " + std::to_string(r.baseline.peak_temp_c) + " C " + at_base + ": candidates are stopped at " +
             std::to_string(limit_c) + " C, not at the profile's " + std::to_string(max_temp_c) + " C");
+    if (base.measured) {
+        // The reference was measured before this search began, and this
+        // search's own load has not run yet. Its first seconds are slower
+        // than the card is: the load sizes its batches and the card clocks
+        // up from idle. A 3 s candidate that begins there averages a clock
+        // far below the target and reads SLOW (hardware check 92: 2323 MHz
+        // on a card that runs 2790), which ends the descent at its first
+        // step. So the load runs a few seconds at the reference's settings
+        // first. Only whether the card computes is taken from it.
+        log("warming the load up: " + std::to_string(static_cast<int>(kUvWarmUpS)) + " s " + at_base);
+        const StabilityResult warm = io.probe(kUvWarmUpS, limit_c, 0.0);
+        if (warm.verdict == Verdict::Aborted) return finish_fail("aborted");
+        if (warm.verdict == Verdict::TooHot)
+            return finish_fail("the card got hotter than " + std::to_string(limit_c) + " C " + at_base);
+        if (warm.verdict != Verdict::Stable)
+            return finish_fail(std::string("the card is not stable ") + at_base + " (" + verdict_name(warm.verdict) + ")");
+    }
     if (r.baseline.avg_core_mhz <= 0 || r.baseline.score <= 0) return finish_fail("the card did not report its clock under load");
     // Read now, with the card warm from the baseline: the built-in curve can
     // sit a step lower hot than cold, and the candidates are counted on it.
