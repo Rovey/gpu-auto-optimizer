@@ -7,7 +7,7 @@ OptimizeWorker::~OptimizeWorker() {
     abort_ = true;   // a closing window never leaves a candidate applied: the run resets to stock
 }
 
-bool OptimizeWorker::start(Preset preset, std::optional<FanCurve> fan_curve) {
+bool OptimizeWorker::launch(bool retest, std::function<void(const app::OptimizeHooks&)> job) {
     if (running_.exchange(true)) return false;
     if (thread_.joinable()) thread_.join();   // the previous run's thread has already finished
     {
@@ -16,10 +16,12 @@ bool OptimizeWorker::start(Preset preset, std::optional<FanCurve> fan_curve) {
         outcome_.reset();
         undervolt_.reset();
         all_in_one_.reset();
+        retest_.reset();
+        is_retest_ = retest;
         measuring_.clear();
     }
     abort_ = false;
-    thread_ = std::jthread([this, preset, fan_curve] {
+    thread_ = std::jthread([this, job = std::move(job)] {
         app::OptimizeHooks hooks;
         hooks.aborted = [this] { return abort_.load(); };
         hooks.log = app::logged([this](const std::string& line) {
@@ -38,6 +40,19 @@ bool OptimizeWorker::start(Preset preset, std::optional<FanCurve> fan_curve) {
             }
             wake_();
         };
+        job(hooks);
+        {
+            std::lock_guard lock(mu_);
+            measuring_.clear();   // also after a run that ended in an exception
+        }
+        running_ = false;
+        wake_();
+    });
+    return true;
+}
+
+bool OptimizeWorker::start(Preset preset, std::optional<FanCurve> fan_curve) {
+    return launch(false, [this, preset, fan_curve](const app::OptimizeHooks& hooks) {
         app::OptimizeOutcome outcome;
         app::UndervoltOutcome undervolt;
         app::AllInOneOutcome all;
@@ -49,22 +64,29 @@ bool OptimizeWorker::start(Preset preset, std::optional<FanCurve> fan_curve) {
         } catch (const std::exception& e) {   // a thrown exception would otherwise end the process
             (is_all ? all.error : is_undervolt ? undervolt.error : outcome.error) = std::string("unexpected error: ") + e.what();
         }
-        {
-            std::lock_guard lock(mu_);
-            if (is_all) all_in_one_ = std::move(all);
-            else if (is_undervolt) undervolt_ = std::move(undervolt);
-            else outcome_ = std::move(outcome);
-            measuring_.clear();   // also after a run that ended in an exception
-        }
-        running_ = false;
-        wake_();
+        std::lock_guard lock(mu_);
+        if (is_all) all_in_one_ = std::move(all);
+        else if (is_undervolt) undervolt_ = std::move(undervolt);
+        else outcome_ = std::move(outcome);
     });
-    return true;
+}
+
+bool OptimizeWorker::start_retest() {
+    return launch(true, [this](const app::OptimizeHooks& hooks) {
+        app::RetestOutcome retest;
+        try {
+            retest = app::run_retest(hooks);
+        } catch (const std::exception& e) {
+            retest.error = std::string("unexpected error: ") + e.what();
+        }
+        std::lock_guard lock(mu_);
+        retest_ = std::move(retest);
+    });
 }
 
 OptimizeWorker::Snapshot OptimizeWorker::snapshot() const {
     std::lock_guard lock(mu_);
-    Snapshot s{running_.load(), log_, outcome_, undervolt_, all_in_one_};
+    Snapshot s{running_.load(), log_, outcome_, undervolt_, all_in_one_, retest_, is_retest_};
     if (!measuring_.empty()) {
         s.measuring = measuring_;
         s.measuring_seconds = measuring_seconds_;

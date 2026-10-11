@@ -84,6 +84,7 @@ struct UiActions {
     std::function<void()> abort;
     std::function<void()> restart_elevated;
     std::function<void()> apply_profile;
+    std::function<void()> retest;                         // the saved tune, five minutes, on the driver that is installed now
     std::function<void()> revert_to_stock;
     std::function<void(bool)> set_boot;
     std::function<void()> detect_gpu;

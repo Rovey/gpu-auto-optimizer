@@ -491,6 +491,18 @@ void act_optimize(gao::Preset preset) {
     g.worker->start(preset, fan);   // the watchdog skips while it runs
 }
 
+// The saved tune on the driver that is installed now: five minutes on the Optimize page.
+void act_retest() {
+    if (g.worker->running() || gao::app::tuning_in_progress()) {
+        note("An optimize run is in progress; test the tune when it has finished.", true);
+        return;
+    }
+    fan_release();   // the test has the fans, as a run has
+    g.ui.run_curve.clear();
+    g.ui.run_stock.clear();
+    if (g.worker->start_retest()) g.ui.page = gao::gui::Page::Optimize;
+}
+
 void act_abort() { g.worker->abort(); }
 
 void restart_elevated(const wchar_t* arguments) {
@@ -658,6 +670,7 @@ void render() {
     ImGui::NewFrame();
     gao::gui::UiActions act;
     act.optimize = act_optimize;
+    act.retest = act_retest;
     act.abort = act_abort;
     act.restart_elevated = act_restart_elevated;
     act.apply_profile = act_apply;
@@ -883,7 +896,7 @@ void on_telemetry() {
         refresh_status(false);
         // One click is all of it: a result that was saved is kept at every
         // logon without another click, unless that was unticked.
-        if (snap.kept() && g.ui.keep_at_logon && !g.ui.boot_on) act_boot(true);
+        if (snap.kept() && !snap.retest && g.ui.keep_at_logon && !g.ui.boot_on) act_boot(true);
         // Apply at logon was on already: the copy that starts then has to
         // understand the profile this build just saved.
         else if (snap.kept() && g.ui.boot_on) {
@@ -1227,6 +1240,9 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdline, int) {
                 g.watch = true;
                 g.strike_pending = true;
                 SetTimer(g.hwnd, kTimerStrike, 2 * 60 * 1000, nullptr);
+            } else if (logon.decision == gao::BootDecision::DriverChanged && !g.ui.driver.empty()) {
+                // apply_at_logon wrote boot.log. The balloon opens the window, where the one button is.
+                notify("The NVIDIA driver was updated: your tune is not applied. Click here and test it (5 minutes).", false);
             } else if (logon.decision != gao::BootDecision::NoProfile) {
                 notify(logon.message, false);   // apply_at_logon wrote boot.log
             }

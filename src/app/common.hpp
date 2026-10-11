@@ -7,6 +7,7 @@
 #include "core/fan_curve.hpp"
 #include "core/fan_tune.hpp"
 #include "core/objectives.hpp"
+#include "core/retest.hpp"
 #include "core/search.hpp"
 #include "core/types.hpp"
 #include "core/undervolt.hpp"
@@ -161,6 +162,23 @@ struct AllInOneOutcome {
 // leaves the overclock, no fan tune leaves the profile's own curve. A stop
 // request ends at stock. Needs elevation.
 AllInOneOutcome run_all_in_one(const OptimizeHooks& hooks);
+
+// The saved tune, tested again on the driver that is installed now
+// (core/retest.hpp): after a driver update boot-apply refuses a tune, and
+// this is the five minutes that let it in again without a whole new run.
+struct RetestOutcome {
+    bool ran = false;         // false: stopped before the card was touched; `error` says why
+    bool ok = false;          // the tune held: it is applied, and saved as tested on this driver
+    std::string error;        // why not, with where that leaves the card
+    RetestResult result;      // valid when ran
+    std::string driver_was;   // the driver the tune was tested on before
+    std::string driver;       // the driver it was tested on now
+    Profile profile;          // the saved tune as it is now; valid when ok
+};
+// The fans are as in daily use: on the app's curve when it drives them, with
+// the NVIDIA driver otherwise. A tune that does not pass ends at stock and
+// stays as it was saved, so it stays refused. Needs elevation.
+RetestOutcome run_retest(const OptimizeHooks& hooks);
 
 struct BootApplyOutcome {
     bool applied = false;

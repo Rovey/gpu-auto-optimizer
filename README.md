@@ -33,7 +33,7 @@ It cannot leave you worse off than stock:
 - **It gives up before you have to.** Three logons in a row that crash switch apply-at-logon off; four driver resets within an hour with the tune applied put the card back at stock.
 - **It plays fair.** If MSI Afterburner or another tool changes the settings, it steps aside instead of fighting over them.
 
-The one time it asks for you again is after a driver update: a tune belongs to the driver it was tested on, so the app does not apply it, says so, and one more click tunes the card for the new driver.
+The one time it asks for you again is after a driver update: a tune belongs to the driver it was tested on, so the app does not apply it, says so, and one more click tests it on the new driver: five minutes, instead of a whole new run.
 
 What else is in it:
 
@@ -236,7 +236,7 @@ The NVIDIA app can stay installed. Two of its features get in the way of a run: 
 <details>
 <summary><b>What happens after a driver update?</b></summary>
 
-The saved profile is tied to the driver version it was tuned on. After an update it is not applied, and the app asks you to optimize again, because a new driver can change what is stable.
+The saved profile is tied to the driver version it was tuned on, because a new driver can change what is stable. After an update it is not applied: the app says so at logon, and the dashboard shows **Test the tune (5 min)**. That loads the card for five minutes with the tune on it. If it holds, the tune is applied again and belongs to the new driver; if it does not, the card goes back to stock and you optimize again. The test never starts by itself. On the command line: `gao --retest`.
 </details>
 
 <details>
