@@ -122,7 +122,7 @@ Both columns are five minutes of full load, so the card is heated through on bot
 
 1. Download `GpuAutoOptimizer-<version>-win-x64.zip` from the [latest release](https://github.com/Rovey/gpu-auto-optimizer/releases/latest) and unzip it anywhere.
 2. Start **`GpuAutoOptimizer.exe`**.
-3. Open **Optimize** and press **Optimize GPU**: **All in one** is selected, and you can pick another profile first. Close games and other programs that use the graphics card before you do. The app asks for administrator rights, because it changes clocks and power limits.
+3. Open **Optimize** and press **Optimize GPU**: **All in one** is selected, and you can pick another profile first. Close games and other programs that use the graphics card before you do, and the tools that tune or draw on it: close MSI Afterburner and RivaTuner, switch **Automatic Tuning** off in the NVIDIA app (System, Performance), and keep the NVIDIA overlay (Alt+Z) closed during the run. The app asks for administrator rights, because it changes clocks and power limits.
 4. That is all. When the run is done the result is applied, saved, and kept at every logon. Untick **Keep the result applied at every logon** before the run if you only want to try it.
 
 > [!NOTE]
@@ -224,9 +224,11 @@ From 0.3.1 on, click **Update available** at the bottom left of the window. From
 </details>
 
 <details>
-<summary><b>Does it work alongside MSI Afterburner?</b></summary>
+<summary><b>Does it work alongside MSI Afterburner or the NVIDIA app?</b></summary>
 
 Not during a run: a run does not start while MSI Afterburner or RivaTuner Statistics Server (`MSIAfterburner.exe`, `RTSS.exe`) is running, and says which one to close. Close it completely, also its icon in the notification area, and switch off its start with Windows if it applies settings there. Outside a run they can coexist as long as only one of them applies settings: if Afterburner applies an offset while GPU Auto Optimizer keeps its tune applied, the watchdog notices, says so in a notification and leaves the settings alone.
+
+The NVIDIA app can stay installed. Two of its features get in the way of a run: **Automatic Tuning** (System, Performance) applies an overclock of its own and scans again from time to time, so switch it off, for a run and for as long as you keep a tune of this app applied; and the **overlay** (Alt+Z) draws on programs that use the card, so leave it closed while a run is going.
 </details>
 
 <details>
