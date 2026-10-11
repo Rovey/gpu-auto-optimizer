@@ -3,6 +3,7 @@
 #include <windows.h>
 #include <algorithm>
 #include <atomic>
+#include <mutex>
 
 namespace gao {
 
@@ -58,10 +59,116 @@ static std::atomic<bool> g_abandoned{false};
 void Nvml::Abandon() { g_abandoned = true; }
 bool Nvml::Abandoned() { return g_abandoned; }
 
-bool Nvml::Init(int (*init)(), int (*shutdown)()) {
-    p_init = init;
-    p_shutdown = shutdown;
-    inited_ = (p_init() == NVML_SUCCESS);
+// One NVML session for the whole process, whatever the number of Nvml
+// objects: the library's state is one per process, and after a driver reset
+// only a complete nvmlShutdown and a new nvmlInit make it usable again.
+//
+// What a driver reset does (hardware check 84, driver 617.42): the clock,
+// temperature and power readings come from memory the driver shares with the
+// process. A reset takes that memory away and the library goes on reading
+// it: every such call is an access violation from then on, and one that was
+// caught has left NVML's count of calls in flight one too high, so that
+// nvmlShutdown never returns (Abandon). The calls that ask the driver
+// instead, the power limit and the fan speed, answer a reset with a status.
+// So they go first (device()): when one that worked before says the card is
+// gone, the session is stale, nothing reads the shared memory, and the
+// session is stopped and started again.
+constexpr nvmlReturn_t NVML_ERROR_GPU_IS_LOST = 15;
+constexpr nvmlReturn_t NVML_ERROR_RESET_REQUIRED = 16;
+constexpr nvmlReturn_t NVML_ERROR_UNKNOWN = 999;   // what 617.42 answers after a reset
+static ULONGLONG g_refresh_wait_ms = 2000;         // the driver needs a moment, and so does a call still in flight
+
+static std::mutex g_session;              // start, stop and refresh; never held across a reading
+static int g_users = 0;                   // initialised Nvml objects
+static bool g_up = false;                 // the library holds our one nvmlInit
+static std::atomic<bool> g_stale{false};
+static std::atomic<ULONGLONG> g_stale_since{0};
+// Per card (bit = index): the call has answered with a reading in this session.
+static std::atomic<unsigned> g_limit_worked{0}, g_fan_worked{0};
+
+static bool gone(nvmlReturn_t status) {
+    return status == NVML_ERROR_GPU_IS_LOST || status == NVML_ERROR_RESET_REQUIRED || status == NVML_ERROR_UNKNOWN;
+}
+
+// The two calls that are safe on a card that is gone, for one card. False:
+// one that worked before now says the card is gone.
+static bool card_there(unsigned index, nvmlDevice_t dev) {
+    const unsigned bit = index < 32 ? 1u << index : 0;
+    unsigned v = 0;
+    if (p_powerlimit) {
+        const nvmlReturn_t status = p_powerlimit(dev, &v);
+        if (status == NVML_SUCCESS) g_limit_worked |= bit;
+        else if ((g_limit_worked & bit) && gone(status)) return false;
+    }
+    if (p_fan) {
+        const nvmlReturn_t status = p_fan(dev, &v);
+        if (status == NVML_SUCCESS) g_fan_worked |= bit;
+        else if ((g_fan_worked & bit) && gone(status)) return false;
+    }
+    return true;
+}
+
+// g_session held. Stops the stale session and starts a new one; it counts
+// only when every card that answered before answers again.
+static bool refresh_locked() {
+    if (!g_stale) return true;
+    if (g_abandoned || !p_init) return false;   // the session cannot be stopped any more; the app restarts
+    if (GetTickCount64() - g_stale_since < g_refresh_wait_ms) return false;
+    const unsigned cards = g_limit_worked | g_fan_worked;
+    if (g_up && p_shutdown) p_shutdown();
+    g_up = false;
+    g_stale_since = GetTickCount64();   // for when this attempt came too early
+    if (p_init() != NVML_SUCCESS) return false;
+    g_up = true;
+    for (unsigned index = 0; index < 32; ++index) {
+        if (!(cards & (1u << index))) continue;
+        nvmlDevice_t dev = nullptr;
+        if (!p_byIndex || p_byIndex(index, &dev) != NVML_SUCCESS || !card_there(index, dev)) return false;
+    }
+    g_stale = false;
+    return true;
+}
+
+// The handle every call on a card starts with. False: no call may be made
+// now, because the object is not initialised, the card does not answer, or
+// the session is stale and could not be refreshed yet.
+static bool device(bool inited, unsigned index, nvmlDevice_t* dev) {
+    if (!inited) return false;
+    if (g_stale) {
+        const std::lock_guard<std::mutex> lock(g_session);
+        if (!refresh_locked()) return false;
+    }
+    if (p_byIndex(index, dev) != NVML_SUCCESS) return false;
+    if (card_there(index, *dev)) return true;
+    if (!g_stale.exchange(true)) g_stale_since = GetTickCount64();
+    return false;
+}
+
+// g_session held.
+static bool start_locked() {
+    if (g_up && g_stale && !g_abandoned && !refresh_locked()) return false;
+    if (!g_up) {
+        if (p_init() != NVML_SUCCESS) return false;
+        g_up = true;
+        g_stale = false;
+        g_limit_worked = 0;
+        g_fan_worked = 0;
+    }
+    ++g_users;
+    return true;
+}
+
+bool Nvml::Init(const Fake& fake) {
+    const std::lock_guard<std::mutex> lock(g_session);
+    p_init = fake.init;
+    p_shutdown = fake.shutdown;
+    p_byIndex = fake.by_index;
+    p_powerlimit = fake.power_limit;
+    p_fan = fake.fan;
+    p_clock = fake.clock;
+    p_temp = fake.temperature;
+    g_refresh_wait_ms = fake.refresh_wait_ms;
+    inited_ = start_locked();
     return inited_;
 }
 
@@ -93,8 +200,10 @@ bool Nvml::Init() {
     p_fan_policy  = (fn_fan_get)GetProcAddress(h, "nvmlDeviceGetFanControlPolicy_v2");
     p_fan_speed   = (fn_fan_get)GetProcAddress(h, "nvmlDeviceGetFanSpeed_v2");
     if (!p_init || !p_byIndex) { error_ = "required NVML entry points not found"; return false; }
-    inited_ = (p_init() == NVML_SUCCESS);
-    if (!inited_) error_ = "nvmlInit_v2 failed";
+    const std::lock_guard<std::mutex> lock(g_session);
+    const bool stale = g_stale;
+    inited_ = start_locked();
+    if (!inited_) error_ = stale ? "the card has not come back after a driver reset" : "nvmlInit_v2 failed";
     return inited_;
 }
 
@@ -111,9 +220,8 @@ int Nvml::DeviceCount() {
 
 Telemetry Nvml::Read(unsigned index) {
     Telemetry t;
-    if (!inited_) return t;
     nvmlDevice_t dev = nullptr;
-    if (p_byIndex(index, &dev) != NVML_SUCCESS) return t;
+    if (!device(inited_, index, &dev)) return t;
     unsigned v = 0;
     // Every field below stays at its -1 default (its "unknown" sentinel)
     // unless the driver actually reports a reading: a missing symbol or a
@@ -140,7 +248,7 @@ Telemetry Nvml::Read(unsigned index) {
 std::optional<std::pair<int, int>> Nvml::PowerLimitRangePct(unsigned index) {
     nvmlDevice_t dev = nullptr;
     unsigned def = 0, lo = 0, hi = 0;
-    if (!inited_ || p_byIndex(index, &dev) != NVML_SUCCESS) { error_ = "NVML device not available"; return std::nullopt; }
+    if (!device(inited_, index, &dev)) { error_ = "NVML device not available"; return std::nullopt; }
     if (!p_pl_default || p_pl_default(dev, &def) != NVML_SUCCESS || def == 0) {
         error_ = "nvmlDeviceGetPowerManagementDefaultLimit failed"; return std::nullopt;
     }
@@ -156,7 +264,7 @@ std::optional<std::pair<int, int>> Nvml::PowerLimitRangePct(unsigned index) {
 bool Nvml::SetPowerLimitPct(unsigned index, int pct) {
     nvmlDevice_t dev = nullptr;
     unsigned def = 0, now = 0;
-    if (!inited_ || p_byIndex(index, &dev) != NVML_SUCCESS) { error_ = "NVML device not available"; return false; }
+    if (!device(inited_, index, &dev)) { error_ = "NVML device not available"; return false; }
     if (!p_pl_default || p_pl_default(dev, &def) != NVML_SUCCESS || def == 0) {
         error_ = "nvmlDeviceGetPowerManagementDefaultLimit failed"; return false;
     }
@@ -195,7 +303,7 @@ std::string Nvml::DriverVersion() {
 std::optional<int> Nvml::PowerLimitPct(unsigned index) {
     nvmlDevice_t dev = nullptr;
     unsigned def = 0, now = 0;
-    if (!inited_ || p_byIndex(index, &dev) != NVML_SUCCESS) return std::nullopt;
+    if (!device(inited_, index, &dev)) return std::nullopt;
     if (!p_pl_default || p_pl_default(dev, &def) != NVML_SUCCESS || def == 0) return std::nullopt;
     if (!p_powerlimit || p_powerlimit(dev, &now) != NVML_SUCCESS) return std::nullopt;
     return static_cast<int>((static_cast<unsigned long long>(now) * 100 + def / 2) / def);
@@ -204,7 +312,7 @@ std::optional<int> Nvml::PowerLimitPct(unsigned index) {
 std::string Nvml::GpuUuid(unsigned index) {
     nvmlDevice_t dev = nullptr;
     char buf[96] = {};
-    if (!inited_ || !p_uuid || p_byIndex(index, &dev) != NVML_SUCCESS || p_uuid(dev, buf, sizeof(buf)) != NVML_SUCCESS) {
+    if (!p_uuid || !device(inited_, index, &dev) || p_uuid(dev, buf, sizeof(buf)) != NVML_SUCCESS) {
         error_ = "nvmlDeviceGetUUID failed";
         return {};
     }
@@ -213,21 +321,27 @@ std::string Nvml::GpuUuid(unsigned index) {
 
 Nvml::~Nvml() {
     if (g_abandoned) return;   // see Abandon(): nvmlShutdown would never return
-    if (inited_ && p_shutdown) p_shutdown();
+    if (inited_) {
+        const std::lock_guard<std::mutex> lock(g_session);
+        if (--g_users == 0 && g_up) {   // the last one out stops the session
+            if (p_shutdown) p_shutdown();
+            g_up = false;
+        }
+    }
     if (lib_) FreeLibrary((HMODULE)lib_);
 }
 
 int Nvml::FanCount(unsigned index) {
     nvmlDevice_t dev = nullptr;
     unsigned n = 0;
-    if (!inited_ || !p_fan_count || p_byIndex(index, &dev) != NVML_SUCCESS || p_fan_count(dev, &n) != NVML_SUCCESS) return 0;
+    if (!p_fan_count || !device(inited_, index, &dev) || p_fan_count(dev, &n) != NVML_SUCCESS) return 0;
     return static_cast<int>(n);
 }
 
 std::optional<std::pair<int, int>> Nvml::FanRangePct(unsigned index) {
     nvmlDevice_t dev = nullptr;
     unsigned lo = 0, hi = 0;
-    if (!inited_ || !p_fan_range || p_byIndex(index, &dev) != NVML_SUCCESS || p_fan_range(dev, &lo, &hi) != NVML_SUCCESS)
+    if (!p_fan_range || !device(inited_, index, &dev) || p_fan_range(dev, &lo, &hi) != NVML_SUCCESS)
         return std::nullopt;
     return std::make_pair(static_cast<int>(lo), static_cast<int>(hi));
 }
@@ -235,7 +349,7 @@ std::optional<std::pair<int, int>> Nvml::FanRangePct(unsigned index) {
 bool Nvml::SetFanPct(unsigned index, int pct) {
     nvmlDevice_t dev = nullptr;
     const int fans = FanCount(index);
-    if (fans == 0 || !p_fan_set || !p_fan_target || p_byIndex(index, &dev) != NVML_SUCCESS) {
+    if (fans == 0 || !p_fan_set || !p_fan_target || !device(inited_, index, &dev)) {
         error_ = "fan control not available"; return false;
     }
     for (unsigned f = 0; f < static_cast<unsigned>(fans); ++f)
@@ -257,7 +371,7 @@ bool Nvml::SetFanPct(unsigned index, int pct) {
 bool Nvml::SetFanAuto(unsigned index) {
     nvmlDevice_t dev = nullptr;
     const int fans = FanCount(index);
-    if (fans == 0 || !p_fan_default || !p_fan_policy || p_byIndex(index, &dev) != NVML_SUCCESS) {
+    if (fans == 0 || !p_fan_default || !p_fan_policy || !device(inited_, index, &dev)) {
         error_ = "fan control not available"; return false;
     }
     bool ok = true;
@@ -274,7 +388,7 @@ bool Nvml::SetFanAuto(unsigned index) {
 std::optional<FanReading> Nvml::ReadFan(unsigned index) {
     nvmlDevice_t dev = nullptr;
     unsigned policy = 0, target = 0;
-    if (!inited_ || !p_fan_policy || !p_fan_target || p_byIndex(index, &dev) != NVML_SUCCESS) return std::nullopt;
+    if (!p_fan_policy || !p_fan_target || !device(inited_, index, &dev)) return std::nullopt;
     if (p_fan_policy(dev, 0, &policy) != NVML_SUCCESS || p_fan_target(dev, 0, &target) != NVML_SUCCESS) return std::nullopt;
     // The slowest fan: one stalled fan is enough to call the speed too low.
     int speed = -1;

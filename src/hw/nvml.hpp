@@ -9,9 +9,20 @@ namespace gao {
 class Nvml {
 public:
     bool Init();
-    // For tests: the two entry points the destructor is about, in place of
-    // nvml.dll. Nothing else of this object works after it.
-    bool Init(int (*init)(), int (*shutdown)());
+    // For tests: these entry points in place of nvml.dll. The session and
+    // Read work with them; nothing else of the object does.
+    struct Fake {
+        int (*init)() = nullptr;
+        int (*shutdown)() = nullptr;
+        int (*by_index)(unsigned, void**) = nullptr;
+        int (*power_limit)(void*, unsigned*) = nullptr;
+        int (*fan)(void*, unsigned*) = nullptr;
+        int (*clock)(void*, int, unsigned*) = nullptr;
+        int (*temperature)(void*, int, unsigned*) = nullptr;
+        unsigned refresh_wait_ms = 2000;   // between a card that is gone and the new session
+    };
+    bool Init(const Fake& fake);
+    bool Init(int (*init)(), int (*shutdown)()) { return Init(Fake{init, shutdown}); }
     ~Nvml();
     // A call into nvml.dll was left by an access violation that was caught
     // (app/guarded_gpu.hpp). NVML counts the calls that are inside it, and
