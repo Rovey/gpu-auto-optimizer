@@ -67,24 +67,38 @@ int apply_margin(int max, int step, float perf_push);
 // Memory overclocks fail by losing bandwidth before they fail by producing
 // errors: GDDR6X/GDDR6 retry bad transfers. The memory search therefore looks
 // for the bandwidth peak, not the stability ceiling.
-// The scan stops once a step is this far below the best. It was 1 %, and that
-// is less than the readings move by themselves: on the reference RTX 4070
-// they sit about 1.8 % higher for tens of seconds at a time, at any offset,
-// and such a stretch ended a scan wherever it began or ended (hardware check
-// 95). A peak that is real falls further than that within a step or two.
-inline constexpr double kBandwidthDrop = 0.03;
-// Within 1 % of the best counts as the best: measured noise on the 4070 is
-// ~0.4 % and one 50 MHz step is worth ~0.5 %, so a narrower band would let
-// noise pick the offset.
+//
+// It does so in two passes, because one measurement cannot do both jobs.
+// The scan goes up and only has to find where it ends: a step that fails, or
+// one that has clearly lost bandwidth. It reads with the short copy, which
+// scatters (0.4 to 1.3 % on the reference RTX 4070, single readings by more)
+// and is light: the one scan that took it to the memory's edge got a wrong
+// result from the stress load there. Then the offset to keep is read with the
+// long copy, which scatters by 0.2 % and is heavy: in five scans out of five
+// it lost the device at the edge, and once the machine with it (hardware
+// check 95). So the long copy is only taken kPreciseMarginSteps below the
+// highest step the scan passed, going down from there.
+//
+// The scan ends once a step is this far below the best. Far more than the
+// short readings move by themselves, level changes of 1.8 % included: where
+// the scan ends by chance, the offset is chance again.
+inline constexpr double kBandwidthDrop = 0.05;
+// Within 1 % of the best counts as the best, in the second pass: one 50 MHz
+// step is worth ~0.5 %, so a narrower band would let noise pick the offset.
 inline constexpr double kBandwidthTie = 0.01;
-// A step of the memory scan that is in doubt (more than kBandwidthTie below
-// the best) is the middle one of this many readings, so one reading that is
-// off decides nothing; and a reading that did not settle is taken again up to
-// this many times. On the reference card single readings ended scans at +250,
-// at +1000 and not at all on one day, and the runs saved +100, +650 and +1600
-// MHz (hardware check 94). Not every step: that cost two minutes a scan and
-// changed no outcome on the card (hardware check 95).
+// A step of the scan whose reading would end it is the middle one of this
+// many readings, so one low reading decides nothing; and the best that
+// readings are held against is the highest middle of three steps in a row, so
+// one high reading does not either. A reading that did not settle is taken
+// again up to this many times. On the reference card single readings ended
+// scans at +250, at +1000 and not at all on one day, and the runs saved +100,
+// +650 and +1600 MHz (hardware check 94).
 inline constexpr int kBandwidthReadings = 3;
+// How far below the highest step the scan passed the long copy stays, in
+// steps. On the reference card the stress load passed +2500 and the long copy
+// lost the device at +2450 and +2500: up to one step below the highest passed
+// one. Four steps is where confirming starts after a reset, too.
+inline constexpr int kPreciseMarginSteps = 4;
 
 // A confirm probe that ends too hot keeps the clock edge (heat is the power
 // step's and the soak's business), but only when the clock was loaded this
@@ -124,13 +138,34 @@ struct MemSample {
     double gbps = 0;
 };
 
-// Scans lo, lo+step, ... (<= hi, < ceiling), sampling lo too. Stops at the
-// first unstable sample or once gbps falls more than kBandwidthDrop below the
-// best so far (a step in doubt is sampled kBandwidthReadings times and its
-// middle reading counts). Returns the
-// lowest stable offset within kBandwidthTie of the best, so noise on a flat
-// curve never drifts the result upward; lo when no sample was stable.
-int best_bandwidth_offset(int lo, int hi, int step, int ceiling, const std::function<MemSample(int)>& sample);
+// Where a bandwidth scan ended, and why.
+struct MemScanEnd {
+    int top = 0;   // the highest offset that passed; lo when none did
+    enum class Why {
+        Failed,    // the step above `top` was not stable
+        Dropped,   // `top` itself was stable but more than kBandwidthDrop below the best
+        Limit,     // hi or the ceiling
+    } why = Why::Limit;
+};
+
+// The first pass: scans lo, lo+step, ... (<= hi, < ceiling), sampling lo too,
+// until a sample is not stable or its gbps is more than kBandwidthDrop below
+// the best so far, where the best is the highest middle value of three steps
+// in a row. A step that would end the scan is sampled kBandwidthReadings
+// times first, and its middle reading counts.
+MemScanEnd bandwidth_scan(int lo, int hi, int step, int ceiling, const std::function<MemSample(int)>& sample);
+
+// The highest offset the second pass may read: kPreciseMarginSteps below the
+// highest offset that can have passed. `known_edge` is where the memory gave
+// out in an earlier run (INT_MAX: nowhere): a scan that was held below it
+// counts its margin from that edge, not a second time from where it was held.
+int precise_top(const MemScanEnd& end, int lo, int step, int known_edge);
+
+// The second pass: samples top, top-step, ... (>= lo) until a sample is more
+// than kBandwidthTie below the best of them, or not stable. Returns the
+// lowest offset within kBandwidthTie of the best, so noise on a flat curve
+// never drifts the result upward; `top` when not one sample was stable.
+int bandwidth_peak_below(int top, int lo, int step, const std::function<MemSample(int)>& sample);
 
 // "Search fast, confirm long": re-checks edge with a long probe; on failure
 // steps down and retries, at most `tries` probes, never probing lo (stock) or
@@ -168,6 +203,10 @@ struct OptimizeIo {
     // getting faster. The app always gives one; when it fails at stock, the
     // memory is left at stock.
     std::function<std::optional<double>()> bandwidth;
+    // The same with the long copy: steadier, and too heavy for memory at its
+    // edge. Only called kPreciseMarginSteps below the highest step a scan
+    // passed. Empty: `bandwidth` is used there as well.
+    std::function<std::optional<double>()> bandwidth_precise;
     // Asked after `bandwidth` returned nothing: true when the load measured
     // but its readings did not agree (other programs using the card, say).
     // That is no sign of a driver reset. Empty: every failure may be one.

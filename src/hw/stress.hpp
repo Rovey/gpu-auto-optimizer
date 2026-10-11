@@ -41,7 +41,12 @@ public:
     // Device-memory bandwidth in GB/s (read + write) from a 256 MB buffer copy,
     // timed with GPU timestamps; median of 3 runs. nullopt when the device was
     // lost or the timing was unusable.
-    std::optional<double> MeasureBandwidth();
+    // precise: with the long timed run. Steadier readings (0.2 % against 0.4
+    // to 1.3 % on the reference RTX 4070), and four times the copying in one
+    // go: memory at its edge lost the device under it in five scans out of
+    // five, and once the machine (hardware check 95). The search only asks
+    // for it well below that edge.
+    std::optional<double> MeasureBandwidth(bool precise = false);
     // Why the last MeasureBandwidth() returned nothing: true when it measured
     // but the runs never agreed (other programs using the card, say); false
     // when the device was lost or a timing query failed.

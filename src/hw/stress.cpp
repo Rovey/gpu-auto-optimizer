@@ -28,14 +28,16 @@ constexpr double kTargetBatchMs = 250.0;
 constexpr int kMaxDispatches = 2048;
 constexpr UINT kBwBytes = 256u * 1024 * 1024;   // per buffer; far above the 4070's 36 MB L2
 constexpr UINT kBwGroups = 1024;
-// Dispatches per timed run: 128 GB copied, about 0.3 s on the reference
-// RTX 4070. A run of 64 (75 ms) was short enough for whatever else the machine
-// did to land in one run and not in the next: readings scattered by 0.4 to
-// 0.7 % (standard deviation) and one in 24 did not settle; with 256 it is
-// 0.2 % and none (hardware check 95).
-constexpr int kBwDispatches = 256;
+// Dispatches per timed run. The short run copies 32 GB, about 75 ms on the
+// reference RTX 4070: short enough for whatever else the machine does to land
+// in one run and not in the next, so readings scatter by 0.4 to 1.3 %
+// (standard deviation) and now and then do not settle. The long run copies
+// 128 GB in 0.3 s and scatters by 0.2 % (hardware check 95); what it costs is
+// in stress.hpp.
+constexpr int kBwDispatches = 64;
+constexpr int kBwDispatchesPrecise = 256;
 constexpr size_t kBwRuns = 3;          // consecutive runs that must agree
-constexpr int kBwMaxRuns = 20;         // ~6 s at full speed; more if clocks are low
+constexpr int kBwMaxRuns = 20;         // ~1.5 s at full speed (~6 s for the long run); more if clocks are low
 constexpr double kBwSettle = 0.01;     // agree = within 1 %
 
 // Grid-stride copy of 16-byte elements between two raw buffers.
@@ -289,8 +291,9 @@ StressBatch Stress::Batch() {
     return out;
 }
 
-std::optional<double> Stress::MeasureBandwidth() {
+std::optional<double> Stress::MeasureBandwidth(bool precise) {
     Impl& d = *impl_;
+    const int dispatches = precise ? kBwDispatchesPrecise : kBwDispatches;
     bw_unsettled_ = false;
     bw_runs_.clear();
     if (!d.device && !CreateDevice()) return std::nullopt;
@@ -362,7 +365,7 @@ std::optional<double> Stress::MeasureBandwidth() {
         d.ctx->CSSetUnorderedAccessViews(0, 2, uavs, nullptr);
         d.ctx->Begin(d.q_disjoint.Get());
         d.ctx->End(d.q_begin.Get());
-        for (int i = 0; i < kBwDispatches; ++i) d.ctx->Dispatch(kBwGroups, 1, 1);
+        for (int i = 0; i < dispatches; ++i) d.ctx->Dispatch(kBwGroups, 1, 1);
         d.ctx->End(d.q_end.Get());
         d.ctx->End(d.q_disjoint.Get());
         d.ctx->CSSetUnorderedAccessViews(0, 2, none, nullptr);
@@ -381,7 +384,7 @@ std::optional<double> Stress::MeasureBandwidth() {
             continue;
         }
         const double seconds = double(t1 - t0) / double(dj.Frequency);
-        runs.push_back(2.0 * kBwBytes * kBwDispatches / seconds / 1e9);
+        runs.push_back(2.0 * kBwBytes * dispatches / seconds / 1e9);
         bw_runs_.push_back(runs.back());
         if (runs.size() < kBwRuns) continue;
         std::vector<double> last(runs.end() - kBwRuns, runs.end());
