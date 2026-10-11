@@ -76,6 +76,8 @@ struct FakeCard {
     int noisy_power_pct = -1;        // a 20 s probe at this power reads 10 % low
     int soak_extra_heat = 0;         // a 300 s probe peaks this much hotter than a 20 s one
     int confirm_extra_heat = 0;      // a 30 s probe peaks this much hotter than a 20 s one
+    double hot_after_health_s = -1;  // >= 0: the first 30 s probe after a health probe is too hot after this many seconds
+    bool hot_from_health = false;    // armed by that health probe
     int abort_in_probe_s = -1;       // a probe of this length is cut short by a stop request
     bool abort_on_soak = false;      // Ctrl+C arrives while the soak probe runs
     bool aborted_now = false;
@@ -108,6 +110,7 @@ struct FakeCard {
     std::vector<std::string> events; // "recover", "stock", "rest", "health", "begin" in the order they happen
     bool abort_during_rest = false;  // a stop request arrives while the search rests
     int rests = 0;
+    int abort_on_rest = -1;          // a stop request comes during this rest (1 = the first)
     bool with_prepare = false;       // the run offers OptimizeIo::prepare_load
     int prepare_fails = 0;           // this many preparations return false
     int prepares = 0;
@@ -232,6 +235,14 @@ struct FakeCard {
             // The 5 s probe is the health probe after a driver reset.
             const bool health = seconds == 5;
             if (health) events.push_back("health");
+            if (health && hot_after_health_s >= 0) hot_from_health = true;
+            if (seconds == 30 && hot_from_health) {   // the card was above the limit when the probe began
+                hot_from_health = false;
+                r.seconds = hot_after_health_s;
+                r.peak_temp_c = max_temp + 1;
+                r.verdict = Verdict::TooHot;
+                return r;
+            }
             if (seconds == abort_in_probe_s) { r.verdict = Verdict::Aborted; return r; }
             if (seconds == 3 && blind_probes > 0) { --blind_probes; r.verdict = Verdict::NoTelemetry; return r; }
             if (seconds == 3 && core == blind_at_core) { r.verdict = Verdict::NoTelemetry; return r; }
@@ -293,7 +304,7 @@ struct Run {
             io.rest = [this](double) {
                 ++card.rests;
                 card.events.push_back("rest");
-                if (card.abort_during_rest) { card.aborted_now = true; return false; }
+                if (card.abort_during_rest || card.rests == card.abort_on_rest) { card.aborted_now = true; return false; }
                 return true;
             };
         if (card.with_prepare)
@@ -2672,4 +2683,60 @@ TEST_CASE("a run starts when neither runs, whatever else does") {
     CHECK(other_tool_refusal({"explorer.exe", "Discord.exe", "GpuAutoOptimizer.exe", "gao.exe"}).empty());
     // Only the programs themselves: not a file that merely carries the name.
     CHECK(other_tool_refusal({"RTSSHooksLoader64.exe", "MSIAfterburner.exe.bak", "NotRTSS.exe", "Afterburner"}).empty());
+}
+
+// The core offsets of a run's 30 s confirm probes, in the order they ran.
+static std::vector<int> core_confirms(const FakeCard& card) {
+    std::vector<int> out;
+    for (const std::string& p : card.probe_order) {
+        if (p.rfind("30:", 0) != 0) continue;
+        const auto core_at = p.find(':', 3) + 1;
+        const int core = std::stoi(p.substr(core_at, p.find(':', core_at) - core_at));
+        if (core != 0) out.push_back(core);   // core 0 is the memory's confirm probe
+    }
+    return out;
+}
+
+TEST_CASE("a confirm probe that is too hot before the clock was tested confirms nothing") {
+    // A 3080 Ti, 0.4.5: the driver reset at core +300, the health probe at
+    // stock power left the card at 76 C, and `confirm core +225: TOO HOT`
+    // ended within a second. That counted as holding, and +225 was confirmed
+    // by a probe that had tested nothing.
+    Run run = lost_at_135();
+    run.card.hot_after_health_s = 0.6;
+    const auto r = run.go(Preset::BestOfMyGpu);
+    REQUIRE(r.ok);
+    CHECK(r.driver_resets == 1);
+    // The reset came at +135, +120 was the last value that passed, and the
+    // confirm starts four steps below it. That probe ends too hot at once and
+    // does not count; the card cools, and one step lower runs its 30 s.
+    CHECK(core_confirms(run.card) == std::vector<int>{60, 45});
+    CHECK(r.core_confirmed == 45);
+    CHECK(r.core_mhz <= 45);
+    CHECK(run.logged("confirm core +60 / mem +550: TOO HOT"));
+    CHECK(run.logged("too hot after 0.6 s, before the clock was tested: not confirmed"));
+    CHECK(run.card.rests == 2);   // after the reset, and to cool down before the next try
+    check_journal_rules(run);
+}
+
+TEST_CASE("a confirm probe that got too hot after the clock was tested still keeps the clock edge") {
+    Run run = lost_at_135();
+    run.card.hot_after_health_s = kConfirmMinS;
+    const auto r = run.go(Preset::BestOfMyGpu);
+    REQUIRE(r.ok);
+    CHECK(core_confirms(run.card) == std::vector<int>{60});
+    CHECK(r.core_confirmed == 60);
+    CHECK(run.card.rests == 1);
+    CHECK_FALSE(run.logged("not confirmed"));
+}
+
+TEST_CASE("a stop request while the card cools after such a confirm probe ends the run at stock") {
+    Run run = lost_at_135();
+    run.card.hot_after_health_s = 0.6;
+    run.card.abort_on_rest = 2;   // the second rest is the cool-down
+    const auto r = run.go(Preset::BestOfMyGpu);
+    CHECK_FALSE(r.ok);
+    CHECK(r.reason == "aborted");
+    CHECK(r.stock_restored);
+    CHECK(core_confirms(run.card) == std::vector<int>{60});
 }

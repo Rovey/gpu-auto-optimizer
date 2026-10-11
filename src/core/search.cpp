@@ -493,6 +493,7 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
     // or its write failed and was counted as a reset event. A reset event on
     // a candidate with no clock offset (the +0 sample of the bandwidth scan)
     // ends the run.
+    double candidate_s = 0;   // how long the probe of the last candidate lasted
     auto clock_candidate = [&](std::optional<int> core_j, std::optional<int> mem_j, int core, int mem,
                                double seconds, const std::function<void()>& extra = {}) -> std::optional<Verdict> {
         if (!stopped.empty()) return std::nullopt;
@@ -512,6 +513,7 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
             return std::nullopt;
         }
         if (!s) return std::nullopt;
+        candidate_s = s->seconds;
         log(std::string(seconds == kConfirmProbeS ? "confirm " : "") + "core +" + std::to_string(core) +
             " / mem +" + std::to_string(mem) + ": " + describe(*s));
         if (reset_in_step && stock_clocks && stopped.empty()) stopped = at_stock_clocks();
@@ -521,7 +523,21 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
     // A confirm probe only decides whether the clock holds. Running a little
     // hot over 30 s is the power step's and the soak's business (the soak
     // lowers power), not a reason to throw the clock edge away.
-    auto holds = [](std::optional<Verdict> v) { return v == Verdict::Stable || v == Verdict::TooHot; };
+    // But a probe that was too hot before kConfirmMinS has decided nothing:
+    // the card was above the limit when it began. After a driver reset that
+    // is the rule on a card that runs hot, because the health probe loads it
+    // at stock power. Such a probe does not confirm, and the card cools
+    // before the next try: without that every lower value would end the same
+    // way, and the edge would be stepped down to nothing by heat alone.
+    auto holds = [&](std::optional<Verdict> v) {
+        if (v != Verdict::TooHot) return v == Verdict::Stable;
+        if (candidate_s >= kConfirmMinS) return true;
+        char why[96];
+        std::snprintf(why, sizeof(why), "too hot after %.1f s, before the clock was tested: not confirmed", candidate_s);
+        log(why);
+        if (!rest() && stopped.empty()) stopped = "aborted";
+        return false;
+    };
 
     // One step of a climb or a scan. After a reset event nothing new is
     // explored: the step reports "not stable" without touching the card, and

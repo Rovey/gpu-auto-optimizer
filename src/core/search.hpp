@@ -73,6 +73,13 @@ inline constexpr double kBandwidthDrop = 0.01;   // stop once 1 % below the best
 // noise pick the offset.
 inline constexpr double kBandwidthTie = 0.01;
 
+// A confirm probe that ends too hot keeps the clock edge (heat is the power
+// step's and the soak's business), but only when the clock was loaded this
+// long first: clearly longer than the 3 s probe that found the edge. Too hot
+// before that, the card was above the limit when the probe began, and the
+// probe says nothing about the clock.
+inline constexpr double kConfirmMinS = 10;
+
 // A probe judged STABLE that scores below this fraction of the baseline is
 // STALLED: the card stopped computing without a wrong value or a lost device.
 // Measured on an RTX 5070 past its edge: 167 it/s against a baseline of 5869
