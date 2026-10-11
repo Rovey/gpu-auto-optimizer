@@ -748,8 +748,8 @@ void choose(UiState& s, const UiActions& act) {
     ImGui::Spacing();
     preset_cards(s);
     ImGui::Spacing();
-    // The undervolt search leaves the fans to the NVIDIA driver and tests no
-    // curve; the all-in-one run measures its own.
+    // The undervolt search keeps the fans on the curve in use; the
+    // all-in-one run measures its own.
     ImGui::BeginDisabled(undervolt || all);
     ImGui::AlignTextToFramePadding();
     ImGui::TextUnformatted("Fan curve during the run");
@@ -948,7 +948,11 @@ void comparison(const StabilityResult& before, const StabilityResult& after, Row
         ImGui::TableNextColumn(); ImGui::TextUnformatted(b.c_str());
     });
     ImGui::EndTable();
-    if (after.seconds > 3 * before.seconds)
+    if (before.verdict == Verdict::TooHot)
+        wrapped(kDim, "The stock run was stopped at " + reading(before.peak_temp_c, " \xC2\xB0""C") + " after " + duration_text(before.seconds) +
+                          ": with the NVIDIA driver's own fan control (fans at " + reading(before.end_fan_pct, " %") +
+                          ") the card gets that hot under full load. From there the run kept the fans on a curve.");
+    else if (after.seconds > 3 * before.seconds)
         wrapped(kDim, "The stock run lasted " + duration_text(before.seconds) +
                           ", too short to heat the card through: its temperature and fan speed read lower than they would after " +
                           duration_text(after.seconds) + ". Score, clock and power compare directly.");

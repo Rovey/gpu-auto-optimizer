@@ -102,8 +102,8 @@ struct UndervoltOutcome {
 // The undervolt from start to end: state folder, drivers, journal, the
 // search (core/undervolt.hpp), and saving the result as the profile, which
 // replaces a saved overclock: a core offset and a flat top are one table on
-// the card (hardware check 65). Needs elevation. The NVIDIA driver keeps the
-// fans during the search.
+// the card (hardware check 65). Needs elevation. The fans follow the curve
+// in use during the search, as in run_optimize.
 // on_saved_tune: the undervolt is searched on top of the saved overclock
 // (its power limit, core and memory offsets stay applied throughout) and
 // saved into that profile, next to them. Without a saved tune that applies

@@ -120,6 +120,17 @@ int confirm_edge(int edge, int lo, int step, int tries, const std::function<bool
 // One stress run: seconds of load, aborting above max_temp_c.
 using Probe = std::function<StabilityResult(double seconds, int max_temp_c, double stall_below)>;
 
+// The measurement at stock that goes before a run, with the fans left to the
+// NVIDIA driver: the "before" of the result. It stops at kStockTempC.
+inline constexpr int kStockTempC = 85;
+inline constexpr double kStockMinS = 30;   // stopped sooner than this, it measured nothing to compare a result with
+// Why no run follows this measurement; empty when one does. A card that
+// reached kStockTempC is not unstable: the driver's own fan control lets some
+// cards get that hot under full load (a 3080 Ti did, with its fans at 65 %).
+// What was measured until then is the "before", and the run goes on with the
+// fans on a curve, which is what keeps the card below the profile's limit.
+std::string stock_refusal(const StabilityResult& stock);
+
 struct OptimizeIo {
     Probe probe;
     std::function<bool()> aborted;                      // polled between probes; the probe itself must honour it too
