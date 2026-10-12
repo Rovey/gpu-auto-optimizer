@@ -272,14 +272,20 @@ VfApplyResult apply_flat_top(const GpuControl& gpu, int anchor_index, int freq_k
             if (!gpu.write_vf_offsets(lowered)) return fail("writing the curve failed");
             const auto final_read = gpu.read_vf_curve();
             if (!final_read) return fail("the curve could not be read back");
+            // The read-out moves up to two grid steps between reads as the
+            // card warms or cools (the note by kVfTailDropKhz); the offsets
+            // are checked exactly below. A step or two off the target here is
+            // temperature, not a curve that moved.
+            const int read_tol_khz = kVfToleranceKhz + 2 * grid_khz;
             for (const VfPoint& p : *final_read) {
                 if (p.volt_uv < anchor_uv) {
                     if (p.raw_offset != base_raw) return fail("a point below the anchor got an offset (slot " + std::to_string(p.index) + ")");
                     continue;
                 }
-                if (p.index == anchor_index ? std::abs(p.freq_khz - freq_khz) > kVfToleranceKhz
-                                            : p.freq_khz - freq_khz > kVfToleranceKhz)
-                    return fail("lowering the points above the anchor moved the top off the target");
+                if (p.index == anchor_index ? std::abs(p.freq_khz - freq_khz) > read_tol_khz
+                                            : p.freq_khz - freq_khz > read_tol_khz)
+                    return fail("lowering the points above the anchor left " + std::to_string(p.volt_uv / 1000) + " mV at " +
+                                std::to_string(p.freq_khz / 1000) + " MHz, the target is " + std::to_string(freq_khz / 1000) + " MHz");
             }
             for (const VfOffset& o : lowered) {
                 const VfPoint* is = find(*final_read, o.index);
