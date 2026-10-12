@@ -71,4 +71,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
-        run: gh release create $env:TAG (Get-ChildItem dist/*).FullName --draft --verify-tag --generate-notes --title "GPU Auto Optimizer $env:TAG"
+        # A tag with a hyphen (v1.2.3-rc1) is a pre-release: GitHub's
+        # "latest release" answer skips it, so the update check does not
+        # offer it to users of the stable version.
+        run: |
+          $pre = if ($env:TAG -like '*-*') { '--prerelease' } else { @() }
+          gh release create $env:TAG $pre (Get-ChildItem dist/*).FullName --draft --verify-tag --generate-notes --title "GPU Auto Optimizer $env:TAG"
