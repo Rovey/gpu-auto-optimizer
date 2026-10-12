@@ -45,12 +45,14 @@ inline constexpr double kUvWarmUpS = 5;
 inline constexpr int kUvConfirmTries = 3;
 inline constexpr int kUvSoakAttempts = 3;
 // A candidate must run the target clock within what the built-in curve moves
-// with temperature (45 MHz between cold and warm on the reference card: a
-// flat top written on a cooler card runs that much lower once it is hot), and
-// keep this share of the stock score (3 s probes scatter by a few percent
-// around the 30 s baseline). One that computes right but clearly slower took
-// the curve without running it ("SLOW").
-inline constexpr int kUvClockSlackKhz = 45000;
+// with temperature between the write and the loaded probe. On the reference
+// card that is 45 MHz cold against warm; on an RTX 3080 Ti that runs 86 C at
+// stock the first candidate read 53 MHz low with its score at 98 % of stock.
+// 75 MHz is five steps of the clock grid. And keep this share of the stock
+// score (3 s probes scatter by a few percent around the 30 s baseline). One
+// that computes right but clearly slower took the curve without running it
+// ("SLOW").
+inline constexpr int kUvClockSlackKhz = 75000;
 inline constexpr double kUvScoreKeep = 0.9;
 
 // The overclock an undervolt is searched on top of: "overclock first, then

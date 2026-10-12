@@ -331,8 +331,8 @@ TEST_CASE("an undervolt that does not fit this card's curve is refused and ends 
         CHECK(card.curve_writes == 0);
     }
     {
-        CurveCard card;   // the built-in curve reads 60 MHz lower than when it was tested: the raise would be 210, tested 150
-        for (int& f : card.base_khz) f -= 60000;
+        CurveCard card;   // the built-in curve reads 100 MHz lower than when it was tested: the raise would be 250, tested 150
+        for (int& f : card.base_khz) f -= 100000;
         bool clean = false;
         CHECK_FALSE(apply_profile(card.gpu(), undervolt_profile(), &why, &clean));
         CHECK(why.find("tested with 150 MHz") != std::string::npos);
@@ -429,11 +429,11 @@ TEST_CASE("the raise of an undervolt over a core offset is checked against the b
     p.core_mhz = 60;
     p.undervolt = UndervoltTune{850000, 2460000, 210000};
     CurveCard card;
-    for (int& f : card.base_khz) f -= 60000;   // the built-in curve reads 60 MHz lower: the point would run 270 over it, tested 210
+    for (int& f : card.base_khz) f -= 100000;   // the built-in curve reads 100 MHz lower: the point would run 310 over it, tested 210
     std::string why;
     bool clean = false;
     CHECK_FALSE(apply_profile(card.gpu(), p, &why, &clean));
-    CHECK(why.find("would be raised by 270 MHz; the undervolt was tested with 210 MHz") != std::string::npos);
+    CHECK(why.find("would be raised by 310 MHz; the undervolt was tested with 210 MHz") != std::string::npos);
     CHECK(clean);
     CHECK(card.at_stock());
     CHECK(card.core == 0);   // the reset; the overclock was never written

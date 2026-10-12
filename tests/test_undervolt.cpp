@@ -24,7 +24,7 @@ struct UvCard {
     int long_lost_above_khz = -1; // the same for probes of 30 s and longer; -1: as the short ones
     int losses_left = 1;
     bool dead = false;            // after a driver reset, until recover()
-    bool slow = false;            // the card accepts the curve but does not run the frequency
+    int slow_khz = 0;             // > 0: the card accepts the curve but runs this far below the frequency
     bool write_ok = true;
     int write_fails_above_khz = -1;   // >= 0: a curve write that raises a point by more than this fails
     bool baseline_ok = true;
@@ -130,7 +130,7 @@ struct UvCard {
         // At stock the power limit holds the clock between two points of the curve.
         const bool cold = cold_load && seconds < 30;
         cold_load = false;
-        const int f = (level() ? stock_load_khz + raw.front() : slow ? freq(op) - 105000 : freq(op)) - (cold ? 420000 : 0);
+        const int f = (level() ? stock_load_khz + raw.front() : freq(op) - slow_khz) - (cold ? 420000 : 0);
         const int raise = freq(op) - base_khz[op];
         probe_raise_mhz.push_back(raise / 1000);
         const double v = volt_uv[op] / static_cast<double>(volt_uv[stock_point()]);
@@ -310,12 +310,26 @@ TEST_CASE("find_undervolt: a reset without a way to reconnect ends the run") {
 
 TEST_CASE("find_undervolt: a card that takes the curve but does not run the frequency holds no undervolt") {
     UvCard card;
-    card.slow = true;
+    card.slow_khz = 105000;
     const auto r = card.go();
     CHECK_FALSE(r.ok);
     CHECK(r.reason == "the card held no undervolt: the first step below its own voltage already failed");
     CHECK(card.at_stock());
     CHECK(card.logged("SLOW"));
+}
+
+TEST_CASE("find_undervolt: a candidate that runs a thermal step slow keeps being searched") {
+    // Seen on an RTX 3080 Ti (2026-10-12, 0.4.8-rc1): the flat top read back
+    // on the target, but under the 3 s load the card heated and its built-in
+    // curve sank further than the slack allowed. The first candidate read
+    // SLOW at 98 % of the stock score, and the run stopped at its first
+    // step. The slack is there for exactly this movement; the score is what
+    // guards the speed.
+    UvCard card;
+    card.slow_khz = 60000;   // between the old slack (45 MHz) and the new one
+    const auto r = card.go();
+    REQUIRE(r.ok);
+    CHECK_FALSE(card.logged("SLOW"));
 }
 
 TEST_CASE("find_undervolt: refusals before anything is tried") {
