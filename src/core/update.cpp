@@ -28,7 +28,11 @@ std::optional<unsigned> version_number(std::string_view text) {
             ++at;
         }
     }
-    if (at != end) return std::nullopt;
+    // Anything after a hyphen is a pre-release tag ("0.4.8-rc1") and orders
+    // as the version it belongs to. GitHub's "latest release" answer never
+    // carries one (pre-releases are refused by name), so this sees the
+    // app's own version, which a release tag has to match.
+    if (at != end && (*at != '-' || at + 1 == end)) return std::nullopt;
     return (parts[0] << 16) | (parts[1] << 8) | parts[2];
 }
 

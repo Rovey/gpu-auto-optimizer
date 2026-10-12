@@ -25,10 +25,13 @@ TEST_CASE("version_number orders like the version") {
     CHECK(*version_number("0.10.0") > *version_number("0.9.9"));
     CHECK(*version_number("1.0.0") > *version_number("0.255.255"));
     CHECK(version_number(kVersion) == kVersionNumber);
+    // A pre-release suffix orders with the version it belongs to: 0.4.8-rc1
+    // is the 0.4.8 number, and the 0.4.8 release is not a downgrade of it.
+    CHECK(*version_number("0.4.8-rc1") == *version_number("0.4.8"));
 }
 
 TEST_CASE("version_number refuses anything that is not three small numbers") {
-    for (const char* bad : {"", "0.3", "0.3.1.0", "v0.3.1", "0.3.x", "0.3.1-rc1", "0..1", "0.3.256", "-1.0.0", " 0.3.1", "0.3.1 "})
+    for (const char* bad : {"", "0.3", "0.3.1.0", "v0.3.1", "0.3.x", "0..1", "0.3.256", "-1.0.0", " 0.3.1", "0.3.1 ", "0.3.1-"})
         CHECK_FALSE(version_number(bad).has_value());
 }
 
