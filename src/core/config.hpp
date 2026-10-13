@@ -26,6 +26,10 @@ struct Profile {
     std::string gpu;        // NVML UUID of the card it was tested on
     std::string saved_at;   // local time, "YYYY-MM-DD HH:MM"
     std::optional<FanCurve> fan_curve;   // the curve the tune was tested with; nullopt: tuned before fan control
+    // The temperature limit the tune was found with, when the card reached
+    // more than the preset's own at stock (temp_ceiling). Empty: the preset's.
+    // The fan curve above is drawn against it.
+    std::optional<int> temp_ceiling_c;
     std::optional<UndervoltTune> undervolt;   // set: a flat top on the curve, over core_mhz when that is not 0
 };
 
@@ -47,6 +51,11 @@ std::string to_json(const Config& c);
 // includes its undervolt: one that cannot be read whole, or the undervolt
 // preset without one, would otherwise apply as plain stock and look applied.
 Config from_json(const std::string& text);
+
+// The temperature limit of a saved profile on its card: the fans run at 100 %
+// from here. The preset's own, or the ceiling the tune was found with; never
+// below the first, never above kStockTempC.
+int profile_ceiling(const Profile& p);
 
 // The curve the fans follow: the edited one, else the one the tune was tested
 // with, else the profile's default. nullopt without a profile.

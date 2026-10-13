@@ -438,7 +438,8 @@ void fan_sync() {
     g.ui.fan_curve = curve;
     g.ui.fan_tested = cfg.profile ? cfg.profile->fan_curve : std::nullopt;
     g.ui.fan_min_pct = gao::fan_min_for(cfg, g.nvml_ok ? g.nvml->GpuUuid(kGpu) : std::string(), g.gpu.fan_min_pct);
-    g.ui.fan_max_temp_c = cfg.profile ? gao::objectives_for(cfg.profile->preset).max_temp_c : 75;
+    g.ui.fan_max_temp_c = cfg.profile ? gao::profile_ceiling(*cfg.profile) : 75;
+    g.ui.fan_limit_raised_c = cfg.profile ? g.ui.fan_max_temp_c - gao::objectives_for(cfg.profile->preset).max_temp_c : 0;
     // A running search drives the fans itself: never take them over mid-run.
     if (g.worker && g.worker->running()) return;
     if (!g.ui.fan_available || !cfg.fan_control || !curve || gao::app::tuning_in_progress()) {

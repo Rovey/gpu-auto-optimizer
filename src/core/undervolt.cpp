@@ -99,7 +99,7 @@ UndervoltResult find_undervolt(const GpuControl& gpu, Journal& journal, const Un
     // reference: on a card that is above the profile's limit before anything
     // is changed, every candidate would end TOO HOT and read as "this card
     // holds no undervolt". kStockTempC stays what nothing goes beyond.
-    limit_c = std::max(max_temp_c, std::min(r.baseline.peak_temp_c, kStockTempC));
+    limit_c = temp_ceiling(max_temp_c, r.baseline.peak_temp_c);
     if (limit_c > max_temp_c)
         log("the card reached " + std::to_string(r.baseline.peak_temp_c) + " C " + at_base + ": candidates are stopped at " +
             std::to_string(limit_c) + " C, not at the profile's " + std::to_string(max_temp_c) + " C");

@@ -422,3 +422,56 @@ TEST_CASE("every owner of the fans has its label") {
     for (FanOwner o : {FanOwner::Driver, FanOwner::Curve, FanOwner::Run, FanOwner::Measuring})
         CHECK(std::string(fan_owner_label(o)).size() <= std::string(" (driver)").size());
 }
+
+TEST_CASE("a curve moves up with the limit: the first point stays, the rest go up by the difference") {
+    // The example of docs/planned.md: Normal, drawn against 75 C, on a card
+    // whose limit is 85 C.
+    const FanCurve moved = shifted_curve(fan_preset_curve(FanPreset::Normal), 10);
+    CHECK(moved == FanCurve{50, {{50, 35}, {70, 45}, {80, 65}, {85, 100}}});
+    // The card idles as before: the fan-stop threshold and the first point.
+    CHECK(moved.stop_below_c == fan_preset_curve(FanPreset::Normal).stop_below_c);
+    CHECK(moved.points.front() == fan_preset_curve(FanPreset::Normal).points.front());
+    // A curve whose last point is above the limit it was drawn against moves the same way.
+    CHECK(shifted_curve(fan_preset_curve(FanPreset::Silent), 10) == FanCurve{50, {{50, 30}, {75, 40}, {85, 55}, {90, 75}}});
+}
+
+TEST_CASE("a limit that did not go up leaves the curve exactly as it is") {
+    for (const FanPreset p : {FanPreset::Silent, FanPreset::Normal, FanPreset::Cool, FanPreset::Aggressive}) {
+        CHECK(shifted_curve(fan_preset_curve(p), 0) == fan_preset_curve(p));
+        CHECK(shifted_curve(fan_preset_curve(p), -5) == fan_preset_curve(p));   // a lower limit moves nothing down
+    }
+    const FanCurve drawn{std::nullopt, {{40, 40}, {70, 90}}};
+    CHECK(shifted_curve(drawn, 0) == drawn);
+}
+
+TEST_CASE("a moved curve is still one the controller can follow") {
+    // Whatever the preset and however far: valid, and never past the editor's 100 C.
+    for (const FanPreset p : {FanPreset::Silent, FanPreset::Normal, FanPreset::Cool, FanPreset::Aggressive})
+        for (int by = 1; by <= 40; ++by) {
+            const FanCurve moved = shifted_curve(fan_preset_curve(p), by);
+            CAPTURE(fan_preset_name(p));
+            CAPTURE(by);
+            CHECK(valid(moved));
+            CHECK(moved.points.size() == fan_preset_curve(p).points.size());
+            for (size_t i = 0; i < moved.points.size(); ++i) CHECK(moved.points[i].pct == fan_preset_curve(p).points[i].pct);
+        }
+    // Points that would pass 100 C stack up below it, in order.
+    CHECK(shifted_curve(FanCurve{std::nullopt, {{40, 40}, {90, 80}, {95, 100}}}, 20) == FanCurve{std::nullopt, {{40, 40}, {99, 80}, {100, 100}}});
+}
+
+TEST_CASE("on a card that runs hot the fans no longer go to 100 % at the profile's 75 C") {
+    // The tester's RTX 3080 Ti with its undervolt: 74 C under load. With the
+    // curve as drawn and the profile's limit that was 93 % fan (it ran 66 % at
+    // stock); with the limit this card has, 85 C, and the curve moved with it,
+    // the same temperature asks for 53 %.
+    const FanCurve normal = fan_preset_curve(FanPreset::Normal);
+    const auto t = Clock::now();
+    FanController as_it_was(normal, 30, 75);
+    CHECK(as_it_was.decide(74, 230, t).pct == 93);
+    CHECK(as_it_was.decide(75, 230, t).pct == 100);
+    FanController moved(shifted_curve(normal, 85 - 75), 30, 85);
+    CHECK(moved.decide(74, 230, t).pct == 53);
+    CHECK(moved.decide(80, 230, t).pct == 65);
+    CHECK(moved.decide(84, 230, t).pct == 93);
+    CHECK(moved.decide(85, 230, t).pct == 100);   // the limit still means every fan there is
+}

@@ -3367,3 +3367,12 @@ TEST_CASE("a reading of the second pass that loses the device is a reset the sea
     check_journal_rules(run);
 }
 
+TEST_CASE("the temperature ceiling of a run is the profile's limit, or what the card reached at stock, and never more than 85 C") {
+    CHECK(temp_ceiling(75, 67) == 75);   // the reference card: nothing changes
+    CHECK(temp_ceiling(75, 75) == 75);
+    CHECK(temp_ceiling(75, 80) == 80);
+    CHECK(temp_ceiling(75, 86) == 85);   // the tester's RTX 3080 Ti
+    CHECK(temp_ceiling(83, 86) == 85);
+    CHECK(temp_ceiling(75, -1) == 75);   // no reading
+    CHECK(temp_ceiling(65, 70) == 70);
+}

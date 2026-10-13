@@ -138,10 +138,13 @@ not after.
 
 ## Design: never hotter than at stock
 
-The answer proposed to the open point above. A design, not built. What is built already is the
-backstop next to it (a profile that promises speed keeps no result that is slower than stock) and
-this same rule for the undervolt profile, where it costs nothing: an undervolt has no power limit
-to lower and only makes a card cooler.
+The answer proposed to the open point above. A design, not built for the profiles that promise
+speed. What is built already is the backstop next to it (a profile that promises speed keeps no
+result that is slower than stock) and this same rule for the undervolt profile, where it costs
+nothing: an undervolt has no power limit to lower and only makes a card cooler. For that profile
+the fan curve moves with the ceiling as well, as described below, since the first undervolt on the
+tester's card held it at 74 C with the fans at 93 %, where it had run 86 C at 66 % at stock
+(`docs/development.md`, hardware check 97).
 
 **The rule.** A run's temperature ceiling is the profile's limit, or what the card reached in the
 measurement at stock when that is more, and never more than 85 C:
