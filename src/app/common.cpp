@@ -240,16 +240,38 @@ StockOutcome measure_stock(const OptimizeHooks& hooks) {
     const GpuControl& gpu = hw.control();
     if (!gpu.reset_to_stock || !gpu.reset_to_stock()) return fail("could not set the card to stock");
     const KeepAwake keep_awake;
+    auto log = [&](const std::string& m) { if (hooks.log) hooks.log(m); };
+    // In every run's log, whatever the profile: a target that another tool
+    // left on the card makes this a measurement of something else than stock.
+    log(temp_target_text(gpu.temp_target_c, gpu.temp_target_default_c));
     if (hooks.measuring) hooks.measuring("Measuring the card at stock", kLongRunS);
+    // What the card did meanwhile, a line every ten seconds: the readings the
+    // measurement takes anyway, written down. Nothing of the measurement changes.
+    TraceClock trace;
+    const auto began = std::chrono::steady_clock::now();
+    std::optional<std::pair<double, Telemetry>> unlogged;   // the latest reading that got no line
     const bool crashed = !guarded([&] {
-        out.result = run_stability([&] { return load->Batch(); }, [&] { return gpu.read(); }, kLongRunS, kStockTempC, hooks.aborted);
+        out.result = run_stability(
+            [&] { return load->Batch(); },
+            [&] {
+                const Telemetry t = gpu.read();
+                const double at = std::chrono::duration<double>(std::chrono::steady_clock::now() - began).count();
+                if (t.ok && trace.due(at)) {
+                    log(trace_line(at, t));
+                    unlogged.reset();
+                } else if (t.ok) {
+                    unlogged = std::make_pair(at, t);
+                }
+                return t;
+            },
+            kLongRunS, kStockTempC, hooks.aborted);
     });
     if (hooks.measuring) hooks.measuring("", 0);
     if (crashed) {
         (void)load.release();   // as in run_optimize: a load that faulted is left alone
         return fail("access violation while the card was measured at stock");
     }
-    auto log = [&](const std::string& m) { if (hooks.log) hooks.log(m); };
+    if (unlogged) log(trace_line(unlogged->first, unlogged->second));   // how it ended, when that fell between two lines
     log(stock_line(out.result));
     out.error = stock_refusal(out.result);
     if (!out.error.empty() || out.result.verdict != Verdict::TooHot) return out;
@@ -569,7 +591,6 @@ UndervoltOutcome run_undervolt(const OptimizeHooks& hooks, bool on_saved_tune, c
     // saved by a run on this card was drawn against that run's ceiling.
     const std::optional<StabilityResult>& reference = on_saved_tune ? how.measured : stock_run;
     const int ceiling = reference ? temp_ceiling(obj.max_temp_c, reference->peak_temp_c, gpu.temp_target_c) : obj.max_temp_c;
-    if (gpu.temp_target_c > 0) log("the card's own temperature target: " + std::to_string(gpu.temp_target_c) + " C");
     const int drawn_against = at_start.profile ? profile_ceiling(*at_start.profile) : obj.max_temp_c;
     const FanCurve fan_curve =
         shifted_curve(active_fan_curve(at_start).value_or(default_curve(Preset::Undervolt)), ceiling - drawn_against);

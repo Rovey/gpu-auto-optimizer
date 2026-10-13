@@ -43,6 +43,43 @@ int shut_down_one() {
 
 }
 
+#include "hw/nvapi.hpp"
+#include <cstring>
+#include <vector>
+
+namespace {
+// The thermal policy information as the reference RTX 4070 answers it (driver
+// 617.42): 88 bytes, one policy, its target settable from 65 to 88 C with 84 C
+// as the default, each as a number of 1/256 C.
+std::vector<unsigned char> thermal_info(int count, int min_c, int default_c, int max_c) {
+    const int words[] = {88 | (1 << 16), 0x100 | count, 1, 0, min_c * 256, default_c * 256, max_c * 256};
+    std::vector<unsigned char> buf(88, 0);
+    std::memcpy(buf.data(), words, sizeof(words));
+    return buf;
+}
+}
+
+TEST_CASE("the default of the card's temperature target is read from its thermal policy") {
+    const auto info = thermal_info(1, 65, 84, 88);
+    CHECK(gao::parse_thermal_policy_default(info.data(), info.size()) == 84);
+    const auto ti = thermal_info(1, 65, 83, 91);   // an RTX 3080 Ti, as MSI Afterburner shows its range
+    CHECK(gao::parse_thermal_policy_default(ti.data(), ti.size()) == 83);
+}
+
+TEST_CASE("a thermal policy that makes no sense gives no default") {
+    auto none = thermal_info(0, 65, 84, 88);   // the card has no such policy
+    CHECK_FALSE(gao::parse_thermal_policy_default(none.data(), none.size()));
+    auto zero = thermal_info(1, 0, 0, 0);
+    CHECK_FALSE(gao::parse_thermal_policy_default(zero.data(), zero.size()));
+    auto order = thermal_info(1, 65, 95, 88);   // a default outside its own range
+    CHECK_FALSE(gao::parse_thermal_policy_default(order.data(), order.size()));
+    auto hot = thermal_info(1, 65, 200, 250);
+    CHECK_FALSE(gao::parse_thermal_policy_default(hot.data(), hot.size()));
+    const auto info = thermal_info(1, 65, 84, 88);
+    CHECK_FALSE(gao::parse_thermal_policy_default(info.data(), 24));   // a buffer too short to hold it
+    CHECK_FALSE(gao::parse_thermal_policy_default(nullptr, 0));
+}
+
 // The card's own temperature target, as nvmlDeviceGetTemperatureThreshold gives it.
 namespace target_fake {
 int target = 84;       // what the driver holds for NVML_TEMPERATURE_THRESHOLD_ACOUSTIC_CURR

@@ -45,6 +45,7 @@ GpuControl make_gpu_control(Nvml& nvml, Nvapi& nvapi, unsigned gpu) {
     // hardware check 45. core/search still runs them through plausible_range.
     c.clock_offset_range_mhz = [&nvapi, gpu] { return nvapi.ReadOffsetRangesMhz(gpu); };
     c.temp_target_c = nvml.TempTarget(gpu).value_or(0);
+    c.temp_target_default_c = nvapi.TempTargetDefaultC(gpu).value_or(0);
     // Fans: only when NVML reports some and a manual range. Empty otherwise,
     // so core code can tell the card has no fan control.
     if (nvml.FanCount(gpu) > 0) {

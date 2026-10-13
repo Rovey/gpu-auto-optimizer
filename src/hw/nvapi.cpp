@@ -203,6 +203,29 @@ bool Nvapi::VfCall(unsigned gpu, unsigned id, const char* name, unsigned char* b
     return true;
 }
 
+namespace {
+// NvAPI_GPU_ClientThermalPoliciesGetInfo: undocumented, and what other tools
+// read the range of their "temp limit" slider from. Read here only.
+constexpr unsigned kThermalPoliciesInfoId = 0x0D258BB5;
+constexpr std::size_t kThermalInfoSize = 88;   // the size driver 617.42 accepts, as version 1
+constexpr int kThermalCount = 4, kThermalMin = 16, kThermalDefault = 20, kThermalMax = 24;   // byte offsets
+}
+
+std::optional<int> parse_thermal_policy_default(const unsigned char* info, const std::size_t size) {
+    if (!info || size < static_cast<std::size_t>(kThermalMax) + 4) return std::nullopt;
+    if (info[kThermalCount] == 0) return std::nullopt;   // no policy
+    const int lo = GetI32(info, kThermalMin) / 256, def = GetI32(info, kThermalDefault) / 256, hi = GetI32(info, kThermalMax) / 256;
+    if (lo < 40 || hi > 110 || def < lo || def > hi) return std::nullopt;
+    return def;
+}
+
+std::optional<int> Nvapi::TempTargetDefaultC(unsigned gpu) {
+    unsigned char buf[kThermalInfoSize] = {};
+    PutU32(buf, 0, VfVersion(kThermalInfoSize));
+    if (!VfCall(gpu, kThermalPoliciesInfoId, "ClientThermalPoliciesGetInfo", buf)) return std::nullopt;
+    return parse_thermal_policy_default(buf, sizeof(buf));
+}
+
 bool Nvapi::ReadVfBuffers(unsigned gpu, bool fill_mask, unsigned char* mask, unsigned char* status, unsigned char* control) {
     std::memset(mask, 0, kVfMaskSize);
     PutU32(mask, 0, VfVersion(kVfMaskSize));

@@ -91,6 +91,8 @@ struct GpuControl {
     // instead of running its fans faster. Another tool can have set it (it is
     // MSI Afterburner's "temp limit"). 0: the card reports none.
     int temp_target_c = 0;
+    // What that target is when nothing has set it. 0: not known.
+    int temp_target_default_c = 0;
     // The voltage/frequency curve. Empty: the card or driver does not offer
     // it. A write is not verified here; core/vf_curve.hpp reads back and
     // corrects, because what a raw offset does is the card's to say.
