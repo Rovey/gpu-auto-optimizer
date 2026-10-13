@@ -3376,3 +3376,45 @@ TEST_CASE("the temperature ceiling of a run is the profile's limit, or what the 
     CHECK(temp_ceiling(75, -1) == 75);   // no reading
     CHECK(temp_ceiling(65, 70) == 70);
 }
+
+#include "core/fan_curve.hpp"
+TEST_CASE("the card's own temperature target is the ceiling's top, where the card reports one") {
+    // The card throttles itself at its target: a run has no business above it.
+    CHECK(temp_ceiling(75, 86, 83) == 83);   // an RTX 3080 Ti at its default
+    CHECK(temp_ceiling(75, 86, 77) == 77);   // the same card with the limit its owner set
+    CHECK(temp_ceiling(75, 80, 83) == 80);   // what the card reached, when that is less
+    CHECK(temp_ceiling(75, 67, 84) == 75);   // the reference card: nothing changes
+    // A target above 85 C does not raise the top: the measurement at stock
+    // stops there, so nothing above it was ever seen on this card.
+    CHECK(temp_ceiling(75, 86, 88) == 85);
+    CHECK(temp_ceiling(75, 86, 91) == 85);
+}
+
+TEST_CASE("a card that reports no temperature target keeps 85 C, exactly as before") {
+    for (const int limit : {65, 75, 80, 83})
+        for (int peak = -1; peak <= 95; ++peak) {
+            CAPTURE(limit);
+            CAPTURE(peak);
+            CHECK(temp_ceiling(limit, peak, 0) == temp_ceiling(limit, peak));
+            CHECK(temp_ceiling(limit, peak) == std::max(limit, std::min(peak, kStockTempC)));
+            CHECK(temp_ceiling(limit, peak, -1) == temp_ceiling(limit, peak));
+        }
+}
+
+TEST_CASE("a target below the profile's own limit does not lower that limit") {
+    // The profile's limit is what the profile was asked for; a card that
+    // throttles below it does so by itself, as it did before.
+    CHECK(temp_ceiling(75, 86, 70) == 75);
+    CHECK(temp_ceiling(83, 86, 77) == 83);
+    CHECK(temp_ceiling(75, 60, 70) == 75);
+}
+
+TEST_CASE("the fan curve moves by what the card's own target leaves, not by a fixed ten degrees") {
+    const FanCurve normal = fan_preset_curve(FanPreset::Normal);
+    // Target 83 C: the red line and the last point at 83.
+    CHECK(shifted_curve(normal, temp_ceiling(75, 86, 83) - 75) == FanCurve{50, {{50, 35}, {68, 45}, {78, 65}, {83, 100}}});
+    // Target 77 C, set by the owner: two degrees, and the fans are at 100 % where the card would begin to slow down.
+    CHECK(shifted_curve(normal, temp_ceiling(75, 86, 77) - 75) == FanCurve{50, {{50, 35}, {62, 45}, {72, 65}, {77, 100}}});
+    // No target reported: ten degrees, as in the step before this one.
+    CHECK(shifted_curve(normal, temp_ceiling(75, 86) - 75) == FanCurve{50, {{50, 35}, {70, 45}, {80, 65}, {85, 100}}});
+}

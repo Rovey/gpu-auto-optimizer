@@ -43,6 +43,65 @@ int shut_down_one() {
 
 }
 
+// The card's own temperature target, as nvmlDeviceGetTemperatureThreshold gives it.
+namespace target_fake {
+int target = 84;       // what the driver holds for NVML_TEMPERATURE_THRESHOLD_ACOUSTIC_CURR
+int rc = 0;            // what the call returns
+int asked_for = -1;    // the threshold type of the last call
+int init() { return 0; }
+int shutdown() { return 0; }
+int by_index(unsigned, void** dev) { *dev = &target; return 0; }
+int threshold(void*, int type, unsigned* value) {
+    asked_for = type;
+    *value = static_cast<unsigned>(target);
+    return rc;
+}
+gao::Nvml::Fake fake() {
+    gao::Nvml::Fake f;
+    f.init = init;
+    f.shutdown = shutdown;
+    f.by_index = by_index;
+    f.temp_threshold = threshold;
+    return f;
+}
+}
+
+TEST_CASE("the card's temperature target is read where the card reports one") {
+    using namespace target_fake;
+    gao::Nvml nvml;
+    REQUIRE(nvml.Init(fake()));
+    target = 84;   // the reference RTX 4070
+    rc = 0;
+    CHECK(nvml.TempTarget(0) == 84);
+    CHECK(asked_for == 5);   // the target in force now, not the lowest or highest it can be set to
+    target = 77;   // a limit the owner set with another tool
+    CHECK(nvml.TempTarget(0) == 77);
+}
+
+TEST_CASE("a card that reports no temperature target gives none") {
+    using namespace target_fake;
+    gao::Nvml nvml;
+    REQUIRE(nvml.Init(fake()));
+    target = 84;
+    rc = 3;        // NVML_ERROR_NOT_SUPPORTED
+    CHECK_FALSE(nvml.TempTarget(0));
+    rc = 999;      // any other failure
+    CHECK_FALSE(nvml.TempTarget(0));
+    // A number that cannot be a temperature limit is no target either.
+    rc = 0;
+    for (const int nonsense : {0, 20, 39, 111, 250}) {
+        target = nonsense;
+        CAPTURE(nonsense);
+        CHECK_FALSE(nvml.TempTarget(0));
+    }
+    // And a library without the function at all.
+    gao::Nvml::Fake bare = fake();
+    bare.temp_threshold = nullptr;
+    gao::Nvml old;
+    REQUIRE(old.Init(bare));
+    CHECK_FALSE(old.TempTarget(0));
+}
+
 // nvml.dll as driver 617.42 behaves across a driver reset: the readings come
 // from memory the driver shares with the process and takes away at a reset,
 // and only a session that was started after it has that memory again.

@@ -149,7 +149,17 @@ tester's card held it at 74 C with the fans at 93 %, where it had run 86 C at 66
 **The rule.** A run's temperature ceiling is the profile's limit, or what the card reached in the
 measurement at stock when that is more, and never more than 85 C:
 
-    ceiling = max(profile limit, min(peak at stock, 85))
+    ceiling = max(profile limit, min(peak at stock, top))
+
+where `top` is the card's own temperature target when it reports one, and 85 C when it does not or
+when its target is higher than that (`temp_ceiling`). The target is the temperature from which a
+card slows itself down instead of running its fans faster; NVML gives it without administrator
+rights (`nvmlDeviceGetTemperatureThreshold`, the "acoustic" threshold in force: 84 C on the
+reference card). A run has no business above it, and a fan curve that reaches 100 % there keeps
+the card from getting to it. That this threshold is what MSI Afterburner shows and sets as "temp
+limit" is assumed from its range (65 to 88 C on the reference card, in both) and **not confirmed**:
+it takes `nvidia-smi -q -d TEMPERATURE` on a card with that limit set, with Afterburner and
+without.
 
 On the reference card nothing changes: it reaches 67 C at stock, and every profile's limit is above
 that. On the tester's RTX 3080 Ti (86 C at stock) Best of my GPU would run with a ceiling of 85 C
@@ -208,6 +218,20 @@ allows N. And the result table, which already shows both temperatures and both f
 - **Which temperature "at stock" is.** The measurement at stock leaves the fans to the driver
   (86 C at 66 %). With the fans on the run's curve the same card reaches 83 C. The rule above takes
   the first, capped at 85.
+- **Where the measurement at stock stops.** Today at a fixed 85 C (`kStockTempC`), whatever the
+  card says about itself. On the tester's card that ends it after 89 to 163 seconds of the five
+  minutes, so the "before" of every result is a card that was still warming up, and the clock a
+  run keeps is the average of that stretch. The card's own thresholds are readable now: its target
+  (where it starts to slow down), its maximum operating temperature (90 C on the reference card),
+  and the points where it slows down hard and shuts down (94 and 99 C there). Stopping at the
+  target would end the measurement earlier still on a card that sits above it; stopping at the
+  maximum operating temperature would let it run its five minutes, on a card whose memory and
+  voltage regulators are hotter than the one temperature the app can read. Not changed, and not
+  decided.
+- **A card whose target is below a profile's own limit** (an owner who set 70 C, a profile that
+  allows 75). The profile's limit is kept as it is today, and the card throttles below it by
+  itself. Lowering the profile's limit to the card's target would respect the owner's choice, and
+  change what the profiles do on such a card.
 - **A memory overclock under a raised ceiling:** allowed as today, or left at stock because of
   what cannot be measured.
 - **Whether All in one is judged as a whole** against stock, as the two speed profiles are.

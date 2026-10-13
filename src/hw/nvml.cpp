@@ -30,6 +30,7 @@ static fn_temp        p_temp = nullptr;
 static fn_power       p_power = nullptr;
 static fn_powerlimit  p_powerlimit = nullptr;
 static fn_fan         p_fan = nullptr;
+static fn_temp        p_temp_threshold = nullptr;   // nvmlDeviceGetTemperatureThreshold: (device, threshold type, value)
 typedef nvmlReturn_t (*fn_pl_default)(nvmlDevice_t, unsigned*);
 typedef nvmlReturn_t (*fn_pl_constraints)(nvmlDevice_t, unsigned*, unsigned*);
 typedef nvmlReturn_t (*fn_pl_set)(nvmlDevice_t, unsigned);
@@ -167,6 +168,7 @@ bool Nvml::Init(const Fake& fake) {
     p_fan = fake.fan;
     p_clock = fake.clock;
     p_temp = fake.temperature;
+    p_temp_threshold = fake.temp_threshold;
     g_refresh_wait_ms = fake.refresh_wait_ms;
     inited_ = start_locked();
     return inited_;
@@ -184,6 +186,7 @@ bool Nvml::Init() {
     p_byIndex    = (fn_byIndex)GetProcAddress(h, "nvmlDeviceGetHandleByIndex_v2");
     p_clock      = (fn_clock)GetProcAddress(h, "nvmlDeviceGetClockInfo");
     p_temp       = (fn_temp)GetProcAddress(h, "nvmlDeviceGetTemperature");
+    p_temp_threshold = (fn_temp)GetProcAddress(h, "nvmlDeviceGetTemperatureThreshold");
     p_power      = (fn_power)GetProcAddress(h, "nvmlDeviceGetPowerUsage");
     p_powerlimit = (fn_powerlimit)GetProcAddress(h, "nvmlDeviceGetPowerManagementLimit");
     p_fan        = (fn_fan)GetProcAddress(h, "nvmlDeviceGetFanSpeed");
@@ -307,6 +310,17 @@ std::optional<int> Nvml::PowerLimitPct(unsigned index) {
     if (!p_pl_default || p_pl_default(dev, &def) != NVML_SUCCESS || def == 0) return std::nullopt;
     if (!p_powerlimit || p_powerlimit(dev, &now) != NVML_SUCCESS) return std::nullopt;
     return static_cast<int>((static_cast<unsigned long long>(now) * 100 + def / 2) / def);
+}
+
+std::optional<int> Nvml::TempTarget(unsigned index) {
+    constexpr int kAcousticCurr = 5;   // NVML_TEMPERATURE_THRESHOLD_ACOUSTIC_CURR: the target in force now
+    nvmlDevice_t dev = nullptr;
+    unsigned c = 0;
+    if (!p_temp_threshold || !device(inited_, index, &dev) || p_temp_threshold(dev, kAcousticCurr, &c) != NVML_SUCCESS)
+        return std::nullopt;
+    // What can be a limit at all: the reference RTX 4070 lets it be set from 65 to 88 C.
+    if (c < 40 || c > 110) return std::nullopt;
+    return static_cast<int>(c);
 }
 
 std::string Nvml::GpuUuid(unsigned index) {

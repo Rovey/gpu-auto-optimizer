@@ -568,7 +568,8 @@ UndervoltOutcome run_undervolt(const OptimizeHooks& hooks, bool on_saved_tune, c
     // much as the limit is above the one the curve was drawn against: a curve
     // saved by a run on this card was drawn against that run's ceiling.
     const std::optional<StabilityResult>& reference = on_saved_tune ? how.measured : stock_run;
-    const int ceiling = reference ? temp_ceiling(obj.max_temp_c, reference->peak_temp_c) : obj.max_temp_c;
+    const int ceiling = reference ? temp_ceiling(obj.max_temp_c, reference->peak_temp_c, gpu.temp_target_c) : obj.max_temp_c;
+    if (gpu.temp_target_c > 0) log("the card's own temperature target: " + std::to_string(gpu.temp_target_c) + " C");
     const int drawn_against = at_start.profile ? profile_ceiling(*at_start.profile) : obj.max_temp_c;
     const FanCurve fan_curve =
         shifted_curve(active_fan_curve(at_start).value_or(default_curve(Preset::Undervolt)), ceiling - drawn_against);

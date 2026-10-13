@@ -53,8 +53,9 @@ int lowest_passing(int lo, int hi, int step, const std::function<bool(int)>& pas
     return hi - (n - good) * step;
 }
 
-int temp_ceiling(const int profile_limit_c, const int peak_at_stock_c) {
-    return std::max(profile_limit_c, std::min(peak_at_stock_c, kStockTempC));
+int temp_ceiling(const int profile_limit_c, const int peak_at_stock_c, const int card_target_c) {
+    const int top = card_target_c > 0 ? std::min(card_target_c, kStockTempC) : kStockTempC;
+    return std::max(profile_limit_c, std::min(peak_at_stock_c, top));
 }
 
 int apply_margin(int max, int step, float perf_push) {
