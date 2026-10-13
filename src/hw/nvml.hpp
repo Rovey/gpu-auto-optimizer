@@ -20,6 +20,7 @@ public:
         int (*clock)(void*, int, unsigned*) = nullptr;
         int (*temperature)(void*, int, unsigned*) = nullptr;
         unsigned refresh_wait_ms = 2000;   // between a card that is gone and the new session
+        int (*temp_threshold)(void*, int, unsigned*) = nullptr;
     };
     bool Init(const Fake& fake);
     bool Init(int (*init)(), int (*shutdown)()) { return Init(Fake{init, shutdown}); }
@@ -50,6 +51,11 @@ public:
     bool SetPowerLimitPct(unsigned index, int pct);
     // Current limit as a (rounded) percent of the default; nullopt on failure.
     std::optional<int> PowerLimitPct(unsigned index);
+    // The card's own temperature target in C (nvmlDeviceGetTemperatureThreshold,
+    // the "acoustic" threshold in force): from there the card slows itself
+    // down. Needs no administrator rights. Empty when the card or the driver
+    // does not report one, or reports a number that cannot be one.
+    std::optional<int> TempTarget(unsigned index);
     // Fans. NVML reports several per card; they are always set together.
     int FanCount(unsigned index);                                  // 0 when unknown or none
     std::optional<std::pair<int, int>> FanRangePct(unsigned index);   // {min, max} manual speed

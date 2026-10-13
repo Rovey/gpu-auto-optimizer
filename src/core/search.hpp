@@ -179,6 +179,18 @@ using Probe = std::function<StabilityResult(double seconds, int max_temp_c, doub
 // The measurement at stock that goes before a run, with the fans left to the
 // NVIDIA driver: the "before" of the result. It stops at kStockTempC.
 inline constexpr int kStockTempC = 85;
+// The temperature a run may reach on this card: the profile's limit, or what
+// the card reached in the measurement at stock when that is more, and never
+// more than the card's own temperature target, the point from which it slows
+// itself down (GpuControl::temp_target_c). A card that is above a profile's
+// limit before anything is changed is not made to pay for coolness it never
+// had, and is not driven to where it throttles either.
+// peak_at_stock_c: -1 when there is no reading. card_target_c: 0 or less
+// when the card reports none; kStockTempC is the top then, and also when the
+// card's target is above it: the measurement at stock stops at kStockTempC,
+// so nothing above that was seen. A target below the profile's own limit
+// does not lower that limit.
+int temp_ceiling(int profile_limit_c, int peak_at_stock_c, int card_target_c = 0);
 inline constexpr double kStockMinS = 30;   // stopped sooner than this, it measured nothing to compare a result with
 // Why no run follows this measurement; empty when one does. A card that
 // reached kStockTempC is not unstable: the driver's own fan control lets some

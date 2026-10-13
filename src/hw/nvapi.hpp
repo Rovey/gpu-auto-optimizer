@@ -1,4 +1,5 @@
 #pragma once
+#include <cstddef>
 #include "core/types.hpp"
 #include <optional>
 #include <string>
@@ -6,6 +7,14 @@
 #include <vector>
 
 namespace gao {
+
+// The default of the card's temperature target in C, from the answer to
+// NVAPI's thermal policy information (88 bytes on driver 617.42: the count of
+// policies in the low byte of the second word, then for the first policy its
+// minimum, default and maximum as numbers of 1/256 C in words 4 to 6). Empty
+// when the buffer holds no policy or numbers that cannot be a temperature
+// limit. Pure: no driver call.
+std::optional<int> parse_thermal_policy_default(const unsigned char* info, std::size_t size);
 
 // Clock offsets through NVAPI's PState20 V2 buffer. Every setter verifies by
 // reading the buffer back: NVAPI returns success for changes it does not
@@ -36,6 +45,10 @@ public:
     // is for the caller to read back (apply_flat_top does).
     bool WriteVfRawOffsets(unsigned gpu, const std::vector<VfOffset>& offsets);
 
+    // The default of the card's temperature target (parse_thermal_policy_default):
+    // what the target is when no tool has set it. A read; needs no
+    // administrator rights. Empty when the driver does not answer the call.
+    std::optional<int> TempTargetDefaultC(unsigned gpu);
     const std::string& Error() const { return error_; }
 
 private:

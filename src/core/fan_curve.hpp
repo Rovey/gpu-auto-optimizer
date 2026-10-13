@@ -50,6 +50,14 @@ const char* fan_preset_name(FanPreset preset);   // "silent", "normal", "cool", 
 std::optional<FanPreset> fan_preset_from_name(const std::string& name);
 // The profile's own fan preset: Quiet -> Silent, Best -> Normal, Cool -> Cool, Max -> Aggressive.
 FanCurve default_curve(Preset preset);
+// The curve for a temperature limit that is by_c higher than the one it was
+// drawn against: a card that reaches more than a profile's limit by itself at
+// stock runs that profile with a higher one (temp_ceiling in core/search.hpp),
+// and a curve that reaches 100 % at the old limit would hold the fans there
+// for good. The fan-stop threshold and the first point stay where they are,
+// so the card idles as before; every point above moves up by by_c, held below
+// the editor's 100 C in order. by_c <= 0: the curve as it is.
+FanCurve shifted_curve(const FanCurve& c, int by_c);
 bool valid(const FanCurve& c);
 // The curve's own value at temp_c: linear between points, rounded to the
 // nearest percent, the first/last point's value beyond the ends. No guard rails.

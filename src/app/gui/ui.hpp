@@ -53,7 +53,8 @@ struct UiState {
     std::optional<FanCurve> fan_curve;    // the active curve
     std::optional<FanCurve> fan_tested;   // what the tune was tested with
     int fan_min_pct = 0;
-    int fan_max_temp_c = 75;
+    int fan_max_temp_c = 75;      // the limit the fans run at 100 % from: the profile's, or this card's when it is higher
+    int fan_limit_raised_c = 0;   // by how much it is above the profile's own; the presets move up with it
     FanState fan_state;
     // While a run from this window is under way the curve driver above is
     // released and the run has the fans: what the card reports then (a

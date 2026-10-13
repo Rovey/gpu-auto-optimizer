@@ -1,5 +1,6 @@
 #include "core/config.hpp"
 #include "core/boot.hpp"
+#include "core/search.hpp"
 #include "nlohmann/json.hpp"
 #include <algorithm>
 
@@ -45,6 +46,7 @@ std::string to_json(const Config& c) {
             {"saved_at", p.saved_at},
         };
         if (p.fan_curve) j["profile"]["fan_curve"] = curve_json(*p.fan_curve);
+        if (p.temp_ceiling_c) j["profile"]["temp_ceiling_c"] = *p.temp_ceiling_c;
         if (p.undervolt)
             j["profile"]["undervolt"] = {{"volt_uv", p.undervolt->volt_uv},
                                          {"freq_khz", p.undervolt->freq_khz},
@@ -114,7 +116,13 @@ Config from_json(const std::string& text) {
     c.profile = Profile{*preset, *power, *core, *mem, *driver, *gpu, *saved_at};
     c.profile->undervolt = undervolt;
     if (const auto it = pj->find("fan_curve"); it != pj->end()) c.profile->fan_curve = curve_from(*it);
+    c.profile->temp_ceiling_c = num("temp_ceiling_c");   // one that cannot be read: the preset's own limit, the lower one
     return c;
+}
+
+int profile_ceiling(const Profile& p) {
+    const int limit = objectives_for(p.preset).max_temp_c;
+    return p.temp_ceiling_c ? std::clamp(*p.temp_ceiling_c, limit, std::max(limit, kStockTempC)) : limit;
 }
 
 std::optional<FanCurve> active_fan_curve(const Config& c) {

@@ -1,4 +1,7 @@
 #include "core/stability.hpp"
+#include <string>
+#include <cstdio>
+#include <cmath>
 #include <algorithm>
 #include <deque>
 
@@ -80,6 +83,31 @@ const char* verdict_name(Verdict v) {
         case Verdict::Stalled: return "STALLED";
     }
     return "UNKNOWN";
+}
+
+std::string trace_line(const double t_s, const Telemetry& tel) {
+    const int t = static_cast<int>(t_s);
+    char when[24];
+    std::snprintf(when, sizeof(when), "    %d:%02d  ", t / 60, t % 60);
+    return when + reading(tel.core_mhz, " MHz") + "  " + reading(tel.temp_c, " C") + "  " + reading(tel.power_w, " W") + "  fan " +
+           reading(tel.fan_pct, " %");
+}
+
+bool TraceClock::due(const double t_s) {
+    if (t_s < next_) return false;
+    // The next one at the next whole interval after this reading, wherever this one fell.
+    next_ = (std::floor(t_s / kTraceEveryS) + 1) * kTraceEveryS;
+    return true;
+}
+
+std::string temp_target_text(const int target_c, const int default_c) {
+    if (target_c <= 0) return "  the card reports no temperature target of its own";
+    const std::string target = std::to_string(target_c) + " C";
+    if (default_c <= 0) return "  the card's own temperature target: " + target;
+    if (target_c == default_c) return "  the card's own temperature target: " + target + " (its default)";
+    return "  the card's own temperature target: " + target + ", NOT its default of " + std::to_string(default_c) +
+           " C: another tool has set it (MSI Afterburner's temp limit does). The card slows itself down from " + target +
+           " on, so this is not the card at stock";
 }
 
 }

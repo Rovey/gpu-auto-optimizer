@@ -490,6 +490,13 @@ static int status() {
     }
     if (const auto fan = nvml.ReadFan(kGpu))
         std::printf("fans:       %s\n", fan->manual ? ("manual " + std::to_string(fan->target_pct) + " %").c_str() : "driver control");
+    if (const auto target = nvml.TempTarget(kGpu)) {
+        const auto usual = nvapi.TempTargetDefaultC(kGpu);
+        const std::string note = !usual ? std::string() : *usual == *target ? ", its default" : ", NOT its default of " + std::to_string(*usual) + " C";
+        std::printf("temp target: %d C (the card's own: from there it slows itself down%s)\n", *target, note.c_str());
+    } else {
+        std::printf("temp target: not reported by this card\n");
+    }
     const auto curve = gao::active_fan_curve(cfg);
     std::printf("fan curve:  %s", cfg.fan_control && curve ? "on" : "off");
     if (curve) {

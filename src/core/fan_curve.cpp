@@ -41,6 +41,14 @@ FanCurve default_curve(const Preset preset) {
     }
 }
 
+FanCurve shifted_curve(const FanCurve& c, const int by_c) {
+    if (by_c <= 0) return c;
+    FanCurve moved = c;
+    const int n = static_cast<int>(moved.points.size());
+    for (int i = 1; i < n; ++i) moved.points[i].temp_c = std::min(c.points[i].temp_c + by_c, 100 - (n - 1 - i));
+    return moved;
+}
+
 bool valid(const FanCurve& c) {
     if (c.points.size() < 2 || c.points.size() > 6) return false;
     if (c.stop_below_c && (*c.stop_below_c < 20 || *c.stop_below_c > 90)) return false;

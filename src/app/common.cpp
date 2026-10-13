@@ -240,16 +240,38 @@ StockOutcome measure_stock(const OptimizeHooks& hooks) {
     const GpuControl& gpu = hw.control();
     if (!gpu.reset_to_stock || !gpu.reset_to_stock()) return fail("could not set the card to stock");
     const KeepAwake keep_awake;
+    auto log = [&](const std::string& m) { if (hooks.log) hooks.log(m); };
+    // In every run's log, whatever the profile: a target that another tool
+    // left on the card makes this a measurement of something else than stock.
+    log(temp_target_text(gpu.temp_target_c, gpu.temp_target_default_c));
     if (hooks.measuring) hooks.measuring("Measuring the card at stock", kLongRunS);
+    // What the card did meanwhile, a line every ten seconds: the readings the
+    // measurement takes anyway, written down. Nothing of the measurement changes.
+    TraceClock trace;
+    const auto began = std::chrono::steady_clock::now();
+    std::optional<std::pair<double, Telemetry>> unlogged;   // the latest reading that got no line
     const bool crashed = !guarded([&] {
-        out.result = run_stability([&] { return load->Batch(); }, [&] { return gpu.read(); }, kLongRunS, kStockTempC, hooks.aborted);
+        out.result = run_stability(
+            [&] { return load->Batch(); },
+            [&] {
+                const Telemetry t = gpu.read();
+                const double at = std::chrono::duration<double>(std::chrono::steady_clock::now() - began).count();
+                if (t.ok && trace.due(at)) {
+                    log(trace_line(at, t));
+                    unlogged.reset();
+                } else if (t.ok) {
+                    unlogged = std::make_pair(at, t);
+                }
+                return t;
+            },
+            kLongRunS, kStockTempC, hooks.aborted);
     });
     if (hooks.measuring) hooks.measuring("", 0);
     if (crashed) {
         (void)load.release();   // as in run_optimize: a load that faulted is left alone
         return fail("access violation while the card was measured at stock");
     }
-    auto log = [&](const std::string& m) { if (hooks.log) hooks.log(m); };
+    if (unlogged) log(trace_line(unlogged->first, unlogged->second));   // how it ended, when that fell between two lines
     log(stock_line(out.result));
     out.error = stock_refusal(out.result);
     if (!out.error.empty() || out.result.verdict != Verdict::TooHot) return out;
@@ -560,8 +582,23 @@ UndervoltOutcome run_undervolt(const OptimizeHooks& hooks, bool on_saved_tune, c
     // and every probe would end TOO HOT.
     const Objectives obj = objectives_for(Preset::Undervolt);
     const Config at_start = load_config();
-    const FanCurve fan_curve = active_fan_curve(at_start).value_or(default_curve(Preset::Undervolt));
-    FanDriver fans(gpu, fan_curve, obj.max_temp_c, fan_min_for(at_start, hw.GpuUuid(), gpu.fan_min_pct));
+    // On a card that reached more than the profile's limit in the reference
+    // the search runs with a higher one (temp_ceiling), and so do the fans:
+    // with "100 % from 75 C" they would hold a card that reaches 86 C by
+    // itself at 74 C and be far louder than at stock (93 % against 66 % on
+    // the tester's RTX 3080 Ti). The curve moves up with the limit, by as
+    // much as the limit is above the one the curve was drawn against: a curve
+    // saved by a run on this card was drawn against that run's ceiling.
+    const std::optional<StabilityResult>& reference = on_saved_tune ? how.measured : stock_run;
+    const int ceiling = reference ? temp_ceiling(obj.max_temp_c, reference->peak_temp_c, gpu.temp_target_c) : obj.max_temp_c;
+    const int drawn_against = at_start.profile ? profile_ceiling(*at_start.profile) : obj.max_temp_c;
+    const FanCurve fan_curve =
+        shifted_curve(active_fan_curve(at_start).value_or(default_curve(Preset::Undervolt)), ceiling - drawn_against);
+    if (ceiling > obj.max_temp_c)
+        log("fans: on this card the limit is " + std::to_string(ceiling) + " C, not the profile's " + std::to_string(obj.max_temp_c) +
+            " C" + (ceiling > drawn_against ? "; the fan curve moves up with it by " + std::to_string(ceiling - drawn_against) + " C"
+                                            : std::string("; the fan curve was drawn for it")));
+    FanDriver fans(gpu, fan_curve, ceiling, fan_min_for(at_start, hw.GpuUuid(), gpu.fan_min_pct));
     const FanRelease fan_release{fans, hw, gpu, hooks};
     if (!gpu.set_fan_pct) log("fans: not controllable on this card; the driver keeps them");
 
@@ -660,8 +697,19 @@ UndervoltOutcome run_undervolt(const OptimizeHooks& hooks, bool on_saved_tune, c
         p.saved_at = now_text();
         if (how.save_as) p.preset = *how.save_as;
     }
+    // The limit the tune was found with goes with it: the fans, the Fan page
+    // and a later test of the tune use it (profile_ceiling).
+    if (ceiling > objectives_for(p.preset).max_temp_c) p.temp_ceiling_c = ceiling;
+    else p.temp_ceiling_c.reset();
     // Only a curve that actually drove the fans counts as tested.
     if (gpu.set_fan_pct && fans.state().mode != FanMode::Failed && fans.state().mode != FanMode::Foreign) {
+        if (ceiling > drawn_against) {
+            // The curve moved for this run: it is the one that was tested, and
+            // the one drawn against the limit that is saved with it. An edited
+            // curve went into it and does not stay next to it.
+            p.fan_curve = fan_curve;
+            cfg.fan_curve.reset();
+        }
         if (!p.fan_curve) p.fan_curve = fan_curve;
         cfg.fan_control = true;
     }
@@ -901,7 +949,7 @@ FanStepOutcome fan_step(const OptimizeHooks& hooks, int start_pct) {
     Config cfg = load_config();
     if (!cfg.profile) return fail("there is no saved tune to tune the fans for");
     const Profile profile = *cfg.profile;
-    const int limit = objectives_for(profile.preset).max_temp_c;
+    const int limit = profile_ceiling(profile);
     const int min_pct = fan_min_for(cfg, hw.GpuUuid(), gpu.fan_min_pct);
     // Every way out: the fans go back to the driver. The app's own fan curve
     // driver takes them from there.
@@ -1002,7 +1050,7 @@ RetestOutcome run_retest(const OptimizeHooks& hooks) {
     out.driver_was = cfg.profile->driver;
     out.driver = hw.DriverVersion();
     const std::string gpu_id = hw.GpuUuid();
-    const int limit = objectives_for(cfg.profile->preset).max_temp_c;
+    const int limit = profile_ceiling(*cfg.profile);
     // Every way out: the fans go back to the driver. The app's own fan curve
     // driver takes them from there.
     struct FansBack {

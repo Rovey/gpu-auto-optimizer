@@ -191,3 +191,53 @@ TEST_CASE("the fan speed a run ended on is reported next to its peak temperature
     // A card that does not report its fans.
     CHECK(run_stability([] { return good(); }, [] { return tel(60); }, 0.5, 85).end_fan_pct == -1);
 }
+
+#include <vector>
+TEST_CASE("a line of a measurement's trace says when, and what the card did then") {
+    Telemetry t;
+    t.core_mhz = 1716;
+    t.temp_c = 78;
+    t.power_w = 285;
+    t.fan_pct = 61;
+    t.ok = true;
+    CHECK(trace_line(10.2, t) == "    0:10  1716 MHz  78 C  285 W  fan 61 %");
+    CHECK(trace_line(0.3, t) == "    0:00  1716 MHz  78 C  285 W  fan 61 %");
+    CHECK(trace_line(163.9, t) == "    2:43  1716 MHz  78 C  285 W  fan 61 %");
+    // What the driver does not report is said, not shown as a zero.
+    t.fan_pct = -1;
+    t.power_w = -1;
+    CHECK(trace_line(300, t) == "    5:00  1716 MHz  78 C  n/a  fan n/a");
+}
+
+TEST_CASE("the trace has a line at the first reading and one every ten seconds after it") {
+    TraceClock clock;
+    std::vector<double> lines;
+    // Readings come four times a second or so, never exactly on the ten seconds.
+    for (double t = 0.3; t < 45; t += 0.27)
+        if (clock.due(t)) lines.push_back(t);
+    REQUIRE(lines.size() == 5);
+    CHECK(lines[0] == doctest::Approx(0.3));
+    for (std::size_t i = 1; i < lines.size(); ++i) {
+        CHECK(lines[i] >= 10.0 * static_cast<double>(i));
+        CHECK(lines[i] < 10.0 * static_cast<double>(i) + 0.3);
+    }
+    // A gap in the readings (a slow batch) gives one line when they come back, not one for every ten seconds missed.
+    TraceClock gap;
+    CHECK(gap.due(0.1));
+    CHECK_FALSE(gap.due(9.9));
+    CHECK(gap.due(47.0));
+    CHECK_FALSE(gap.due(49.0));
+    CHECK(gap.due(50.0));
+}
+
+TEST_CASE("the line about the card's own temperature target says when it is not the default") {
+    CHECK(temp_target_text(84, 84) == "  the card's own temperature target: 84 C (its default)");
+    // MSI Afterburner's temp limit, left on the card after the tool was closed.
+    CHECK(temp_target_text(77, 83) == "  the card's own temperature target: 77 C, NOT its default of 83 C: another tool has set it "
+                                      "(MSI Afterburner's temp limit does). The card slows itself down from 77 C on, so this is not the card at stock");
+    CHECK(temp_target_text(88, 84).find("88 C, NOT its default of 84 C") != std::string::npos);
+    // The default is not always to be had.
+    CHECK(temp_target_text(83, 0) == "  the card's own temperature target: 83 C");
+    CHECK(temp_target_text(0, 0) == "  the card reports no temperature target of its own");
+    CHECK(temp_target_text(0, 84) == "  the card reports no temperature target of its own");
+}

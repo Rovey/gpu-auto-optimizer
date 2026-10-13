@@ -87,6 +87,12 @@ struct GpuControl {
     std::function<bool()> set_fan_auto;                    // every fan back to the driver, verified by the policy
     std::function<std::optional<FanReading>()> read_fan;   // nullopt when a read fails
     int fan_min_pct = 0;                                   // the card's minimum manual speed
+    // The card's own temperature target: from here it slows itself down
+    // instead of running its fans faster. Another tool can have set it (it is
+    // MSI Afterburner's "temp limit"). 0: the card reports none.
+    int temp_target_c = 0;
+    // What that target is when nothing has set it. 0: not known.
+    int temp_target_default_c = 0;
     // The voltage/frequency curve. Empty: the card or driver does not offer
     // it. A write is not verified here; core/vf_curve.hpp reads back and
     // corrects, because what a raw offset does is the card's to say.

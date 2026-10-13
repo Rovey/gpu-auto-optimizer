@@ -190,3 +190,64 @@ TEST_CASE("an undervolt that cannot be read whole is no profile, never a profile
     // The undervolt preset without its curve would apply as plain stock and look applied.
     CHECK_FALSE(from_json(head + "}}").profile);
 }
+
+#include "core/objectives.hpp"
+#include "core/search.hpp"
+#include <regex>
+TEST_CASE("a profile's temperature ceiling survives a round-trip, and is absent when there is none") {
+    Config c;
+    c.profile = sample();
+    CHECK(to_json(c).find("temp_ceiling_c") == std::string::npos);   // as every profile was written before
+    CHECK_FALSE(from_json(to_json(c)).profile->temp_ceiling_c);
+    c.profile->temp_ceiling_c = 85;
+    const Config back = from_json(to_json(c));
+    REQUIRE(back.profile);
+    CHECK(back.profile->temp_ceiling_c == 85);
+}
+
+TEST_CASE("a profile's ceiling is its own limit unless the card reached more at stock") {
+    Profile p = sample();
+    p.preset = Preset::Undervolt;
+    p.undervolt = UndervoltTune{781000, 1710000, 225000};
+    CHECK(profile_ceiling(p) == objectives_for(Preset::Undervolt).max_temp_c);
+    p.temp_ceiling_c = 85;
+    CHECK(profile_ceiling(p) == 85);
+    // Never below the profile's own limit, and never above what nothing goes beyond.
+    p.temp_ceiling_c = 60;
+    CHECK(profile_ceiling(p) == objectives_for(Preset::Undervolt).max_temp_c);
+    p.temp_ceiling_c = 120;
+    CHECK(profile_ceiling(p) == 85);
+}
+
+TEST_CASE("a ceiling that is no number is ignored, and the profile stays") {
+    Config c;
+    c.profile = sample();
+    c.profile->temp_ceiling_c = 85;
+    const std::string text = std::regex_replace(to_json(c), std::regex("\"temp_ceiling_c\":\\s*85"), "\"temp_ceiling_c\": \"hot\"");
+    REQUIRE(text.find("hot") != std::string::npos);
+    const Config back = from_json(text);
+    REQUIRE(back.profile);
+    CHECK_FALSE(back.profile->temp_ceiling_c);
+    CHECK(profile_ceiling(*back.profile) == objectives_for(back.profile->preset).max_temp_c);
+}
+
+TEST_CASE("a curve that was saved with its ceiling is not moved a second time") {
+    // What the undervolt run does on a card that reaches 86 C at stock: the
+    // first run moves Normal up by 10 C and saves it with the ceiling of 85 C.
+    // The run after it finds that curve in use, drawn against 85 already.
+    Profile p = sample();
+    p.preset = Preset::Undervolt;
+    p.undervolt = UndervoltTune{781000, 1710000, 225000};
+    const int limit = objectives_for(p.preset).max_temp_c, ceiling = temp_ceiling(limit, 86);
+    const FanCurve first = shifted_curve(default_curve(Preset::Undervolt), ceiling - profile_ceiling(p));
+    CHECK(first == FanCurve{50, {{50, 35}, {70, 45}, {80, 65}, {85, 100}}});
+    p.fan_curve = first;
+    p.temp_ceiling_c = ceiling;
+    CHECK(shifted_curve(*p.fan_curve, ceiling - profile_ceiling(p)) == first);
+    // On a card that stays under the profile's limit nothing moves, and nothing is saved with it.
+    Profile cool = sample();
+    cool.preset = Preset::Undervolt;
+    CHECK(temp_ceiling(limit, 67) == limit);
+    CHECK(shifted_curve(default_curve(Preset::Undervolt), temp_ceiling(limit, 67) - profile_ceiling(cool)) == default_curve(Preset::Undervolt));
+}
+

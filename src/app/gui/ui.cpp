@@ -540,10 +540,11 @@ std::optional<FanPreset> fan_preset_buttons(const char* id, const std::optional<
     return clicked;
 }
 
-// The preset whose curve equals c, if any.
-std::optional<FanPreset> preset_of(const FanCurve& c) {
+// The preset whose curve equals c, if any. raised_c: by how much this card's
+// limit is above the profile's; the presets are offered moved up by it.
+std::optional<FanPreset> preset_of(const FanCurve& c, int raised_c = 0) {
     for (const FanPreset p : kFanPresets)
-        if (fan_preset_curve(p) == c) return p;
+        if (shifted_curve(fan_preset_curve(p), raised_c) == c) return p;
     return std::nullopt;
 }
 
@@ -738,9 +739,9 @@ void fan_page(UiState& s, const UiActions& act) {
     ImGui::AlignTextToFramePadding();
     ImGui::TextUnformatted("Presets");
     ImGui::SameLine(0, em());
-    if (const auto p = fan_preset_buttons("fan", preset_of(edit))) {
+    if (const auto p = fan_preset_buttons("fan", preset_of(edit, s.fan_limit_raised_c))) {
         selected = -1;
-        edit = fan_preset_curve(*p);
+        edit = shifted_curve(fan_preset_curve(*p), s.fan_limit_raised_c);
         act.set_fan_curve(edit);
     }
 
@@ -752,6 +753,10 @@ void fan_page(UiState& s, const UiActions& act) {
                   "again only once the card is 8 \xC2\xB0""C cooler and idle for a minute (longer if they had to restart soon "
                   "after stopping); then the NVIDIA driver has them. From the red line (the profile's temperature limit) the fans "
                   "always run at 100 %.");
+    if (s.fan_limit_raised_c > 0)
+        wrapped(kDim, "On this card the limit is " + std::to_string(s.fan_max_temp_c) + " \xC2\xB0""C, not the profile's " +
+                      std::to_string(s.fan_max_temp_c - s.fan_limit_raised_c) + " \xC2\xB0""C: it reached that by itself at stock. "
+                      "The presets are moved up by the difference.");
     end_card();
 }
 

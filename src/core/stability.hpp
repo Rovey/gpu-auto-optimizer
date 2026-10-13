@@ -1,6 +1,7 @@
 #pragma once
 #include "core/types.hpp"
 #include <functional>
+#include <string>
 
 namespace gao {
 
@@ -36,6 +37,31 @@ struct StabilityResult {
 // the window alone and is judged on its own: if it computed little, the run
 // ends STALLED.
 inline constexpr double kStallWindowS = 3.0;
+
+// The trace of a long measurement, for the log: what the card did while it
+// ran, a line at the first reading and one every kTraceEveryS seconds after
+// it. The summary of a run gives one clock and one temperature; whether the
+// clock fell as the card warmed up is in between.
+inline constexpr double kTraceEveryS = 10;
+// "    0:10  1716 MHz  78 C  285 W  fan 61 %": the time since the measurement
+// began, then the core clock, the temperature, the power and the fan speed.
+std::string trace_line(double t_s, const Telemetry& tel);
+// True when a line is due for a reading taken t_s seconds into the
+// measurement. A gap in the readings gives one line, not one per interval missed.
+class TraceClock {
+public:
+    bool due(double t_s);
+
+private:
+    double next_ = 0;
+};
+
+// The log line about the card's own temperature target, the point from which
+// it slows itself down (GpuControl). target_c, default_c: 0 or less when not
+// known. One that is not the default was set by another tool and stays on the
+// card when that tool is closed: the card is not at stock then, and the line
+// says so. No full stop at the end.
+std::string temp_target_text(int target_c, int default_c);
 
 // Runs batches until `seconds` of batch time are covered or something fails,
 // whichever comes first. Always runs at least one batch. Stops at the first

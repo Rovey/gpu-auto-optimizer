@@ -272,7 +272,7 @@ Yes, with the **Undervolt** profile. It does not lock a voltage (that froze the 
 <details>
 <summary><b>Where does it keep its data?</b></summary>
 
-In `%ProgramData%\GpuAutoOptimizer`: `gao.json` (the saved profile), `journal.jsonl` (the crash journal), `boot.log`, and `run.log` (every line a run showed, written as it happened, so that it is still there after a crash; send it along with a problem report). Users can read the folder; only administrators can write it, because the logon task runs with administrator rights.
+In `%ProgramData%\GpuAutoOptimizer`: `gao.json` (the saved profile), `journal.jsonl` (the crash journal), `boot.log`, and `run.log` (every line a run showed, written as it happened, so that it is still there after a crash; send it along with a problem report). A run begins by measuring the card at stock, and that part of the log also says what the card did meanwhile: its own temperature target, and a line every ten seconds with the clock, the temperature, the power and the fan speed. Users can read the folder; only administrators can write it, because the logon task runs with administrator rights.
 </details>
 
 ## Building from source
