@@ -91,6 +91,16 @@ struct OptimizeHooks {
 // it starts: a look of a few seconds. Changes nothing; needs no elevation.
 std::vector<BusyProgram> busy_now();
 
+// What a stopped run puts back. tune_before_run, before the run touches the
+// card: the saved tune when that is what the card holds now (nullopt: stock,
+// another tool's settings, or nothing saved). put_back_after_stop, after a run
+// that was stopped and kept nothing: that tune on the card again, unless it
+// still is, so Stop leaves the card as the run found it and the tray's
+// watchdog does not take the stock the run left for a driver reset. True when
+// the card holds `before` on return; false when there was none or it failed.
+std::optional<Profile> tune_before_run();
+bool put_back_after_stop(const std::optional<Profile>& before, const OptimizeHooks& hooks);
+
 struct OptimizeOutcome {
     bool ran = false;          // false: stopped before tuning; `error` says why
     std::string error;

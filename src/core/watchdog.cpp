@@ -20,6 +20,18 @@ bool tune_applied(const Profile& p, const AppliedState& seen, const std::optiona
     return core_is_ours(p, seen, curve) && seen.mem_mhz == p.mem_mhz && power_is(seen, p.power_pct);
 }
 
+bool tune_on_card(const GpuControl& gpu, const Profile& p) {
+    const auto seen = gpu.read_applied ? gpu.read_applied() : std::nullopt;
+    if (!seen) return false;
+    std::optional<CurveState> curve;
+    if (p.undervolt) {
+        const auto points = gpu.read_vf_curve ? gpu.read_vf_curve() : std::nullopt;
+        if (!points) return false;
+        curve = curve_state(*points, p.undervolt->volt_uv, p.core_mhz * 1000);
+    }
+    return tune_applied(p, *seen, curve);
+}
+
 int Watchdog::recent(Clock::time_point now) {
     while (!reapplies_.empty() && now - reapplies_.front() >= std::chrono::hours(1)) reapplies_.pop_front();
     return static_cast<int>(reapplies_.size());

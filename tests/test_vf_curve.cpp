@@ -1,4 +1,5 @@
 #include "core/vf_curve.hpp"
+#include "core/watchdog.hpp"
 #include <doctest/doctest.h>
 
 #include <algorithm>
@@ -405,6 +406,36 @@ TEST_CASE("an offset that appears on a point below the anchor ends the write") {
     const auto r = apply_flat_top(gpu, 8, 2700000);
     CHECK_FALSE(r.ok);
     CHECK(r.why.find("a point below the anchor got an offset (slot 5") == 0);
+}
+
+TEST_CASE("a run knows whether the saved tune is on the card before it touches it") {
+    FakeCurve card;
+    GpuControl gpu = card.gpu();
+    AppliedState applied{135, 1050, 105};
+    gpu.read_applied = [&]() -> std::optional<AppliedState> { return applied; };
+    Profile overclock;
+    overclock.power_pct = 105;
+    overclock.core_mhz = 135;
+    overclock.mem_mhz = 1050;
+    CHECK(tune_on_card(gpu, overclock));
+    applied = {0, 0, 100};   // at stock: a run that is stopped leaves it there
+    CHECK_FALSE(tune_on_card(gpu, overclock));
+    applied = {200, 500, 110};   // another tool's settings are not the saved tune either
+    CHECK_FALSE(tune_on_card(gpu, overclock));
+    gpu.read_applied = [] { return std::optional<AppliedState>(); };   // a read that fails
+    CHECK_FALSE(tune_on_card(gpu, overclock));
+
+    // An undervolt is judged by its flat top on the curve.
+    gpu.read_applied = [&]() -> std::optional<AppliedState> { return applied; };
+    applied = {0, 0, 100};
+    Profile undervolt;
+    undervolt.preset = Preset::Undervolt;
+    undervolt.undervolt = UndervoltTune{card.volt_uv[6], 2300000, 0};
+    CHECK_FALSE(tune_on_card(gpu, undervolt));   // the stock curve
+    REQUIRE(apply_flat_top(gpu, 6, 2300000).ok);
+    CHECK(tune_on_card(gpu, undervolt));
+    card.read_ok = false;   // a curve that cannot be read
+    CHECK_FALSE(tune_on_card(gpu, undervolt));
 }
 
 TEST_CASE("curve_state tells a flat top at the saved voltage from stock and from anything else") {

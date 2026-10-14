@@ -163,6 +163,8 @@ bool GuardedGpu::Init(std::string* why) {
     // that is gone then answers with its failure value.
     const GpuControl& in = inner_;
     outer_.fan_min_pct = in.fan_min_pct;
+    outer_.temp_target_c = in.temp_target_c;
+    outer_.temp_target_default_c = in.temp_target_default_c;
     if (in.read)
         outer_.read = [this] { return Call(Telemetry{}, [this] { return inner_.read ? inner_.read() : Telemetry{}; }); };
     if (in.set_core_offset)

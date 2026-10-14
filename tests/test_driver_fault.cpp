@@ -2,6 +2,7 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include "app/guarded_gpu.hpp"
+#include "hw/nvapi.hpp"
 #include "hw/nvml.hpp"
 #include <memory>
 #include <string>
@@ -137,6 +138,21 @@ TEST_CASE("a card that reports no temperature target gives none") {
     gao::Nvml old;
     REQUIRE(old.Init(bare));
     CHECK_FALSE(old.TempTarget(0));
+}
+
+// On the real card, where there is one: a run sees the card through GuardedGpu,
+// which builds its control anew, and the target has to come along. Without an
+// NVIDIA card (CI) there is nothing to compare and the test passes as it is.
+TEST_CASE("a run sees the card's temperature target") {
+    gao::app::GuardedGpu hw(0);
+    std::string why;
+    if (!hw.Init(&why)) return;
+    gao::Nvml nvml;
+    gao::Nvapi nvapi;
+    REQUIRE(nvml.Init());
+    REQUIRE(nvapi.Init());
+    CHECK(hw.control().temp_target_c == nvml.TempTarget(0).value_or(0));
+    CHECK(hw.control().temp_target_default_c == nvapi.TempTargetDefaultC(0).value_or(0));
 }
 
 // nvml.dll as driver 617.42 behaves across a driver reset: the readings come
