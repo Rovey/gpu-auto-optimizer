@@ -4,7 +4,7 @@
 #define GAO_VERSION_MAJOR 0
 #define GAO_VERSION_MINOR 4
 #define GAO_VERSION_PATCH 8
-#define GAO_VERSION_STRING "0.4.8-rc3"
+#define GAO_VERSION_STRING "0.4.8-rc4"
 
 #ifndef RC_INVOKED
 #include <string_view>
