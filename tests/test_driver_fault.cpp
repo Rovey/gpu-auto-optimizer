@@ -1,4 +1,4 @@
-﻿#include "doctest/doctest.h"
+#include "doctest/doctest.h"
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include "app/guarded_gpu.hpp"
