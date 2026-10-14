@@ -806,8 +806,8 @@ void choose(UiState& s, const UiActions& act) {
                                               : undervolt ? "  About 13 minutes of full GPU load."
                                                           : "  About 15 minutes of full GPU load."))
                                .c_str());
-    dim("Abort stops at any time: the card goes back to stock, or to your saved tune when that was on it. A setting that "
-        "crashes the machine is never tried again.");
+    dim("Abort stops at any time: the card goes back to stock, or to your saved tune when that was on it.");
+    dim("A setting that crashes the machine is never tried again.");
     dim("Close games and other programs that use the graphics card first: they change what the run measures.");
     ImGui::EndGroup();
     // One click is all of it: the result is kept at every logon without
