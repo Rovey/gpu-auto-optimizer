@@ -9,6 +9,7 @@
 #include "core/fan_tune.hpp"
 #include "core/stability.hpp"
 #include "core/task_xml.hpp"
+#include "core/watchdog.hpp"
 #include "hw/app_files.hpp"
 #include "hw/boot_task.hpp"
 #include "hw/gpu_control.hpp"
@@ -330,6 +331,37 @@ struct FanRelease {
 }
 
 std::vector<BusyProgram> busy_now() { return busy_programs(gpu_use(kBusyLookS)); }
+
+std::optional<Profile> tune_before_run() {
+    const Config cfg = load_config();
+    if (!cfg.profile) return std::nullopt;
+    GuardedGpu hw(kGpu);
+    std::string why;
+    if (!hw.Init(&why) || !tune_on_card(hw.control(), *cfg.profile)) return std::nullopt;
+    return cfg.profile;
+}
+
+bool put_back_after_stop(const std::optional<Profile>& before, const OptimizeHooks& hooks) {
+    if (!before) return false;
+    auto log = [&](const std::string& m) { if (hooks.log) hooks.log(m); };
+    const TuningLock lock;   // the watchdog keeps out of it meanwhile
+    GuardedGpu hw(kGpu);
+    std::string why;
+    if (!hw.Init(&why)) {
+        log("stopped: the tune that was on the card could not be put back (" + why + ")");
+        return false;
+    }
+    const GpuControl& gpu = hw.control();
+    if (tune_on_card(gpu, *before)) return true;   // stopped before the card was touched
+    bool clean = false;
+    if (!apply_profile(gpu, *before, &why, &clean)) {
+        log("stopped: the tune that was on the card could not be put back (" + why + ") -- " +
+            (clean ? "card at stock" : "reset to stock FAILED, run `gao --reset`"));
+        return false;
+    }
+    log("stopped: the tune that was on the card before the run is back: " + profile_text(*before));
+    return true;
+}
 
 OptimizeOutcome run_optimize(Preset preset, const OptimizeHooks& hooks, const std::optional<FanCurve>& fan_curve,
                              const std::optional<StabilityResult>& known_stock) {

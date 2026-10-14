@@ -239,7 +239,7 @@ static const gao::GpuControl* g_gpu = nullptr;   // set while --optimize runs
 static BOOL WINAPI OnConsoleCtrl(DWORD type) {
     if (type == CTRL_C_EVENT || type == CTRL_BREAK_EVENT) {
         g_abort = true;
-        std::printf("\nabort requested -- stopping the probe and restoring stock\n");
+        std::printf("\nabort requested -- stopping the probe; the card goes back to stock, or to the tune it had before the run\n");
         return TRUE;
     }
     if (type == CTRL_CLOSE_EVENT || type == CTRL_LOGOFF_EVENT || type == CTRL_SHUTDOWN_EVENT) {
@@ -607,6 +607,20 @@ static int stress_recreate() {
     return first_ok && batch_ok && second_ok ? 0 : 1;
 }
 
+// A run Ctrl+C stopped, with nothing of it kept (exit 1), puts back the tune
+// it found on the card: a tray app's watchdog would otherwise take the stock
+// it left for a driver reset. The window's runs do the same (gui/worker.cpp).
+template <class Run> static int putting_back(Run run) {
+    const auto before = gao::app::tune_before_run();
+    const int code = run();
+    if (g_abort && code == 1) {
+        gao::app::OptimizeHooks hooks;
+        hooks.log = gao::app::logged([](const std::string& msg) { std::printf("  %s\n", msg.c_str()); });
+        gao::app::put_back_after_stop(before, hooks);
+    }
+    return code;
+}
+
 int main(int argc, char** argv) {
     // Before anything loads a DLL: System32 only (the delay-loaded
     // d3dcompiler_47.dll included), never the exe's own folder.
@@ -675,7 +689,7 @@ int main(int argc, char** argv) {
     }
     if (argc > 1 && std::strcmp(argv[1], "--stress-recreate") == 0) return stress_recreate();
     if (argc > 1 && std::strcmp(argv[1], "--apply") == 0) return apply();
-    if (argc > 1 && std::strcmp(argv[1], "--retest") == 0) return retest();
+    if (argc > 1 && std::strcmp(argv[1], "--retest") == 0) return putting_back(retest);
     if (argc > 2 && std::strcmp(argv[1], "--boot") == 0) {
         if (std::strcmp(argv[2], "on") == 0) return boot(true);
         if (std::strcmp(argv[2], "off") == 0) return boot(false);
@@ -692,7 +706,7 @@ int main(int argc, char** argv) {
     if (argc > 1 && std::strcmp(argv[1], "--undervolt") == 0) {
         const bool on_overclock = argc > 2 && std::strcmp(argv[2], "--on-overclock") == 0;
         if (argc > 2 && !on_overclock) { std::printf("--undervolt accepts --on-overclock, got '%s'\n", argv[2]); return 1; }
-        return undervolt(on_overclock);
+        return putting_back([on_overclock] { return undervolt(on_overclock); });
     }
     if (argc > 1 && std::strcmp(argv[1], "--curve-flatten") == 0) {
         int mv = 0, mhz = 0, drop = gao::kVfTailDropKhz / 1000, core = 0;
@@ -711,7 +725,7 @@ int main(int argc, char** argv) {
         gao::Preset preset = gao::Preset::BestOfMyGpu;
         if (argc > 2) {
             const std::string p = argv[2];
-            if (p == "all") return all_in_one();
+            if (p == "all") return putting_back(all_in_one);
             if (p == "best") preset = gao::Preset::BestOfMyGpu;
             else if (p == "quiet") preset = gao::Preset::Quiet;
             else if (p == "cool") preset = gao::Preset::CoolAndEfficient;
@@ -724,7 +738,7 @@ int main(int argc, char** argv) {
             if (!fp) { std::printf("--optimize <profile> accepts --fan-curve silent|normal|cool|aggressive\n"); return 1; }
             fan_curve = gao::fan_preset_curve(*fp);
         }
-        return optimize(preset, fan_curve);
+        return putting_back([&] { return optimize(preset, fan_curve); });
     }
     std::printf("usage: gao [--version | --probe | --set-core <mhz> | --set-mem <mhz> | --reset\n"
                 "            | --busy (the other programs that use the card now, as a run looks for them; changes nothing)\n"

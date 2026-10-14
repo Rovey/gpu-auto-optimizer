@@ -23,7 +23,7 @@ void OptimizeWorker::answer_busy(BusyAnswer answer) {
     busy_cv_.notify_all();
 }
 
-bool OptimizeWorker::launch(bool retest, std::function<void(const app::OptimizeHooks&)> job) {
+bool OptimizeWorker::launch(bool retest, bool puts_back, std::function<void(const app::OptimizeHooks&)> job) {
     if (running_.exchange(true)) return false;
     if (thread_.joinable()) thread_.join();   // the previous run's thread has already finished
     {
@@ -37,9 +37,10 @@ bool OptimizeWorker::launch(bool retest, std::function<void(const app::OptimizeH
         measuring_.clear();
         busy_question_.clear();
         busy_answer_.reset();
+        put_back_ = false;
     }
     abort_ = false;
-    thread_ = std::jthread([this, job = std::move(job)] {
+    thread_ = std::jthread([this, puts_back, job = std::move(job)] {
         app::OptimizeHooks hooks;
         hooks.aborted = [this] { return abort_.load(); };
         hooks.log = app::logged([this](const std::string& line) {
@@ -73,7 +74,15 @@ bool OptimizeWorker::launch(bool retest, std::function<void(const app::OptimizeH
             busy_answer_.reset();
             return answer;
         };
+        // What a Stop puts back: read before the run touches the card, and
+        // put back here, before running() turns false and the watchdog
+        // looks again.
+        const std::optional<Profile> before = puts_back ? app::tune_before_run() : std::nullopt;
         job(hooks);
+        if (abort_.load() && !snapshot().kept() && app::put_back_after_stop(before, hooks)) {
+            std::lock_guard lock(mu_);
+            put_back_ = true;
+        }
         {
             std::lock_guard lock(mu_);
             measuring_.clear();   // also after a run that ended in an exception
@@ -85,7 +94,7 @@ bool OptimizeWorker::launch(bool retest, std::function<void(const app::OptimizeH
 }
 
 bool OptimizeWorker::start(Preset preset, std::optional<FanCurve> fan_curve) {
-    return launch(false, [this, preset, fan_curve](const app::OptimizeHooks& hooks) {
+    return launch(false, true, [this, preset, fan_curve](const app::OptimizeHooks& hooks) {
         app::OptimizeOutcome outcome;
         app::UndervoltOutcome undervolt;
         app::AllInOneOutcome all;
@@ -105,7 +114,7 @@ bool OptimizeWorker::start(Preset preset, std::optional<FanCurve> fan_curve) {
 }
 
 bool OptimizeWorker::start_demo(bool ask) {
-    return launch(false, [this, ask](const app::OptimizeHooks& hooks) {
+    return launch(false, false, [this, ask](const app::OptimizeHooks& hooks) {
         app::OptimizeOutcome out;
         const auto stopped = [&] { return hooks.aborted(); };
         // Waits in short slices, so Abort and closing the window end it at once.
@@ -201,7 +210,7 @@ bool OptimizeWorker::start_demo(bool ask) {
 }
 
 bool OptimizeWorker::start_retest() {
-    return launch(true, [this](const app::OptimizeHooks& hooks) {
+    return launch(true, true, [this](const app::OptimizeHooks& hooks) {
         app::RetestOutcome retest;
         try {
             retest = app::run_retest(hooks);
@@ -217,6 +226,7 @@ OptimizeWorker::Snapshot OptimizeWorker::snapshot() const {
     std::lock_guard lock(mu_);
     Snapshot s{running_.load(), log_, outcome_, undervolt_, all_in_one_, retest_, is_retest_};
     s.busy_question = busy_question_;
+    s.put_back = put_back_;
     if (!measuring_.empty()) {
         s.measuring = measuring_;
         s.measuring_seconds = measuring_seconds_;

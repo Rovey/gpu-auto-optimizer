@@ -22,6 +22,11 @@ enum class WatchAction {
 // offset the driver reports next to it.
 bool tune_applied(const Profile& p, const AppliedState& seen, const std::optional<CurveState>& curve);
 
+// The same judgement, read from the card: true when it holds `p` now, false
+// when it holds something else or cannot be read. A run asks this before it
+// touches the card, and puts `p` back when it is stopped (app/common).
+bool tune_on_card(const GpuControl& gpu, const Profile& p);
+
 // Decides what the resident tray process does about the tune it is supposed
 // to keep applied. Pure: the caller reads the hardware and acts on the answer.
 class Watchdog {

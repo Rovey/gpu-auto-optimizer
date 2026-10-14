@@ -33,6 +33,8 @@ public:
         double measuring_spent = 0;     // how long it has been running
         // The run waits for an answer: these programs use the card (core/busy_card.hpp). Empty: no question.
         std::vector<BusyProgram> busy_question;
+        // The run was stopped and put back the tune that was on the card before it.
+        bool put_back = false;
         bool ended() const { return outcome || undervolt || all_in_one || retest; }
         // The run got as far as the search: it ended at its result or at stock.
         bool ran() const {
@@ -59,7 +61,7 @@ public:
     // (GpuAutoOptimizer.exe --demo). ask: it begins with the question about
     // other programs on the card; without it the steps begin at once.
     bool start_demo(bool ask = true);
-    void abort();                       // the run restores stock before it ends
+    void abort();                       // the run ends at stock, or at the tune it found on the card
     void answer_busy(BusyAnswer answer);   // to the question in Snapshot::busy_question
     bool running() const { return running_; }
     Snapshot snapshot() const;
@@ -78,12 +80,14 @@ private:
     std::chrono::steady_clock::time_point measuring_from_;
     std::vector<BusyProgram> busy_question_;
     std::optional<BusyAnswer> busy_answer_;
+    bool put_back_ = false;
     std::condition_variable busy_cv_;
     std::atomic<bool> running_{false};
     std::atomic<bool> abort_{false};
     std::jthread thread_;
     // Starts `job` on the thread with the hooks every run has; the job stores its own outcome.
-    bool launch(bool retest, std::function<void(const app::OptimizeHooks&)> job);
+    // puts_back: after a Stop, the tune that was on the card before is put back (a demo touches nothing).
+    bool launch(bool retest, bool puts_back, std::function<void(const app::OptimizeHooks&)> job);
 };
 
 }
