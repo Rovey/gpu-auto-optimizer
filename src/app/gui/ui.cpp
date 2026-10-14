@@ -806,7 +806,8 @@ void choose(UiState& s, const UiActions& act) {
                                               : undervolt ? "  About 13 minutes of full GPU load."
                                                           : "  About 15 minutes of full GPU load."))
                                .c_str());
-    dim("Abort restores stock at any time. A setting that crashes the machine is never tried again.");
+    dim("Abort stops at any time: the card goes back to stock, or to your saved tune when that was on it. A setting that "
+        "crashes the machine is never tried again.");
     dim("Close games and other programs that use the graphics card first: they change what the run measures.");
     ImGui::EndGroup();
     // One click is all of it: the result is kept at every logon without
@@ -921,8 +922,10 @@ void run_screen(UiState& s, const OptimizeWorker::Snapshot& run, const UiActions
         align_right(button_width(abort) + em());
         if (ImGui::Button(abort.c_str(), ImVec2(button_width(abort) + em(), 0))) act.abort();
     }
-    dim(run.is_retest ? "Five minutes of full load with the tune applied. Aborting stops the test and restores stock."
-                      : "Aborting stops the running probe and restores stock.");
+    dim(run.is_retest ? "Five minutes of full load with the tune applied. Aborting stops the test; the card goes back to "
+                        "stock, or to the saved tune when that was on it before."
+                      : "Aborting stops the running probe; the card goes back to stock, or to the saved tune when that was "
+                        "on it before the run.");
     ImGui::Spacing();
     // The run looked at what else uses the card before it began, found
     // something, and waits for what to do about it.
@@ -1034,7 +1037,7 @@ std::string against(double before, double after, const char* unit) {
 }
 
 // What a finished run found. True when a result is applied.
-bool optimize_result(const app::OptimizeOutcome& o) {
+bool optimize_result(const app::OptimizeOutcome& o, bool put_back) {
     if (!o.ran) {
         heading("Not started");
         wrapped(kBad, o.error);
@@ -1043,7 +1046,8 @@ bool optimize_result(const app::OptimizeOutcome& o) {
     if (!o.result.ok) {
         heading("Not applied");
         wrapped(kBad, o.result.reason);
-        wrapped(kText, o.result.stock_restored ? "The card is back at stock." : "Reset to stock FAILED -- run `gao --reset`.");
+        if (!put_back)
+            wrapped(kText, o.result.stock_restored ? "The card is back at stock." : "Reset to stock FAILED -- run `gao --reset`.");
         return false;
     }
     const OptimizeResult& r = o.result;
@@ -1067,7 +1071,7 @@ bool optimize_result(const app::OptimizeOutcome& o) {
     return true;
 }
 
-bool undervolt_result(const app::UndervoltOutcome& o) {
+bool undervolt_result(const app::UndervoltOutcome& o, bool put_back) {
     if (!o.ran) {
         heading("Not started");
         wrapped(kBad, o.error);
@@ -1076,7 +1080,8 @@ bool undervolt_result(const app::UndervoltOutcome& o) {
     if (!o.result.ok) {
         heading("Not applied");
         wrapped(kBad, o.result.reason);
-        wrapped(kText, o.result.stock_restored ? "The card is back at stock." : "Reset to stock FAILED -- run `gao --reset`.");
+        if (!put_back)
+            wrapped(kText, o.result.stock_restored ? "The card is back at stock." : "Reset to stock FAILED -- run `gao --reset`.");
         return false;
     }
     const UndervoltResult& r = o.result;
@@ -1103,11 +1108,11 @@ bool undervolt_result(const app::UndervoltOutcome& o) {
 }
 
 // The all-in-one run: what the card runs now, next to what it ran at stock.
-bool all_in_one_result(const app::AllInOneOutcome& o) {
+bool all_in_one_result(const app::AllInOneOutcome& o, bool put_back) {
     if (!o.ok) {
         heading(o.ran ? "Not applied" : "Not started");
         wrapped(kBad, o.error);
-        if (o.ran) wrapped(kText, "The card is at stock.");
+        if (o.ran && !put_back) wrapped(kText, "The card is at stock.");
         return false;
     }
     const Profile& p = o.profile;
@@ -1162,9 +1167,11 @@ void results(UiState& s, const OptimizeWorker::Snapshot& run, const UiActions& a
     }
     begin_card("results");
     const bool applied = run.retest       ? retest_result(*run.retest)
-                         : run.all_in_one ? all_in_one_result(*run.all_in_one)
-                         : run.undervolt  ? undervolt_result(*run.undervolt)
-                                          : optimize_result(*run.outcome);
+                         : run.all_in_one ? all_in_one_result(*run.all_in_one, run.put_back)
+                         : run.undervolt  ? undervolt_result(*run.undervolt, run.put_back)
+                                          : optimize_result(*run.outcome, run.put_back);
+    // Stopped, and the saved tune that was on the card before the run is on it again (worker.cpp).
+    if (!applied && run.put_back) wrapped(kText, "Your saved tune is on the card again, as it was before the run.");
     if (applied) {
         const bool saved = run.retest ? true : run.all_in_one ? run.all_in_one->ok : run.undervolt ? run.undervolt->saved : run.outcome->saved;
         ImGui::Spacing();
