@@ -988,12 +988,17 @@ void on_watchdog() {
         case gao::WatchAction::None: return;
         case gao::WatchAction::Reapply: {
             std::string why;
-            if (gao::apply_profile(g.gpu, *cfg.profile, &why)) {
+            const bool retry = g.watchdog.retrying();
+            const bool ok = gao::apply_profile(g.gpu, *cfg.profile, &why);
+            g.watchdog.reapply_result(ok, std::chrono::steady_clock::now());
+            if (ok) {
                 gao::app::boot_log("watchdog: the tune had been reset (driver reset or TDR); re-applied");
                 notify("The tune had been reset (driver reset or TDR) and was re-applied.", false);
             } else {
-                gao::app::boot_log("watchdog: re-apply failed: " + why);
-                notify("The tune had been reset and could not be re-applied: " + why, false);
+                // Tried again later (Watchdog::kRetryFirstDelay): a flat top can fail under full load.
+                gao::app::boot_log("watchdog: re-apply failed: " + why + "; trying again later");
+                if (!retry)   // one balloon per reset, not one per attempt
+                    notify("The tune had been reset and could not be re-applied yet: " + why + ". It is tried again later.", false);
             }
             break;
         }

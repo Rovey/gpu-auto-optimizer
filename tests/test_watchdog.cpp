@@ -29,6 +29,49 @@ TEST_CASE("a tune reset to stock is re-applied") {
     CHECK(w.check(tuned(), kOurs, true, true, t0 + 30s) == WatchAction::None);
 }
 
+// Hardware check 41 (RTX 5070): a re-apply under full load failed, because the
+// flat top did not settle on its target, and the card was left at stock. Each
+// failed attempt must not count as another reset, or one reset during a game
+// gives the tune up as unstable within minutes.
+TEST_CASE("a failed re-apply is tried again later, and the reset counts once") {
+    Watchdog w;
+    CHECK(w.check(tuned(), kStock, true, true, t0, std::nullopt, true) == WatchAction::Reapply);
+    w.reapply_result(false, t0);
+    CHECK(w.retrying());
+    // Not every tick: the first retry waits a minute, then the wait doubles.
+    CHECK(w.check(tuned(), kStock, true, true, t0 + 30s) == WatchAction::None);
+    CHECK(w.check(tuned(), kStock, true, true, t0 + 60s) == WatchAction::Reapply);
+    w.reapply_result(false, t0 + 60s);
+    CHECK(w.check(tuned(), kStock, true, true, t0 + 150s) == WatchAction::None);
+    CHECK(w.check(tuned(), kStock, true, true, t0 + 180s) == WatchAction::Reapply);
+    CHECK(w.recent(t0 + 180s) == 1);   // the one reset, not the attempts
+    // Many more failures (a long game): never given up, and the wait stops at ten minutes.
+    auto now = t0 + 180s;
+    for (int i = 0; i < 10; ++i) {
+        w.reapply_result(false, now);
+        now += Watchdog::kRetryMaxDelay;
+        CHECK(w.check(tuned(), kStock, true, true, now) == WatchAction::Reapply);
+    }
+    CHECK_FALSE(w.gave_up());
+    // The load is gone and the re-apply holds: back to normal.
+    w.reapply_result(true, now);
+    CHECK_FALSE(w.retrying());
+    CHECK(w.check(tuned(), kOurs, true, true, now + 30s) == WatchAction::None);
+}
+
+TEST_CASE("a new driver reset while a re-apply is waiting still counts") {
+    Watchdog w;
+    CHECK(w.check(tuned(), kStock, true, true, t0, std::nullopt, true) == WatchAction::Reapply);
+    w.reapply_result(false, t0);
+    // A reset seen while waiting is tried at once and counted.
+    CHECK(w.check(tuned(), kStock, true, true, t0 + 30s, std::nullopt, true) == WatchAction::Reapply);
+    w.reapply_result(false, t0 + 30s);
+    CHECK(w.check(tuned(), kStock, true, true, t0 + 60s, std::nullopt, true) == WatchAction::Reapply);
+    w.reapply_result(false, t0 + 60s);
+    CHECK(w.recent(t0 + 60s) == 3);
+    CHECK(w.check(tuned(), kStock, true, true, t0 + 90s, std::nullopt, true) == WatchAction::GiveUpUnstable);
+}
+
 TEST_CASE("a fourth reset within an hour gives up, once") {
     // Repeated resets are an instability signal (likely TDRs): stop fighting.
     Watchdog w;

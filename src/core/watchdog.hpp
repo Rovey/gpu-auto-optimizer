@@ -33,6 +33,12 @@ class Watchdog {
 public:
     using Clock = std::chrono::steady_clock;
     static constexpr int kMaxReappliesPerHour = 3;
+    // A re-apply that failed is tried again, first after kRetryFirstDelay,
+    // then after twice as long each time, up to kRetryMaxDelay. A flat top
+    // can fail to settle while something keeps the card under full load
+    // (hardware check 41); once the load is gone it holds.
+    static constexpr std::chrono::seconds kRetryFirstDelay{60};
+    static constexpr std::chrono::seconds kRetryMaxDelay{600};
 
     // curve: as for tune_applied; only read for a profile with an undervolt.
     // driver_reset: the driver was reset since the last call. A reset that
@@ -43,6 +49,11 @@ public:
                       bool gpu_matches, Clock::time_point now, const std::optional<CurveState>& curve = std::nullopt,
                       bool driver_reset = false);
     bool gave_up() const { return gave_up_; }
+    // What came of the re-apply that check() asked for. A failure is tried
+    // again later (see kRetryFirstDelay); the attempts do not count as resets:
+    // only a reset does, once.
+    void reapply_result(bool ok, Clock::time_point now);
+    bool retrying() const { return retry_at_.has_value(); }
     // For a process that restarts itself and goes on keeping the tune applied:
     // the resets counted in the last hour, and that count handed to the
     // watchdog of the next process (never more than a watchdog can hold).
@@ -57,6 +68,8 @@ private:
     bool gave_up_ = false;
     bool backed_off_ = false;
     bool notified_driver_ = false;
+    std::optional<Clock::time_point> retry_at_;   // a failed re-apply is tried again from here
+    std::chrono::seconds retry_delay_ = kRetryFirstDelay;
 };
 
 }
