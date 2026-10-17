@@ -141,4 +141,13 @@ CurveState curve_state(const std::vector<VfPoint>& curve, int anchor_uv, int bas
 // the card reaches that frequency by itself. -1 when no point does.
 int stock_point_for(const std::vector<VfPoint>& curve, int freq_khz);
 
+// The step the card's clock moves in, read off the curve: the largest of the
+// usual grids (15, 7.5, 5, 2.5 MHz) that every frequency fits, allowing for a
+// read-out cut to whole MHz; otherwise the greatest common divisor of the
+// steps between the points. An RTX 5070 runs a 7.5 MHz grid and reads
+// 2932.5 MHz as 2932: the greatest common divisor of that read-out is 1 MHz,
+// and every tolerance built on the grid came out a step too small (hardware
+// check 99, second run).
+int clock_grid_khz(const std::vector<VfPoint>& curve);
+
 }

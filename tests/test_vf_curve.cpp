@@ -37,6 +37,7 @@ struct FakeCurve {
     int tilt_khz = 0;
     int writes = 0;
     int max_freq_seen = 0;       // the highest frequency any point ever read back as
+    int report_khz = 0;          // > 0: the read-out is cut to this step (an RTX 5070 reads 2932.5 MHz as 2932)
 
     FakeCurve() {
         // 700 mV .. 1075 mV in 25 mV steps, 1500 .. 3000 MHz in 100 MHz steps.
@@ -62,7 +63,7 @@ struct FakeCurve {
     int reads(std::size_t i) const {
         int most = 0;
         for (std::size_t j = 0; j <= i; ++j) most = std::max(most, freq(j));
-        return most;
+        return report_khz > 0 ? most / report_khz * report_khz : most;
     }
     // Where the card runs under load: the lowest voltage that gives the most frequency.
     std::size_t runs_at() const {
@@ -655,4 +656,47 @@ TEST_CASE("a read-out that is really off after the lowering is refused, with the
     CHECK_FALSE(r.ok);
     CHECK(r.why.find("900 mV at 2760 MHz, the target is 2700 MHz") != std::string::npos);
     CHECK(card.at_stock());
+}
+
+namespace {
+std::vector<VfPoint> points_at(const std::vector<int>& freqs_khz) {
+    std::vector<VfPoint> out;
+    for (std::size_t i = 0; i < freqs_khz.size(); ++i)
+        out.push_back({static_cast<int>(i), 900000 + static_cast<int>(i) * 5000, freqs_khz[i], 0});
+    return out;
+}
+}
+
+TEST_CASE("the clock grid is read off the curve, also from a read-out cut to whole MHz") {
+    // The reference RTX 4070: every frequency a multiple of 15 MHz (hardware check 61).
+    CHECK(clock_grid_khz(points_at({2700000, 2715000, 2745000, 2790000})) == 15000);
+    // An RTX 5070 at idle (2026-10-17): a 7.5 MHz grid, read in whole MHz, so 2932.5 reads 2932.
+    CHECK(clock_grid_khz(points_at({2722000, 2752000, 2775000, 2797000, 2820000, 2842000, 2872000, 2895000, 2910000,
+                                    2932000, 2955000, 2970000, 2992000, 3007000})) == 7500);
+    // Nothing of the usual grids fits: the greatest common divisor, as before.
+    CHECK(clock_grid_khz(points_at({1500000, 1605000, 1700000})) == 5000);
+}
+
+TEST_CASE("a card that reads its 7.5 MHz grid in whole MHz: a step of drift after the lowering is accepted") {
+    // Hardware check 99, second run (RTX 5070, 2026-10-17): the soak of the
+    // undervolt wrote 960 mV at 2932 MHz, and the read after the lowering found
+    // the anchor at 2947 MHz, one 15 MHz step: the card had just come off the
+    // search and was cooling. The grid read off the curve was 1 MHz instead of
+    // 7.5, so a step of temperature looked like a curve that went wrong, and
+    // the All in one run ended without its undervolt.
+    FakeCurve card;
+    for (std::size_t i = 0; i < card.base_khz.size(); ++i) card.base_khz[i] = 1500000 + static_cast<int>(i) * 97500;
+    card.bin_khz = 7500;
+    card.round_nearest = true;
+    card.report_khz = 1000;
+    GpuControl gpu = card.gpu();
+    const auto read = gpu.read_vf_curve;
+    gpu.read_vf_curve = [&]() -> std::optional<std::vector<VfPoint>> {
+        card.drift_khz = card.writes >= 3 ? 15000 : 0;   // from the lowering write on: one step warmer
+        return read();
+    };
+    const auto r = apply_flat_top(gpu, 8, 2392000);   // a target as read off the card: 2392.5 MHz cut to 2392
+    REQUIRE(r.ok);
+    CHECK(card.runs_at() == 8);                                              // the anchor is still the top
+    for (std::size_t i = 9; i < 16; ++i) CHECK(card.raw[i] < card.raw[8]);   // the tail is stored lower
 }
