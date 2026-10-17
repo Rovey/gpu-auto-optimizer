@@ -89,6 +89,7 @@ struct App {
     // as described below, until a new device exists. render() only ever sets it.
     bool device_lost = false;
     unsigned device_generation = 0;   // counts recover_device() and abandon_backend() runs
+    ULONGLONG wallpaper_at = 0;       // > 0: redraw_wallpaper() is due at this tick count (after a driver reset)
     // A recovery that keeps failing must not rebuild the device every second
     // for ever: each attempt can leak a device and write a log line. `recoveries`
     // counts recover_device() runs (up to 3) in the current run of failures. The
@@ -827,6 +828,23 @@ void restart_after_fault() {
 
 // ---------------------------------------------------------------- timers
 
+// After a driver reset Windows can leave the desktop background black, with
+// the picture setting unchanged (hardware checks 100 and 101, RTX 5070).
+// Setting the same picture again draws it. Only for a single picture: setting
+// a file would turn a slideshow, Windows Spotlight or a solid colour into a
+// fixed picture, so those are left alone.
+void redraw_wallpaper() {
+    DWORD type = 0, size = sizeof(type);
+    if (RegGetValueW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Wallpapers", L"BackgroundType",
+                     RRF_RT_REG_DWORD, nullptr, &type, &size) == ERROR_SUCCESS &&
+        type != 0)
+        return;   // 0: a picture; no value: a Windows without the setting, which shows a picture
+    wchar_t path[MAX_PATH] = {};
+    if (!SystemParametersInfoW(SPI_GETDESKWALLPAPER, MAX_PATH, path, 0) || !path[0]) return;
+    if (SystemParametersInfoW(SPI_SETDESKWALLPAPER, 0, path, SPIF_SENDCHANGE))
+        note("The desktop background was drawn again after the driver reset.");
+}
+
 void on_telemetry() {
     // A removed UI device is the first sign of a driver reset; the window is
     // often hidden, so no Present() would report it. Read from the old device,
@@ -842,6 +860,13 @@ void on_telemetry() {
     g.driver_reset = false;
     if (reset) g.device_lost = true;
     if (reset) g.watch_reset = true;   // for the watchdog: a reset with the tune applied counts against it
+    // The window manager restarts a few seconds after a reset (checks 100 and
+    // 101: 5 and 9 s); the background is drawn again once it is back.
+    if (reset) g.wallpaper_at = GetTickCount64() + 15000;
+    if (g.wallpaper_at && GetTickCount64() >= g.wallpaper_at) {
+        g.wallpaper_at = 0;
+        redraw_wallpaper();
+    }
     if (g.device_lost && GetTickCount64() >= g.recover_at) recover_device();
     // A device that is still there 30 s after it was built ends the run of
     // failures. Only recover_device() clears g.device_lost, so not lost now
