@@ -750,8 +750,9 @@ void fan_page(UiState& s, const UiActions& act) {
         wrapped(kWarn, "This curve is quieter than the one the tune was tested with, so the card runs warmer than during the "
                        "test. Optimize again to be sure the tune holds.");
     wrapped(kDim, "Below the card's minimum (yellow line) a fan cannot run slower. The fans start at the stop threshold and stop "
-                  "again only once the card is 8 \xC2\xB0""C cooler and idle for a minute (longer if they had to restart soon "
-                  "after stopping); then the NVIDIA driver has them. From the red line (the profile's temperature limit) the fans "
+                  "again only once the card is 8 \xC2\xB0""C cooler and idle (under a fifth of its power limit) for a minute "
+                  "(longer if they had to restart soon after stopping); until then they run at the minimum, then the NVIDIA "
+                  "driver has them. From the red line (the profile's temperature limit) the fans "
                   "always run at 100 %.");
     if (s.fan_limit_raised_c > 0)
         wrapped(kDim, "On this card the limit is " + std::to_string(s.fan_max_temp_c) + " \xC2\xB0""C, not the profile's " +

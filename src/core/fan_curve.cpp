@@ -80,7 +80,12 @@ bool quieter_than(const FanCurve& a, const FanCurve& b, const int max_temp_c) {
 FanController::FanController(FanCurve curve, const int min_pct, const int max_temp_c)
     : curve_(std::move(curve)), min_pct_(min_pct), max_temp_c_(max_temp_c) {}
 
-FanCommand FanController::decide(const int temp_c, const int power_w, const std::chrono::steady_clock::time_point now) {
+int fan_idle_power_w(const int power_limit_w) {
+    return std::max(kFanIdlePowerW, power_limit_w * kFanIdlePowerPct / 100);
+}
+
+FanCommand FanController::decide(const int temp_c, const int power_w, const std::chrono::steady_clock::time_point now,
+                                 const int power_limit_w) {
     auto driver = [&] {
         last_pct_.reset();
         lower_since_.reset();
@@ -108,7 +113,7 @@ FanCommand FanController::decide(const int temp_c, const int power_w, const std:
             in_stop_ = true;   // first reading already below: the driver keeps the fans it has
             return driver();
         } else {
-            const bool calm = temp_c <= start - kFanStopGapC && power_w >= 0 && power_w < kFanIdlePowerW;
+            const bool calm = temp_c <= start - kFanStopGapC && power_w >= 0 && power_w < fan_idle_power_w(power_limit_w);
             if (!calm) {
                 calm_since_.reset();
             } else if (!calm_since_) {
@@ -121,7 +126,10 @@ FanCommand FanController::decide(const int temp_c, const int power_w, const std:
             }
         }
     }
-    const int target = std::max(min_pct_, curve_pct(curve_, temp_c));
+    // Below the threshold the curve's first point is not wanted: the fans only
+    // wait there to stop, so they wait at the minimum.
+    const bool waiting = curve_.stop_below_c && temp_c < *curve_.stop_below_c;
+    const int target = waiting ? min_pct_ : std::max(min_pct_, curve_pct(curve_, temp_c));
     if (!last_pct_ || target >= *last_pct_) {
         last_pct_ = target;
         lower_since_.reset();
@@ -161,7 +169,8 @@ void FanDriver::release() {
     if (state_.mode == FanMode::Curve) state_ = {FanMode::Driver, 0, min_pct_};
 }
 
-FanState FanDriver::tick(const int temp_c, const int power_w, const std::chrono::steady_clock::time_point now) {
+FanState FanDriver::tick(const int temp_c, const int power_w, const std::chrono::steady_clock::time_point now,
+                         const int power_limit_w) {
     if (state_.mode == FanMode::Failed || state_.mode == FanMode::Foreign) return state_;
     if (!gpu_.set_fan_pct || !gpu_.set_fan_auto || !gpu_.read_fan) return state_;
     // What does the driver have? Policy back to automatic without us: a driver
@@ -188,7 +197,7 @@ FanState FanDriver::tick(const int temp_c, const int power_w, const std::chrono:
         state_ = {FanMode::Foreign, 0, min_pct_};
         return state_;
     }
-    const FanCommand cmd = ctrl_.decide(temp_c, power_w, now);
+    const FanCommand cmd = ctrl_.decide(temp_c, power_w, now, power_limit_w);
     if (cmd.driver) {
         if (written_ && !gpu_.set_fan_auto()) { fail(); return state_; }
         written_.reset();

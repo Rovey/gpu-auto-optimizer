@@ -127,6 +127,73 @@ TEST_CASE("the hold resets when the card warms up or draws power again") {
     CHECK(ctrl.decide(42, 20, t).driver);
 }
 
+TEST_CASE("idle is a fifth of the card's power limit, never under 30 W") {
+    CHECK(fan_idle_power_w(250) == 50);   // RTX 5070
+    CHECK(fan_idle_power_w(200) == 40);   // RTX 4070
+    CHECK(fan_idle_power_w(175) == 35);   // a 5070 at a 70 % limit
+    CHECK(fan_idle_power_w(100) == 30);   // a small card keeps the old floor
+    CHECK(fan_idle_power_w(0) == 30);     // limit unknown
+}
+
+namespace {
+// Runs the fans on the user's RTX 5070 curve, then cools to 36 C at power_w.
+FanController warm_5070(Clock::time_point& t, int power_w) {
+    FanController ctrl(FanCurve{50, {{50, 60}, {70, 80}, {75, 100}}}, 30, 75);
+    ctrl.decide(55, 120, t, 250);
+    t += std::chrono::seconds(1);
+    ctrl.decide(36, power_w, t, 250);
+    return ctrl;
+}
+}
+
+// Seen on the RTX 5070: 36 C, 39 W with the app's window and a video open,
+// and the fans held at 60 % for good, because 39 W was never under 30 W.
+TEST_CASE("an RTX 5070 at 39 W with a window open counts as idle and its fans stop") {
+    auto t = Clock::now();
+    FanController ctrl = warm_5070(t, 39);
+    t += std::chrono::seconds(59);
+    CHECK_FALSE(ctrl.decide(36, 39, t, 250).driver);
+    t += std::chrono::seconds(1);
+    CHECK(ctrl.decide(36, 39, t, 250).driver);
+}
+
+TEST_CASE("an RTX 5070 at its 24-26 W idle stops its fans") {
+    auto t = Clock::now();
+    FanController ctrl = warm_5070(t, 25);
+    for (int w : {24, 26, 25}) {
+        t += std::chrono::seconds(20);
+        ctrl.decide(36, w, t, 250);
+    }
+    t += std::chrono::seconds(1);
+    CHECK(ctrl.decide(36, 24, t, 250).driver);
+}
+
+TEST_CASE("an RTX 5070 under light load above a fifth of its limit keeps its fans") {
+    auto t = Clock::now();
+    FanController ctrl = warm_5070(t, 60);
+    for (int i = 0; i < 30; ++i) {
+        t += std::chrono::seconds(10);
+        CHECK_FALSE(ctrl.decide(40, 60, t, 250).driver);   // 60 W: over 50 W
+    }
+    // Without a known limit, idle is still under 30 W: 39 W is load.
+    t += std::chrono::seconds(10);
+    CHECK_FALSE(ctrl.decide(36, 39, t).driver);
+}
+
+TEST_CASE("below the threshold, until they stop, the fans run at the minimum, not the curve's first point") {
+    auto t = Clock::now();
+    FanController ctrl = warm_5070(t, 39);
+    CHECK(ctrl.decide(36, 39, t, 250).pct == 65);   // 55 C's speed: lowering waits 5 s, as always
+    t += std::chrono::seconds(5);
+    CHECK(ctrl.decide(36, 39, t, 250).pct == 30);   // the card's minimum
+    t += std::chrono::seconds(1);
+    CHECK(ctrl.decide(48, 39, t, 250).pct == 30);   // still below 50 C
+    CHECK(ctrl.decide(50, 39, t, 250).pct == 60);   // at the threshold: the curve again, at once
+    // A curve without a fan-stop zone keeps its first point below it.
+    FanController always(FanCurve{std::nullopt, {{50, 60}, {75, 100}}}, 30, 75);
+    CHECK(always.decide(36, 39, t, 250).pct == 60);
+}
+
 namespace {
 // Runs the fans, lets them stop after `hold`, returns the time of the stop.
 Clock::time_point cycle_to_stop(FanController& ctrl, Clock::time_point t, std::chrono::seconds hold) {

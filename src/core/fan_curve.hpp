@@ -28,8 +28,13 @@ struct FanCurve {
 // a temperature gap alone makes the fans cycle every few seconds. They stop
 // only when the card is well below the threshold AND idle for a hold time, and
 // the hold doubles each time the fans had to restart soon after stopping.
+// Idle is relative to the card: an RTX 5070 draws 39 W with a window and a
+// video open, which a fixed 30 W never called idle, so its fans never stopped.
 inline constexpr int kFanStopGapC = 8;                                  // stop only 8 C below the threshold
-inline constexpr int kFanIdlePowerW = 30;                               // and below this power draw
+inline constexpr int kFanIdlePowerPct = 20;                             // and below this share of the power limit
+inline constexpr int kFanIdlePowerW = 30;                               // but never below this power draw
+// The power draw under which a card counts as idle; power_limit_w <= 0: unknown.
+int fan_idle_power_w(int power_limit_w);
 inline constexpr auto kFanStopHold = std::chrono::seconds(60);          // for this long, at first
 inline constexpr auto kFanStopHoldMax = std::chrono::minutes(15);
 inline constexpr auto kFanPendulum = std::chrono::minutes(5);           // a restart this soon doubles the hold
@@ -76,8 +81,10 @@ struct FanCommand {
 class FanController {
 public:
     FanController(FanCurve curve, int min_pct, int max_temp_c);
-    // power_w: -1 when unknown, which counts as load.
-    FanCommand decide(int temp_c, int power_w, std::chrono::steady_clock::time_point now);
+    // power_w: -1 when unknown, which counts as load. power_limit_w: the card's
+    // current limit, 0 when unknown (idle is then below kFanIdlePowerW).
+    // Below the fan-stop threshold, until they stop, the fans run at the minimum.
+    FanCommand decide(int temp_c, int power_w, std::chrono::steady_clock::time_point now, int power_limit_w = 0);
     void set_min_pct(int min_pct) { min_pct_ = min_pct; }
 
 private:
@@ -125,7 +132,7 @@ class FanDriver {
 public:
     // min_pct: a minimum learned earlier for this card; never below NVML's own.
     FanDriver(const GpuControl& gpu, FanCurve curve, int max_temp_c, int min_pct = 0);
-    FanState tick(int temp_c, int power_w, std::chrono::steady_clock::time_point now);
+    FanState tick(int temp_c, int power_w, std::chrono::steady_clock::time_point now, int power_limit_w = 0);
     // Keeps what was written, so no false "another program"; an unchanged
     // curve keeps the controller's hysteresis and slow-down state too.
     void set_curve(FanCurve curve, int max_temp_c);

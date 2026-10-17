@@ -893,7 +893,8 @@ void on_telemetry() {
     // The curve, while nothing else owns the fans: a search drives them itself.
     if (g.fan && !g.worker->running() && !gao::app::tuning_in_progress()) {
         const gao::FanMode before = g.fan->state().mode;
-        g.ui.fan_state = g.fan->tick(g.ui.telemetry.temp_c, g.ui.telemetry.power_w, std::chrono::steady_clock::now());
+        g.ui.fan_state = g.fan->tick(g.ui.telemetry.temp_c, g.ui.telemetry.power_w, std::chrono::steady_clock::now(),
+                                   g.ui.telemetry.power_limit_w);
         if (g.ui.fan_state.min_pct > g.ui.fan_min_pct && g.ui.fan_state.mode == gao::FanMode::Curve) {
             // The fans stalled at the old minimum: remember the new one for this card.
             g.ui.fan_min_pct = g.ui.fan_state.min_pct;
