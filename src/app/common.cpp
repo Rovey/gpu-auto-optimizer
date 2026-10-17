@@ -295,7 +295,7 @@ StockOutcome measure_stock(const OptimizeHooks& hooks) {
 Telemetry read_with_fans(const GpuControl& gpu, FanDriver& fans, const OptimizeHooks& hooks) {
     const Telemetry t = gpu.read();
     const FanMode before = fans.state().mode;
-    const FanState now = fans.tick(t.temp_c, t.power_w, std::chrono::steady_clock::now());
+    const FanState now = fans.tick(t.temp_c, t.power_w, std::chrono::steady_clock::now(), t.power_limit_w);
     if (now.mode != before && now.mode == FanMode::Failed && hooks.log) hooks.log("fans: a write did not verify; the driver has them again");
     if (now.mode != before && now.mode == FanMode::Foreign && hooks.log) hooks.log("fans: another program set them; leaving them alone");
     return t;
@@ -1000,7 +1000,7 @@ FanStepOutcome fan_step(const OptimizeHooks& hooks, int start_pct) {
     const Probe probe = [&](double seconds, int max_temp, double stall_below) {
         auto read = [&] {
             const Telemetry t = gpu.read();
-            if (fans) fans->tick(t.temp_c, t.power_w, std::chrono::steady_clock::now());
+            if (fans) fans->tick(t.temp_c, t.power_w, std::chrono::steady_clock::now(), t.power_limit_w);
             return t;
         };
         return run_stability([&] { return load->Batch(); }, read, seconds, max_temp, hooks.aborted, stall_below);
@@ -1210,7 +1210,7 @@ RetestOutcome run_retest(const OptimizeHooks& hooks) {
     io.probe = [&](double seconds, int max_temp, double stall_below) {
         auto read = [&] {
             const Telemetry t = gpu.read();
-            if (fans) fans->tick(t.temp_c, t.power_w, std::chrono::steady_clock::now());
+            if (fans) fans->tick(t.temp_c, t.power_w, std::chrono::steady_clock::now(), t.power_limit_w);
             return t;
         };
         return run_stability([&] { return load->Batch(); }, read, seconds, max_temp, hooks.aborted, stall_below);
