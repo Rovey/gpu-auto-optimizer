@@ -288,30 +288,12 @@ static int optimize(gao::Preset preset, const std::optional<gao::FanCurve>& fan_
         SetConsoleCtrlHandler(OnConsoleCtrl, gpu ? TRUE : FALSE);
     };
     const auto out = gao::app::run_optimize(preset, hooks, fan_curve);
-    if (!out.ran) { std::printf("%s\n", out.error.c_str()); return 1; }
-    const gao::OptimizeResult& r = out.result;
-    if (!r.ok) {
-        std::printf("RESULT: not applied -- %s (%s)\n", r.reason.c_str(),
-                    r.stock_restored ? "card at stock" : "reset to stock FAILED, run `gao --reset`");
-        if (r.driver_resets > 0) std::printf("  driver resets during this run: %d\n", r.driver_resets);
-        return 1;
-    }
-    std::printf("RESULT: power %d %%, core +%d MHz (confirmed +%d), mem +%d MHz (confirmed +%d)\n",
-                r.power_pct, r.core_mhz, r.core_confirmed, r.mem_mhz, r.mem_confirmed);
-    if (r.driver_resets > 0) std::printf("  driver resets during this run: %d\n", r.driver_resets);
-    // Both runs last as long, so the temperature and the fan speed compare; at stock the driver had the fans.
-    const gao::StabilityResult& before = out.stock;
-    std::printf("  before: score=%.0f it/s  core=%d MHz  mem=%d MHz  peak=%d C  fan=%s  power=%d W  (%.0f s)\n",
-                before.score, before.avg_core_mhz, before.avg_mem_mhz, before.peak_temp_c,
-                gao::reading(before.end_fan_pct, " %").c_str(), before.avg_power_w, before.seconds);
-    std::printf("  after:  score=%.0f it/s  core=%d MHz  mem=%d MHz  peak=%d C  fan=%s  power=%d W  (%.0f s)\n",
-                r.soak.score, r.soak.avg_core_mhz, r.soak.avg_mem_mhz, r.soak.peak_temp_c,
-                gao::reading(r.soak.end_fan_pct, " %").c_str(), r.soak.avg_power_w, r.soak.seconds);
+    // Through the log: on screen and in run.log alike.
+    for (const std::string& line : gao::app::result_lines(out)) hooks.log(line);
+    if (!out.ran || !out.result.ok) return 1;
     if (out.saved) {
         std::printf("Saved: `gao --apply` re-applies it, `gao --boot on` applies it at every logon.\n");
         if (const std::string note = gao::app::update_logon_copy(); !note.empty()) std::printf("%s\n", note.c_str());
-    } else {
-        std::printf("not saved: %s\n", out.save_note.c_str());
     }
     std::printf("Applied until reboot. `gao --reset` returns to stock.\n");
     return out.saved ? 0 : 2;   // 2: tuned and applied, but --apply and boot-apply cannot use it
@@ -330,28 +312,11 @@ static int undervolt(bool on_overclock) {
     // A running tray app holds off for the whole run (the tuning lock), as
     // for --optimize, and afterwards finds the profile this run saved.
     const auto out = gao::app::run_undervolt(hooks, on_overclock);
-    if (!out.ran) { std::printf("%s\n", out.error.c_str()); return 1; }
-    const gao::UndervoltResult& r = out.result;
-    if (!r.ok) {
-        std::printf("RESULT: not applied -- %s (%s)\n", r.reason.c_str(),
-                    r.stock_restored ? "card at stock" : "reset to stock FAILED, run `gao --reset`");
-        if (r.driver_resets > 0) std::printf("  driver resets during this run: %d\n", r.driver_resets);
-        return 1;
-    }
-    std::printf("RESULT: %d MHz at %d mV instead of %d mV (lowest stable %d mV, confirmed %d mV)\n", r.freq_khz / 1000,
-                r.applied_uv / 1000, r.stock_uv / 1000, r.edge_uv / 1000, r.confirmed_uv / 1000);
-    if (r.driver_resets > 0) std::printf("  driver resets during this run: %d\n", r.driver_resets);
-    std::printf("  before: score=%.0f it/s  core=%d MHz  peak=%d C  fan=%s  power=%d W  (%.0f s)\n", r.baseline.score,
-                r.baseline.avg_core_mhz, r.baseline.peak_temp_c, gao::reading(r.baseline.end_fan_pct, " %").c_str(),
-                r.baseline.avg_power_w, r.baseline.seconds);
-    std::printf("  after:  score=%.0f it/s  core=%d MHz  peak=%d C  fan=%s  power=%d W  (%.0f s)\n", r.after.score,
-                r.after.avg_core_mhz, r.after.peak_temp_c, gao::reading(r.after.end_fan_pct, " %").c_str(),
-                r.after.avg_power_w, r.after.seconds);
+    for (const std::string& line : gao::app::result_lines(out)) hooks.log(line);
+    if (!out.ran || !out.result.ok) return 1;
     if (out.saved) {
         std::printf("Saved: `gao --apply` re-applies it, `gao --boot on` applies it at every logon.\n");
         if (const std::string note = gao::app::update_logon_copy(); !note.empty()) std::printf("%s\n", note.c_str());
-    } else {
-        std::printf("not saved: %s\n", out.save_note.c_str());
     }
     std::printf("Applied until reboot. `gao --reset` returns to stock.\n");
     return out.saved ? 0 : 2;   // 2: found and applied, but --apply and boot-apply cannot use it
@@ -368,18 +333,8 @@ static int retest() {
         SetConsoleCtrlHandler(OnConsoleCtrl, gpu ? TRUE : FALSE);
     };
     const gao::app::RetestOutcome out = gao::app::run_retest(hooks);
-    if (out.result.test.seconds > 0) {
-        const gao::StabilityResult& s = out.result.test;
-        std::printf("  %s  score=%.0f it/s  core=%d MHz  mem=%d MHz  peak=%d C  fan=%s  power=%d W  (%.0f s)\n", gao::verdict_name(s.verdict),
-                    s.score, s.avg_core_mhz, s.avg_mem_mhz, s.peak_temp_c, gao::reading(s.end_fan_pct, " %").c_str(), s.avg_power_w, s.seconds);
-    }
-    if (!out.ok) {
-        std::printf("RESULT: not applied -- %s\n", out.error.c_str());
-        return 1;
-    }
-    std::printf("RESULT: the tune holds on driver %s (it was tested on %s) and is applied: %s\n", out.driver.c_str(), out.driver_was.c_str(),
-                gao::app::profile_text(out.profile).c_str());
-    return 0;
+    for (const std::string& line : gao::app::result_lines(out)) hooks.log(line);
+    return out.ok ? 0 : 1;
 }
 
 // The all-in-one run: stock, overclock, undervolt on top, fans, final test.
@@ -396,27 +351,8 @@ static int all_in_one() {
     // minutes: Ctrl+C must stop them too, and end at stock.
     SetConsoleCtrlHandler(OnConsoleCtrl, TRUE);
     const gao::app::AllInOneOutcome out = gao::app::run_all_in_one(hooks);
-    if (!out.ok) {
-        std::printf("RESULT: not applied -- %s\n", out.error.c_str());
-        return 1;
-    }
-    const gao::Profile& p = out.profile;
-    std::printf("RESULT: power %d %%, core +%d MHz, mem +%d MHz", p.power_pct, p.core_mhz, p.mem_mhz);
-    if (p.undervolt) std::printf(", %d MHz at %d mV", p.undervolt->freq_khz / 1000, p.undervolt->volt_uv / 1000);
-    if (out.fan.ok) std::printf(", fans %d %% at %d C", out.fan.hold_pct, out.fan.hold_temp_c);
-    std::printf("\n");
-    if (!out.undervolt_note.empty()) std::printf("  no undervolt: %s\n", out.undervolt_note.c_str());
-    if (!out.fan_note.empty()) std::printf("  fans: %s\n", out.fan_note.c_str());
-    if (!out.disturbed.empty()) std::printf("  not clean: %s\n", out.disturbed.c_str());
-    const auto line = [](const char* name, const gao::StabilityResult& s) {
-        std::printf("  %s score=%.0f it/s  core=%d MHz  mem=%d MHz  peak=%d C  fan=%s  power=%d W  (%.0f s)\n", name, s.score,
-                    s.avg_core_mhz, s.avg_mem_mhz, s.peak_temp_c, gao::reading(s.end_fan_pct, " %").c_str(), s.avg_power_w, s.seconds);
-    };
-    line("stock:", out.stock);
-    line("now:  ", out.now);
-    if (out.stock.score > 0 && out.stock.avg_power_w > 0)
-        std::printf("  that is %+.1f %% score and %+.1f %% power against stock\n", (out.now.score / out.stock.score - 1) * 100,
-                    (static_cast<double>(out.now.avg_power_w) / out.stock.avg_power_w - 1) * 100);
+    for (const std::string& line : gao::app::result_lines(out)) hooks.log(line);
+    if (!out.ok) return 1;
     std::printf("Saved: `gao --apply` re-applies it, `gao --boot on` applies it at every logon.\n");
     if (const std::string note = gao::app::update_logon_copy(); !note.empty()) std::printf("%s\n", note.c_str());
     std::printf("Applied until reboot. `gao --reset` returns to stock.\n");

@@ -18,6 +18,7 @@
 #include <functional>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace gao::app {
 
@@ -195,6 +196,15 @@ int driver_resets(const OptimizeOutcome& o);
 int driver_resets(const UndervoltOutcome& o);
 int driver_resets(const AllInOneOutcome& o);
 
+// How a run ended, in words: the RESULT line and the lines under it. The
+// console, the window's log and run.log get the same lines through the run's
+// log, so the end of a run is on disk too (hardware check 99 found run.log
+// ending at the final test). The console's own hints (`gao --apply` ...) are
+// not part of it.
+std::vector<std::string> result_lines(const OptimizeOutcome& o);
+std::vector<std::string> result_lines(const UndervoltOutcome& o);
+std::vector<std::string> result_lines(const AllInOneOutcome& o);
+
 // The saved tune, tested again on the driver that is installed now
 // (core/retest.hpp): after a driver update boot-apply refuses a tune, and
 // this is the five minutes that let it in again without a whole new run.
@@ -211,6 +221,8 @@ struct RetestOutcome {
 // the NVIDIA driver otherwise. A tune that does not pass ends at stock and
 // stays as it was saved, so it stays refused. Needs elevation.
 RetestOutcome run_retest(const OptimizeHooks& hooks);
+// As result_lines above: the test's own line, then the RESULT line.
+std::vector<std::string> result_lines(const RetestOutcome& o);
 
 struct BootApplyOutcome {
     bool applied = false;

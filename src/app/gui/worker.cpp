@@ -106,6 +106,12 @@ bool OptimizeWorker::start(Preset preset, std::optional<FanCurve> fan_curve) {
         } catch (const std::exception& e) {   // a thrown exception would otherwise end the process
             (is_all ? all.error : is_undervolt ? undervolt.error : outcome.error) = std::string("unexpected error: ") + e.what();
         }
+        // The end of the run into its log as well: the window shows it from the
+        // outcome, run.log only has what went through the log.
+        const std::vector<std::string> end = is_all ? app::result_lines(all)
+                                            : is_undervolt ? app::result_lines(undervolt)
+                                                           : app::result_lines(outcome);
+        for (const std::string& line : end) hooks.log(line);
         std::lock_guard lock(mu_);
         if (is_all) all_in_one_ = std::move(all);
         else if (is_undervolt) undervolt_ = std::move(undervolt);
@@ -217,6 +223,7 @@ bool OptimizeWorker::start_retest() {
         } catch (const std::exception& e) {
             retest.error = std::string("unexpected error: ") + e.what();
         }
+        for (const std::string& line : app::result_lines(retest)) hooks.log(line);
         std::lock_guard lock(mu_);
         retest_ = std::move(retest);
     });
