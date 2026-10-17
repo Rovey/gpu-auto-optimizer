@@ -1062,6 +1062,10 @@ FanStepOutcome fan_step(const OptimizeHooks& hooks, int start_pct) {
 
 }
 
+int driver_resets(const OptimizeOutcome& o) { return o.ran ? o.result.driver_resets : 0; }
+int driver_resets(const UndervoltOutcome& o) { return o.ran ? o.result.driver_resets : 0; }
+int driver_resets(const AllInOneOutcome& o) { return driver_resets(o.overclock) + driver_resets(o.undervolt); }
+
 RetestOutcome run_retest(const OptimizeHooks& hooks) {
     RetestOutcome out;
     auto fail = [&](const std::string& why) { out.error = why; return out; };

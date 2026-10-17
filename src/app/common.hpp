@@ -188,6 +188,13 @@ struct AllInOneOutcome {
 // request ends at stock. Needs elevation.
 AllInOneOutcome run_all_in_one(const OptimizeHooks& hooks);
 
+// The driver resets a run counted, over all its steps; 0 for a step that did
+// not run. After a reset the rest of Windows may not recover with the card
+// (hardware check 99): the result screen says so.
+int driver_resets(const OptimizeOutcome& o);
+int driver_resets(const UndervoltOutcome& o);
+int driver_resets(const AllInOneOutcome& o);
+
 // The saved tune, tested again on the driver that is installed now
 // (core/retest.hpp): after a driver update boot-apply refuses a tune, and
 // this is the five minutes that let it in again without a whole new run.

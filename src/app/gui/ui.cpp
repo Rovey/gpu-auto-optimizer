@@ -1160,6 +1160,16 @@ bool retest_result(const app::RetestOutcome& o) {
     return true;
 }
 
+// After a driver reset the run recovers, but Windows and the other programs
+// may not: on an RTX 5070 the desktop stayed black but for this window
+// (hardware check 99). "Nothing left to do" would not be true then.
+std::string reset_note(int resets) {
+    return "The graphics driver was reset during this run" +
+           (resets > 1 ? " (" + std::to_string(resets) + " times)" : std::string()) +
+           ". The run recovered, but Windows and other programs may not have: if windows stay black or do not respond, "
+           "sign out and back in, or restart the computer.";
+}
+
 void results(UiState& s, const OptimizeWorker::Snapshot& run, const UiActions& act) {
     if (!run.ended()) {
         s.screen = Screen::Choose;
@@ -1172,15 +1182,23 @@ void results(UiState& s, const OptimizeWorker::Snapshot& run, const UiActions& a
                                           : optimize_result(*run.outcome, run.put_back);
     // Stopped, and the saved tune that was on the card before the run is on it again (worker.cpp).
     if (!applied && run.put_back) wrapped(kText, "Your saved tune is on the card again, as it was before the run.");
+    const int resets = run.all_in_one ? app::driver_resets(*run.all_in_one)
+                       : run.undervolt ? app::driver_resets(*run.undervolt)
+                       : run.outcome   ? app::driver_resets(*run.outcome)
+                                       : 0;
+    if (!applied && resets > 0) wrapped(kWarn, reset_note(resets));
     if (applied) {
         const bool saved = run.retest ? true : run.all_in_one ? run.all_in_one->ok : run.undervolt ? run.undervolt->saved : run.outcome->saved;
         ImGui::Spacing();
-        if (saved && s.boot_on) wrapped(kText, "Saved, and applied at every logon from now on. There is nothing left to do.");
+        if (saved && s.boot_on)
+            wrapped(kText, resets > 0 ? "Saved, and applied at every logon from now on."
+                                      : "Saved, and applied at every logon from now on. There is nothing left to do.");
         else if (saved) wrapped(kText, "Saved. It stays applied until reboot; turn on apply at logon to keep it.");
         else wrapped(kWarn, "Not saved: " + (run.undervolt ? run.undervolt->save_note : run.outcome ? run.outcome->save_note : std::string()));
         if (run.outcome && !run.outcome->busy_note.empty())
             wrapped(kWarn, run.outcome->busy_note + ". The numbers of this run and the ones at stock were not measured on the same card, "
                            "so the comparison can be off by several percent.");
+        if (resets > 0) wrapped(kWarn, reset_note(resets));
         if (saved && !s.boot_on && primary_button("Apply at every logon")) act.set_boot(true);
         if (saved && !s.boot_on) ImGui::SameLine();
         if (ImGui::Button(with_icon(kIconUndo, "Revert to stock").c_str())) act.revert_to_stock();
