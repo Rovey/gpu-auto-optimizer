@@ -9,6 +9,7 @@
 #include <dbghelp.h>
 #include <dwmapi.h>
 #include <shellapi.h>
+#include <shobjidl.h>
 #include <wrl/client.h>
 
 #include "app/common.hpp"
@@ -829,16 +830,25 @@ void restart_after_fault() {
 // ---------------------------------------------------------------- timers
 
 // After a driver reset Windows can leave the desktop background black, with
-// the picture setting unchanged (hardware checks 100 and 101, RTX 5070).
-// Setting the same picture again draws it. Only for a single picture: setting
-// a file would turn a slideshow, Windows Spotlight or a solid colour into a
-// fixed picture, so those are left alone.
+// the setting unchanged (hardware checks 100-102, RTX 5070). A single picture
+// is set again, which draws it. A slideshow is moved on to its next picture,
+// which draws it and keeps it a slideshow (setting a file would turn it into a
+// fixed picture). A solid colour and Windows Spotlight are left alone.
 void redraw_wallpaper() {
     DWORD type = 0, size = sizeof(type);
-    if (RegGetValueW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Wallpapers", L"BackgroundType",
-                     RRF_RT_REG_DWORD, nullptr, &type, &size) == ERROR_SUCCESS &&
-        type != 0)
-        return;   // 0: a picture; no value: a Windows without the setting, which shows a picture
+    const bool known = RegGetValueW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Wallpapers",
+                                    L"BackgroundType", RRF_RT_REG_DWORD, nullptr, &type, &size) == ERROR_SUCCESS;
+    if (known && type == 2) {   // a slideshow
+        const HRESULT init = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+        ComPtr<IDesktopWallpaper> wallpaper;
+        if (SUCCEEDED(CoCreateInstance(CLSID_DesktopWallpaper, nullptr, CLSCTX_ALL, IID_PPV_ARGS(&wallpaper))) &&
+            SUCCEEDED(wallpaper->AdvanceSlideshow(nullptr, DSD_FORWARD)))
+            note("The desktop slideshow was moved on to its next picture, to draw the background again after the driver reset.");
+        wallpaper.Reset();
+        if (SUCCEEDED(init)) CoUninitialize();
+        return;
+    }
+    if (known && type != 0) return;   // 0: a picture; no value: a Windows without the setting, which shows a picture
     wchar_t path[MAX_PATH] = {};
     if (!SystemParametersInfoW(SPI_GETDESKWALLPAPER, MAX_PATH, path, 0) || !path[0]) return;
     if (SystemParametersInfoW(SPI_SETDESKWALLPAPER, 0, path, SPIF_SENDCHANGE))
