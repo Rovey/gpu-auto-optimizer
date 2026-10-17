@@ -41,6 +41,16 @@ void Watchdog::seed(int resets, Clock::time_point now) {
     reapplies_.assign(static_cast<std::size_t>(std::clamp(resets, 0, kMaxReappliesPerHour)), now);
 }
 
+void Watchdog::reapply_result(bool ok, Clock::time_point now) {
+    if (ok) {
+        retry_at_.reset();
+        retry_delay_ = kRetryFirstDelay;
+        return;
+    }
+    retry_at_ = now + retry_delay_;
+    retry_delay_ = std::min<std::chrono::seconds>(retry_delay_ * 2, kRetryMaxDelay);
+}
+
 bool Watchdog::count(Clock::time_point now) {
     if (recent(now) >= kMaxReappliesPerHour) {
         gave_up_ = true;
@@ -61,6 +71,8 @@ WatchAction Watchdog::check(const Profile& p, const std::optional<AppliedState>&
     if (!seen || (p.undervolt && !curve)) return WatchAction::None;
     if (tune_applied(p, *seen, curve)) {
         backed_off_ = false;
+        retry_at_.reset();   // put back, by us or by hand
+        retry_delay_ = kRetryFirstDelay;
         // Still applied after a driver reset: nothing to write, but the
         // reset counts. A tune the driver keeps across its resets would
         // otherwise never be found unstable.
@@ -76,6 +88,9 @@ WatchAction Watchdog::check(const Profile& p, const std::optional<AppliedState>&
     const bool power_ok = power_is(*seen, p.power_pct) || power_is(*seen, 100);
     if (core_ok && mem_ok && power_ok) {
         if (gave_up_) return WatchAction::None;
+        // Still the reset whose re-apply failed: try again when it is due,
+        // without counting it again. A new reset is counted and tried at once.
+        if (retry_at_ && !driver_reset) return now >= *retry_at_ ? WatchAction::Reapply : WatchAction::None;
         return count(now) ? WatchAction::Reapply : WatchAction::GiveUpUnstable;
     }
     // Neither ours nor stock: another tool is tuning this card. Fighting it
