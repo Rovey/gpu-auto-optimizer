@@ -34,6 +34,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstring>
 #include <cwchar>
 #include <filesystem>
 #include <memory>
@@ -79,6 +80,8 @@ struct App {
     bool demo = false;
     bool demo_asks = true;
     int input_frames = 0;   // frames still to draw after input, so hover/click feedback shows
+    bool soft_render = false;   // drawn by the CPU (WARP): fewer frames
+    std::chrono::steady_clock::time_point last_frame{};
 
     ComPtr<ID3D11Device> device;
     ComPtr<ID3D11DeviceContext> ctx;
@@ -210,11 +213,22 @@ bool create_device() {
     sd.Windowed = TRUE;
     sd.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
     const D3D_FEATURE_LEVEL levels[] = {D3D_FEATURE_LEVEL_11_0};
-    HRESULT hr = D3D11CreateDeviceAndSwapChain(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, 0, levels, 1, D3D11_SDK_VERSION,
-                                               &sd, &g.swapchain, &g.device, nullptr, &g.ctx);
-    if (hr == DXGI_ERROR_UNSUPPORTED)
-        hr = D3D11CreateDeviceAndSwapChain(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, levels, 1, D3D11_SDK_VERSION, &sd,
-                                           &g.swapchain, &g.device, nullptr, &g.ctx);
+    // Drawn by the CPU (WARP), not on the NVIDIA card: a device there made the
+    // NVIDIA app inject its capture and overlay into the window, take it for a
+    // game and record it with Instant Replay, and kept the card it measures
+    // out of its idle state (29-36 W against 26 W on the RTX 5070). A device
+    // on another adapter (the CPU's own graphics) still got them injected.
+    // The NVIDIA card only when WARP fails, or with GAO_RENDER=gpu.
+    char forced[8] = {};
+    GetEnvironmentVariableA("GAO_RENDER", forced, sizeof(forced));
+    auto make = [&](D3D_DRIVER_TYPE type) {
+        g.swapchain.Reset(); g.device.Reset(); g.ctx.Reset();
+        return D3D11CreateDeviceAndSwapChain(nullptr, type, nullptr, 0, levels, 1, D3D11_SDK_VERSION, &sd, &g.swapchain,
+                                             &g.device, nullptr, &g.ctx);
+    };
+    HRESULT hr = std::strcmp(forced, "gpu") == 0 ? E_FAIL : make(D3D_DRIVER_TYPE_WARP);
+    g.soft_render = SUCCEEDED(hr);
+    if (FAILED(hr)) hr = make(D3D_DRIVER_TYPE_HARDWARE);
     if (FAILED(hr)) return false;
     create_rtv();
     return true;
@@ -1373,11 +1387,18 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdline, int) {
         // While the device is lost nothing is drawn either: wait for a message
         // (the telemetry timer rebuilds the device, when the backoff lets it)
         // instead of polling.
+        // Drawn by the CPU a frame costs tens of milliseconds: at most 20 a
+        // second, also while the mouse moves, and once a second (the
+        // telemetry's own rate) when nothing happens.
+        using namespace std::chrono_literals;
+        const auto gap = g.soft_render ? 50ms : 0ms;
+        const auto wait_gap = static_cast<DWORD>(std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::max<std::chrono::steady_clock::duration>(0ms, gap - (std::chrono::steady_clock::now() - g.last_frame))).count());
         const DWORD timeout =
             !g.visible || g.device_lost ? INFINITE
-            : g.input_frames > 0        ? 0
-            : !g.worker->running()      ? 250
-            : g.worker->snapshot().measuring_seconds > 0 ? 33 : 100;
+            : g.input_frames > 0        ? wait_gap
+            : !g.worker->running()      ? (g.soft_render ? 1000 : 250)
+            : g.worker->snapshot().measuring_seconds > 0 ? (g.soft_render ? 100 : 33) : (g.soft_render ? 250 : 100);
         MsgWaitForMultipleObjectsEx(0, nullptr, timeout, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
         MSG msg;
         bool quit = false;
@@ -1394,6 +1415,8 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdline, int) {
             continue;
         }
         if (!g.visible || IsIconic(g.hwnd) || g.device_lost) continue;
+        if (std::chrono::steady_clock::now() - g.last_frame < gap) continue;
+        g.last_frame = std::chrono::steady_clock::now();
         render();
         if (g.input_frames > 0) --g.input_frames;
     }
