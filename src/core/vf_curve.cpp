@@ -103,6 +103,23 @@ bool has_shape(const std::vector<VfPoint>& curve) {
 }
 }
 
+int clock_grid_khz(const std::vector<VfPoint>& curve) {
+    // A frequency fits a grid when it is on it, or up to 1 MHz under it: the
+    // read-out cuts a half MHz away.
+    auto fits = [&](int grid) {
+        return std::all_of(curve.begin(), curve.end(), [grid](const VfPoint& p) {
+            const int rest = p.freq_khz % grid;
+            return rest == 0 || rest >= grid - 1000;
+        });
+    };
+    if (!curve.empty())
+        for (int grid : {15000, 7500, 5000, 2500})
+            if (fits(grid)) return grid;
+    int grid = 0;
+    for (std::size_t i = 1; i < curve.size(); ++i) grid = std::gcd(grid, std::abs(curve[i].freq_khz - curve[i - 1].freq_khz));
+    return grid > 0 ? grid : 1;
+}
+
 namespace {
 // Every point on the same offset, judged by reading back. Writes nothing
 // when the curve already is there.
@@ -197,13 +214,10 @@ VfApplyResult apply_flat_top(const GpuControl& gpu, int anchor_index, int freq_k
         const VfPoint* start = find(*curve, index);
         return base_raw + std::max(0, freq_khz - (start ? start->freq_khz : freq_khz)) + kVfSlackKhz;
     };
-    // The step the card's clock moves in (15 MHz on the reference card), read
-    // off the curve itself. The half step of the first round is kept on it,
-    // so that no offset is ever one the card has to round.
-    int grid_khz = 0;
-    for (std::size_t i = 1; i < curve->size(); ++i)
-        grid_khz = std::gcd(grid_khz, std::abs((*curve)[i].freq_khz - (*curve)[i - 1].freq_khz));
-    if (grid_khz <= 0) grid_khz = 1;
+    // The step the card's clock moves in (15 MHz on the reference card, 7.5 on
+    // an RTX 5070), read off the curve itself. The half step of the first
+    // round is kept on it, so that no offset is ever one the card has to round.
+    const int grid_khz = clock_grid_khz(*curve);
     std::vector<VfPoint> before = *curve;
     for (r.passes = 1; r.passes <= kVfPasses; ++r.passes) {
         std::vector<VfOffset> offsets;
