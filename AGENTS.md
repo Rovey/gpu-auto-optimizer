@@ -23,6 +23,24 @@ $bin = "C:\Program Files\Microsoft Visual Studio\18\Community\Common7\IDE\Common
 
 Everything we compile is `/W4 /WX`; fix warnings, do not suppress them.
 
+## Hardware tests: targeted first
+
+A full All in one run takes about 40 minutes (five 5-minute measurements). To check a change on a card,
+test the part that changed, directly; it usually takes minutes:
+
+- Flat top / undervolt write: `gao --curve-flatten <mV> <MHz> [<drop MHz>] [<core MHz>]` during and right
+  after `gao --stress <s>` (warm and cooling card), then `gao --apply` to put the saved tune back.
+- Watchdog and recovery: the tray app running, `dxcap -forcetdr` (elevated), with or without
+  `gao --stress` running; read `boot.log` and `gao --status`.
+- Fans: `gao --stress <s>` and `gao --status` every few seconds.
+- What a run logs: an aborted or refused run already writes its `RESULT:` line to `run.log`.
+
+Before anything that can save a profile, copy `%ProgramData%\GpuAutoOptimizer\gao.json`: a run replaces the
+saved tune as soon as its overclock step ends. Keep full runs for release checks, when nobody needs the
+machine; run them from the command line with the window closed, because the NVIDIA app's Instant Replay
+records while the app's window is open and lowers the measurements by about 2 %. `tools\hwchecks.ps1`
+drives the checks of `docs/hardware-checks.md` that run `gao`.
+
 ## Layout
 
 Two executables on one engine: `gao.exe` (CLI, `src/app/main.cpp`) and
