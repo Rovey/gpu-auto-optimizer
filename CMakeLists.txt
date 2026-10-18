@@ -130,6 +130,10 @@ target_link_libraries(imgui PUBLIC d3d11 dwmapi PRIVATE gao_hardening)
 add_executable(GpuAutoOptimizer WIN32
   src/app/gui/main_gui.cpp
   src/app/gui/ui.hpp src/app/gui/ui.cpp
+  src/app/gui/ui_widgets.hpp src/app/gui/ui_widgets.cpp
+  src/app/gui/ui_dashboard.cpp src/app/gui/ui_fan.cpp
+  src/app/gui/ui_optimize.cpp src/app/gui/ui_results.cpp
+  src/app/gui/ui_about.cpp
   src/app/gui/worker.hpp src/app/gui/worker.cpp
   src/app/gao.manifest
   src/app/app.rc
