@@ -279,3 +279,74 @@ TEST_CASE("a measurement against stock that cannot be read is absent, and the pr
         CHECK_FALSE(c.profile->against_stock);
     }
 }
+
+// Who updates from 0.4.2 (the latest release before 0.4.8) keeps the gao.json
+// that version wrote: no temperature ceiling and no measurement against stock
+// in the profile. The tune must load whole and apply at logon as before.
+TEST_CASE("a gao.json written by 0.4.2 keeps its tune and applies at logon") {
+    // As 0.4.2 saved it on the reference card (keys sorted, as its JSON writer does).
+    const Config best = from_json(R"({
+  "boot_strikes": 0,
+  "fan_control": true,
+  "fan_min_gpu": "GPU-a41e21d6",
+  "fan_min_pct": 52,
+  "profile": {
+    "core_mhz": 135,
+    "driver": "617.42",
+    "fan_curve": {"points": [[50, 35], [60, 45], [70, 65], [75, 100]], "stop_below_c": 50},
+    "gpu": "GPU-a41e21d6",
+    "mem_mhz": 650,
+    "power_pct": 105,
+    "preset": "best",
+    "saved_at": "2026-10-11 09:24"
+  },
+  "update_check": true
+})");
+    REQUIRE(best.profile);
+    CHECK(best.profile->preset == Preset::BestOfMyGpu);
+    CHECK(best.profile->power_pct == 105);
+    CHECK(best.profile->core_mhz == 135);
+    CHECK(best.profile->mem_mhz == 650);
+    CHECK_FALSE(best.profile->undervolt);
+    CHECK_FALSE(best.profile->temp_ceiling_c);
+    CHECK_FALSE(best.profile->against_stock);
+    CHECK(best.fan_control);
+    CHECK(best.update_check);
+    CHECK(best.fan_min_pct == 52);
+    CHECK(decide_boot(best, "617.42", "GPU-a41e21d6") == BootDecision::Apply);
+    REQUIRE(active_fan_curve(best));
+    CHECK(*active_fan_curve(best) == *best.profile->fan_curve);
+    CHECK(profile_ceiling(*best.profile) == 75);
+
+    // An All in one tune of 0.4.2: a flat top over a core offset.
+    const Config all = from_json(R"({
+  "boot_strikes": 1,
+  "fan_control": true,
+  "profile": {
+    "core_mhz": 135,
+    "driver": "617.42",
+    "fan_curve": {"points": [[50, 52], [70, 52], [75, 100]], "stop_below_c": 50},
+    "gpu": "GPU-a41e21d6",
+    "mem_mhz": 1400,
+    "power_pct": 105,
+    "preset": "all",
+    "saved_at": "2026-10-11 13:09",
+    "undervolt": {"freq_khz": 2850000, "raise_khz": 165000, "volt_uv": 1025000}
+  },
+  "update_check": false
+})");
+    REQUIRE(all.profile);
+    CHECK(all.profile->preset == Preset::AllInOne);
+    REQUIRE(all.profile->undervolt);
+    CHECK(all.profile->undervolt->volt_uv == 1025000);
+    CHECK(all.profile->undervolt->freq_khz == 2850000);
+    CHECK(all.profile->undervolt->raise_khz == 165000);
+    CHECK(all.boot_strikes == 1);
+    CHECK_FALSE(all.update_check);
+    CHECK(decide_boot(all, "617.42", "GPU-a41e21d6") == BootDecision::Apply);
+    // Saved again by this version, it still reads back the same tune.
+    const Config again = from_json(to_json(all));
+    REQUIRE(again.profile);
+    CHECK(again.profile->undervolt->volt_uv == 1025000);
+    CHECK(again.profile->mem_mhz == 1400);
+}
