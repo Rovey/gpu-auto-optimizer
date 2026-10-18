@@ -90,6 +90,14 @@ StockOutcome measure_stock(const OptimizeHooks& hooks) {
     auto load = std::make_unique<Stress>();
     if (!load->Init()) return fail("stress init failed: " + load->Error());
     const GpuControl& gpu = hw.control();
+    // The emergency handlers for the whole measurement, as during the search:
+    // without them Ctrl+C on the command line ends the process here, and the
+    // tune the run found on the card is not put back.
+    if (hooks.active_gpu) hooks.active_gpu(&gpu);
+    struct Unregister {
+        const OptimizeHooks& h;
+        ~Unregister() { if (h.active_gpu) h.active_gpu(nullptr); }
+    } unregister{hooks};
     if (!gpu.reset_to_stock || !gpu.reset_to_stock()) return fail("could not set the card to stock");
     const KeepAwake keep_awake;
     auto log = [&](const std::string& m) { if (hooks.log) hooks.log(m); };
