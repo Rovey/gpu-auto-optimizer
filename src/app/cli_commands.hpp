@@ -45,7 +45,8 @@ template <class Run> int putting_back(Run run) {
     const int code = run();
     if (g_abort && code == 1) {
         gao::app::OptimizeHooks hooks;
-        hooks.log = gao::app::logged([](const std::string& msg) { std::printf("  %s\n", msg.c_str()); });
+        // The end of the run that was stopped: no header line of its own.
+        hooks.log = gao::app::logged([](const std::string& msg) { std::printf("  %s\n", msg.c_str()); }, false);
         gao::app::put_back_after_stop(before, hooks);
     }
     return code;

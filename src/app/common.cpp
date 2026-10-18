@@ -81,7 +81,8 @@ void boot_log(const std::string& msg) {
 
 bool prepare_state(std::string* why) { return ensure_app_dir(why); }
 
-std::function<void(const std::string&)> logged_to(const std::filesystem::path& file, std::function<void(const std::string&)> show) {
+std::function<void(const std::string&)> logged_to(const std::filesystem::path& file, std::function<void(const std::string&)> show,
+                                                  bool header) {
     std::error_code ec;
     if (std::filesystem::file_size(file, ec) > kRunLogMaxBytes && !ec) {
         std::filesystem::path old = file;
@@ -95,19 +96,19 @@ std::function<void(const std::string&)> logged_to(const std::filesystem::path& f
         std::snprintf(stamp, sizeof(stamp), "%04d-%02d-%02d %02d:%02d:%02d  ", t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond);
         append_line_durable(file, stamp + line);
     };
-    write("=== " + std::string(kProductName) + " " + std::string(kVersion));
+    if (header) write("=== " + std::string(kProductName) + " " + std::string(kVersion));
     return [write, show = std::move(show)](const std::string& line) {
         write(line);   // on disk before anything acts on it
         if (show) show(line);
     };
 }
 
-std::function<void(const std::string&)> logged(std::function<void(const std::string&)> show) {
+std::function<void(const std::string&)> logged(std::function<void(const std::string&)> show, bool header) {
     // Only into a folder that was verified: an elevated process does not
     // append to a file somebody else may have put there.
     std::string why;
     if (!is_elevated() || run_log_path().empty() || !prepare_state(&why)) return show;
-    return logged_to(run_log_path(), std::move(show));
+    return logged_to(run_log_path(), std::move(show), header);
 }
 
 std::string profile_text(const Profile& p) {

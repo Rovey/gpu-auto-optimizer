@@ -39,6 +39,7 @@ What else is in it:
 
 - **Five more profiles** for when you want one thing only: Best of my GPU, Cool & efficient, Quiet, Max performance and Undervolt.
 - **You see what it does:** during a run the window draws the card's voltage/frequency curve as the run writes it, over the card's own, says which step the run is at, and counts every long one down.
+- **You keep seeing what it gave:** the dashboard shows the saved tune against the card at stock, as measured when the tune was made: speed, power, fan speed under load and peak temperature.
 - **Fan curves:** the measured one, Silent, Normal, Cool or Aggressive, or your own; fans stop at idle without cycling on and off, the app learns the lowest speed your fans can actually hold, and the fans go back to the driver on exit, sleep, logoff and crashes.
 - **Native and small:** two C++ programs, under 2 MB together, with no installer, no runtime and no driver or service.
 
@@ -204,6 +205,7 @@ flowchart LR
 | `gao --probe` | Live telemetry: clocks, temperature, fan, power, clock-offset ranges |
 | `gao --curve` | Prints the voltage/frequency curve as the driver reports it; changes nothing |
 | `gao --stress <seconds>` | Runs the stress test alone and prints its verdict; changes nothing |
+| `gao --stress <seconds> --duty <pct>` | A light load instead: the card works that share of the time and idles in between, for checking the fans' idle rule; changes nothing |
 | `gao --bandwidth [--after-load <sec>]` | Measures the current memory bandwidth and shows every run of the measurement; with `--after-load`, right after that many seconds of the stress load, as a run measures it |
 | `gao --busy` | Shows the other programs that use the card right now, as a run looks for them before it starts; changes nothing |
 | `gao --update` | Installs the latest release into the folder `gao.exe` is in, if there is a newer one |
@@ -252,7 +254,7 @@ Yes. The edge of a card is found by crossing it. A probe that computes a wrong v
 
 A search may reset the driver once: the screen goes black for a moment. The run then reconnects, sets the card to stock, rests for 20 seconds, checks that the card computes normally again, and stops exploring that clock: it tries no new values for it, and confirms a little below the last value that passed. The memory search and the core search each get one, so a run can reset the driver twice. One more ends the run at stock with nothing saved, and so does a card that does not come back. Nothing about a reset is remembered, so the next run on such a card crosses the edge again. Results on real cards are in [docs/hardware-checks.md](docs/hardware-checks.md), checks 51 and 52.
 
-A driver reset also reaches the other programs on the desktop. In a test during development, with an earlier build that put the load back on the card right after a forced reset, no application window could be opened or seen afterwards and one application crashed; the user had to sign out and in. The rest after a reset was added since; whether it prevents this has not been tested. Save your work before a run.
+A driver reset also reaches the other programs on the desktop. On an RTX 5070, one run with the app's window open left a desktop where only that window was drawn, and one other program crashed; the owner had to sign out and in. A second run, with the window closed, left the desktop usable, and the window is now drawn by the processor instead of the graphics card. Whether that is enough on every card is not known. When it happens, the app says so: sign out and in, or restart the computer. Save your work before a run.
 
 If the machine freezes instead, the crash journal makes sure the next run stays below that setting.
 </details>
