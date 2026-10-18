@@ -60,6 +60,17 @@ TEST_CASE("a second run adds to the log of the first") {
     CHECK(lines->size() == 4);   // two headers, two lines
 }
 
+TEST_CASE("what a stopped run does afterwards is part of that run in the log, under no header of its own") {
+    const TempDir dir;
+    const auto file = dir.path / "run.log";
+    gao::app::logged_to(file, {})("stock: ABORTED");
+    gao::app::logged_to(file, {}, false)("stopped: the tune that was on the card before the run is back");
+    const auto lines = gao::read_lines(file);
+    REQUIRE(lines);
+    REQUIRE(lines->size() == 3);   // one header, two lines
+    CHECK((*lines)[2].find("stopped: the tune") != std::string::npos);
+}
+
 TEST_CASE("a run log that has grown large is moved aside, and one older file is kept") {
     const TempDir dir;
     const auto file = dir.path / "run.log";
