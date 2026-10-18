@@ -14,10 +14,12 @@
 #include "hw/nvidia_app.hpp"
 #include "hw/nvml.hpp"
 #include "hw/stress.hpp"
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <filesystem>
 #include <string>
+#include <thread>
 #include <charconv>
 #include <cstddef>
 #include <cstdio>
@@ -181,20 +183,28 @@ static int reset() {
 
 // Runs the DX11 stress load for `seconds` of GPU time, printing one line per
 // second, then the verdict. Changes no settings, so Ctrl+C is always safe.
+// duty_pct < 100: a light load, the card working that share of `seconds` of
+// wall time and idle in between (duty_pause_ms); the lines then come per
+// second of GPU time.
 // Assumes the first NVIDIA DXGI adapter is NVML device kGpu -- true on a
 // single-GPU machine, which is all this CLI supports (see kGpu).
-static int stress(int seconds, int max_temp_c, gao::StressSelftest selftest) {
+static int stress(int seconds, int max_temp_c, gao::StressSelftest selftest, int duty_pct) {
     gao::Nvml nvml;
     if (!nvml.Init()) { std::printf("NVML init failed: %s\n", nvml.Error().c_str()); return 1; }
     gao::Stress load;
     if (!load.Init(selftest)) { std::printf("stress init failed: %s\n", load.Error().c_str()); return 1; }
-    std::printf("stress: %s, %d s, abort above %d C\n", load.AdapterName().c_str(), seconds, max_temp_c);
+    std::printf("stress: %s, %d s, abort above %d C", load.AdapterName().c_str(), seconds, max_temp_c);
+    if (duty_pct < 100) std::printf(", working %d %% of the time", duty_pct);
+    std::printf("\n");
+    const double gpu_seconds = duty_pct < 100 ? std::max(1.0, seconds * duty_pct / 100.0) : seconds;
 
     double t = 0, next_print = 1.0;
     long long window_its = 0;
     double window_s = 0;
     auto batch = [&] {
         const gao::StressBatch b = load.Batch();
+        if (const int pause = gao::duty_pause_ms(b.elapsed_ms, duty_pct); pause > 0)
+            std::this_thread::sleep_for(std::chrono::milliseconds(pause));
         t += b.elapsed_ms / 1000.0;
         window_s += b.elapsed_ms / 1000.0;
         window_its += b.iterations;
@@ -212,7 +222,7 @@ static int stress(int seconds, int max_temp_c, gao::StressSelftest selftest) {
         }
         return tel;
     };
-    const gao::StabilityResult r = gao::run_stability(batch, read, seconds, max_temp_c);
+    const gao::StabilityResult r = gao::run_stability(batch, read, gpu_seconds, max_temp_c);
     std::printf("VERDICT: %s  score=%.0f it/s  %.1f s  peak=%s C  avg power=%s W  avg core=%s MHz  avg mem=%s MHz\n",
                 gao::verdict_name(r.verdict), r.score, r.seconds, gao::reading(r.peak_temp_c).c_str(),
                 gao::reading(r.avg_power_w).c_str(), gao::reading(r.avg_core_mhz).c_str(),
@@ -597,11 +607,17 @@ int main(int argc, char** argv) {
         }
         int max_temp = 85;
         auto selftest = gao::StressSelftest::None;
+        int duty = 100;
         for (int i = 3; i < argc; i += 2) {
             if (i + 1 >= argc) { std::printf("%s expects a value\n", argv[i]); return 1; }
             if (std::strcmp(argv[i], "--max-temp") == 0) {
                 if (!ParseIntArg(argv[i + 1], &max_temp) || max_temp < 40 || max_temp > 95) {
                     std::printf("--max-temp expects 40-95 C, got '%s'\n", argv[i + 1]);
+                    return 1;
+                }
+            } else if (std::strcmp(argv[i], "--duty") == 0) {
+                if (!ParseIntArg(argv[i + 1], &duty) || duty < 5 || duty > 100) {
+                    std::printf("--duty expects 5-100 %%, got '%s'\n", argv[i + 1]);
                     return 1;
                 }
             } else if (std::strcmp(argv[i], "--stress-selftest") == 0) {
@@ -612,7 +628,7 @@ int main(int argc, char** argv) {
                 return 1;
             }
         }
-        return stress(seconds, max_temp, selftest);
+        return stress(seconds, max_temp, selftest, duty);
     }
     if (argc > 1 && std::strcmp(argv[1], "--bandwidth") == 0) {
         int after_load_s = 0;
@@ -678,7 +694,8 @@ int main(int argc, char** argv) {
     }
     std::printf("usage: gao [--version | --probe | --set-core <mhz> | --set-mem <mhz> | --reset\n"
                 "            | --busy (the other programs that use the card now, as a run looks for them; changes nothing)\n"
-                "            | --stress <sec> [--max-temp <c>] | --bandwidth [--after-load <sec>]\n"
+                "            | --stress <sec> [--max-temp <c>] [--duty <pct> (a light load: works that share of the time)]\n"
+                "            | --bandwidth [--after-load <sec>]\n"
                 "            | --stress-recreate (loads the card for two 3 s runs around a device rebuild;\n"
                 "              changes no setting; exit 0 = both STABLE, rebuilt and a clean first batch, 1 = anything else,\n"
                 "              never --stress's 2 / 3)\n"

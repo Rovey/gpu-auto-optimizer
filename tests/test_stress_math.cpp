@@ -49,3 +49,11 @@ TEST_CASE("a bandwidth measurement without a single reading says so") {
     CHECK(bandwidth_runs_text({0, 0, 0, 0}) == "no reading, 4 discarded for a clock change");
     CHECK(bandwidth_runs_text({}) == "no reading");
 }
+
+TEST_CASE("a duty cycle pauses after each batch so the card works that share of the time") {
+    CHECK(duty_pause_ms(250, 100) == 0);   // plain --stress: no pause
+    CHECK(duty_pause_ms(250, 50) == 250);
+    CHECK(duty_pause_ms(250, 20) == 1000);
+    CHECK(duty_pause_ms(250, 15) == 1417);
+    CHECK(duty_pause_ms(0, 20) == 0);      // a batch that took no time asks for no pause
+}
