@@ -85,6 +85,18 @@ std::string now_text() {
     return buf;
 }
 
+namespace {
+MeasuredRun measured_run(const StabilityResult& r) {
+    return {r.score, r.avg_core_mhz, r.avg_mem_mhz, r.peak_temp_c, r.end_fan_pct, r.avg_power_w};
+}
+
+// Both runs, or nothing: a comparison with half its numbers says nothing.
+std::optional<AgainstStock> against_stock(const StabilityResult& stock, const StabilityResult& tuned) {
+    if (stock.score <= 0 || tuned.score <= 0) return std::nullopt;
+    return AgainstStock{measured_run(stock), measured_run(tuned)};
+}
+}
+
 Config load_config() {
     const auto text = read_file(config_path());
     return text ? from_json(*text) : Config{};
@@ -563,6 +575,7 @@ OptimizeOutcome run_optimize(Preset preset, const OptimizeHooks& hooks, const st
     }
     Config cfg = load_config();
     cfg.profile = Profile{preset, out.result.power_pct, out.result.core_mhz, out.result.mem_mhz, driver, gpu_id, now_text()};
+    cfg.profile->against_stock = against_stock(out.stock, out.result.soak);
     cfg.fan_curve.reset();   // a new tune starts from its own curve
     // Only a curve that actually drove the fans counts as tested.
     if (gpu.set_fan_pct && fans.state().mode != FanMode::Failed && fans.state().mode != FanMode::Foreign) {
@@ -746,6 +759,9 @@ UndervoltOutcome run_undervolt(const OptimizeHooks& hooks, bool on_saved_tune, c
         cfg.fan_control = true;
     }
     p.undervolt = UndervoltTune{out.result.applied_uv, out.result.freq_khz, out.result.raise_khz};
+    // On a saved tune the baseline is that tune, not stock: the stock run it was saved with stays.
+    if (!over) p.against_stock = against_stock(out.result.baseline, out.result.after);
+    else if (p.against_stock && out.result.after.score > 0) p.against_stock->tuned = measured_run(out.result.after);
     cfg.profile = p;
     cfg.boot_strikes = 0;   // strikes belong to the profile they were earned by
     out.saved = save_config(cfg);
@@ -1320,8 +1336,13 @@ AllInOneOutcome run_all_in_one(const OptimizeHooks& outer) {
             log(std::string("  note: ") + line);
         }
     }
-    const Config cfg = load_config();
+    Config cfg = load_config();
     if (!cfg.profile) return stop("the saved tune could not be read back");
+    // The steps saved their own comparisons; the run's is its first and its last five minutes.
+    if (const auto against = against_stock(out.stock, out.now)) {
+        cfg.profile->against_stock = against;
+        if (!save_config(cfg)) log("  note: the comparison with stock could not be saved (" + config_path().string() + ")");
+    }
     out.profile = *cfg.profile;
     out.ok = true;
     return out;

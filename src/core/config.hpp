@@ -16,6 +16,25 @@ struct UndervoltTune {
     bool operator==(const UndervoltTune&) const = default;
 };
 
+// A five-minute run under full load, as the dashboard compares the tune with
+// stock: the run's own numbers, -1 (0 for the score) where it had none.
+struct MeasuredRun {
+    double score = 0;   // iterations per second
+    int core_mhz = -1;
+    int mem_mhz = -1;
+    int peak_temp_c = -1;
+    int fan_pct = -1;   // at the end of the run
+    int power_w = -1;
+    bool operator==(const MeasuredRun&) const = default;
+};
+
+// What the run that saved the tune measured: the card at stock, and with the tune.
+struct AgainstStock {
+    MeasuredRun stock;
+    MeasuredRun tuned;
+    bool operator==(const AgainstStock&) const = default;
+};
+
 // What --optimize or --undervolt found, as --apply and --boot-apply re-apply it.
 struct Profile {
     Preset preset = Preset::BestOfMyGpu;
@@ -31,6 +50,7 @@ struct Profile {
     // The fan curve above is drawn against it.
     std::optional<int> temp_ceiling_c;
     std::optional<UndervoltTune> undervolt;   // set: a flat top on the curve, over core_mhz when that is not 0
+    std::optional<AgainstStock> against_stock;   // empty: saved by a build before this, or not measured
 };
 
 // Everything that has to survive a reboot. Freeze ceilings are not here:

@@ -343,7 +343,19 @@ void tuning_row(const char* label, const std::string& value, const ImVec4& color
     ImGui::PopStyleColor();
 }
 
-void tuning_card(const UiState& s, const UiActions& act) {
+// "5922 -> 6067 it/s (+2.4 %)", drawn with an arrow: a stock value next to
+// the tune's; the change in percent only where it says something (score, power).
+std::string stock_to_tune(double stock, double tuned, const char* unit, bool percent) {
+    char buf[96];
+    if (stock < 0 || tuned < 0) return "Not measured";
+    if (percent && stock > 0)
+        std::snprintf(buf, sizeof(buf), "%.0f \xE2\x86\x92 %.0f%s (%+.1f %%)", stock, tuned, unit, (tuned / stock - 1) * 100);
+    else
+        std::snprintf(buf, sizeof(buf), "%.0f \xE2\x86\x92 %.0f%s", stock, tuned, unit);
+    return buf;
+}
+
+void tuning_card(UiState& s, const UiActions& act) {
     begin_card("tuning");
     heading("Current tuning");
     const float gap = ImGui::GetStyle().ItemSpacing.x;
@@ -388,6 +400,15 @@ void tuning_card(const UiState& s, const UiActions& act) {
                 if (p.mem_mhz != 0) tune += ", memory " + offset(p.mem_mhz);
             }
             row("Saved tune", std::string(title_of(p.preset)) + ": " + tune + " (" + p.saved_at + ")");
+            // What the run that saved it measured under full load, five minutes each.
+            if (const auto& m = p.against_stock; m && s.profile_gpu_ok) {
+                row("Speed vs stock", stock_to_tune(m->stock.score, m->tuned.score, " it/s", true));
+                row("Power vs stock", stock_to_tune(m->stock.power_w, m->tuned.power_w, " W", true));
+                row("Fans under load", stock_to_tune(m->stock.fan_pct, m->tuned.fan_pct, " %", false));
+                row("Peak temperature", stock_to_tune(m->stock.peak_temp_c, m->tuned.peak_temp_c, " \xC2\xB0""C", false));
+            } else if (s.profile_gpu_ok) {
+                row("Against stock", "Measured by the next run: this tune was saved by an older version.", kDim);
+            }
             if (!s.profile_gpu_ok)
                 row("", "Tuned on " + std::string(s.profile_driver_ok ? "" : "driver " + p.driver + " and ") +
                                    "another card. Optimize again before relying on it.",
@@ -414,7 +435,9 @@ void tuning_card(const UiState& s, const UiActions& act) {
     float rows_h = 0;
     for (const Row& r : rows)
         rows_h += std::max(em(), ImGui::CalcTextSize(r.value.c_str(), nullptr, false, value_w).y) + style.CellPadding.y * 2;
-    const float h = std::max(em() * 9.6f, rows_h + em() * 1.8f);
+    // Four buttons in the actions column, with the spacing between them and the column's padding.
+    const float buttons_h = em() * 2.3f * 4 + style.ItemSpacing.y * 3 + style.WindowPadding.y * 2;
+    const float h = std::max(buttons_h, rows_h + em() * 1.8f);
 
     begin_card("values", h, kInner, left_w);
     if (ImGui::BeginTable("rows", 2, ImGuiTableFlags_SizingFixedFit)) {
@@ -456,18 +479,9 @@ void tuning_card(const UiState& s, const UiActions& act) {
     ImGui::BeginDisabled(!s.elevated);
     if (ImGui::Button(with_icon(kIconUndo, "Revert to stock").c_str(), ImVec2(bw, bh))) act.revert_to_stock();
     ImGui::EndDisabled();
+    // The profiles are picked on the Optimize page; the dashboard only leads there.
+    if (ImGui::Button(with_icon(kIconPulse, "Optimize...").c_str(), ImVec2(bw, bh))) s.page = Page::Optimize;
     ImGui::EndChild();
-    end_card();
-}
-
-void profiles_card(UiState& s) {
-    begin_card("profiles");
-    heading("Optimization profiles");
-    const std::string go = with_icon(kIconPulse, "Optimize...");
-    align_right(button_width(go));
-    if (ImGui::Button(go.c_str())) s.page = Page::Optimize;
-    ImGui::Spacing();
-    preset_cards(s);
     end_card();
 }
 
@@ -764,7 +778,6 @@ void fan_page(UiState& s, const UiActions& act) {
 void dashboard(UiState& s, const UiActions& act) {
     gpu_card(s, act);
     tuning_card(s, act);
-    profiles_card(s);
     log_card(s);
 }
 

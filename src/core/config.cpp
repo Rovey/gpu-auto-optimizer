@@ -30,6 +30,28 @@ std::optional<FanCurve> curve_from(const nlohmann::json& j) {
     if (!valid(c)) return std::nullopt;
     return c;
 }
+
+nlohmann::json run_json(const MeasuredRun& r) {
+    return {{"score", r.score},       {"core_mhz", r.core_mhz}, {"mem_mhz", r.mem_mhz},
+            {"peak_temp_c", r.peak_temp_c}, {"fan_pct", r.fan_pct}, {"power_w", r.power_w}};
+}
+
+// nullopt unless every field is there with its type: half a run never shows.
+std::optional<MeasuredRun> run_from(const nlohmann::json& j) {
+    if (!j.is_object()) return std::nullopt;
+    const auto score = j.find("score");
+    if (score == j.end() || !score->is_number()) return std::nullopt;
+    MeasuredRun r;
+    r.score = score->get<double>();
+    for (auto [key, field] : {std::pair{"core_mhz", &r.core_mhz}, std::pair{"mem_mhz", &r.mem_mhz},
+                              std::pair{"peak_temp_c", &r.peak_temp_c}, std::pair{"fan_pct", &r.fan_pct},
+                              std::pair{"power_w", &r.power_w}}) {
+        const auto it = j.find(key);
+        if (it == j.end() || !it->is_number_integer()) return std::nullopt;
+        *field = it->get<int>();
+    }
+    return r;
+}
 }
 
 std::string to_json(const Config& c) {
@@ -51,6 +73,8 @@ std::string to_json(const Config& c) {
             j["profile"]["undervolt"] = {{"volt_uv", p.undervolt->volt_uv},
                                          {"freq_khz", p.undervolt->freq_khz},
                                          {"raise_khz", p.undervolt->raise_khz}};
+        if (p.against_stock)
+            j["profile"]["against_stock"] = {{"stock", run_json(p.against_stock->stock)}, {"tuned", run_json(p.against_stock->tuned)}};
     }
     if (c.fan_curve) j["fan_curve"] = curve_json(*c.fan_curve);
     j["fan_control"] = c.fan_control;
@@ -117,6 +141,11 @@ Config from_json(const std::string& text) {
     c.profile->undervolt = undervolt;
     if (const auto it = pj->find("fan_curve"); it != pj->end()) c.profile->fan_curve = curve_from(*it);
     c.profile->temp_ceiling_c = num("temp_ceiling_c");   // one that cannot be read: the preset's own limit, the lower one
+    if (const auto it = pj->find("against_stock"); it != pj->end() && it->is_object()) {
+        const auto stock = it->find("stock"), tuned = it->find("tuned");
+        if (stock != it->end() && tuned != it->end())
+            if (const auto s = run_from(*stock), t = run_from(*tuned); s && t) c.profile->against_stock = AgainstStock{*s, *t};
+    }
     return c;
 }
 
