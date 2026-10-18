@@ -334,7 +334,7 @@ TEST_CASE("the margin applies to the confirmed core edge") {
 TEST_CASE("without a reconnect a failing bandwidth measurement never raises memory") {
     // As it was before the reset budget: the scan ends at the first failed
     // measurement, here the one at +0. With a reconnect that case leaves the
-    // memory at stock as well, and says why (tested below).
+    // memory at stock as well, and says why (tested in test_search_reset_budget.cpp).
     Run run;
     run.card.bw_curve = [](int m) { return 500 + m * 0.1; };
     run.card.bw_fails = true;
