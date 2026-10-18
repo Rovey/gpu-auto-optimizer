@@ -1,6 +1,7 @@
 #include "doctest/doctest.h"
 #include "core/config.hpp"
 #include "core/boot.hpp"
+#include <vector>
 
 using namespace gao;
 
@@ -251,3 +252,30 @@ TEST_CASE("a curve that was saved with its ceiling is not moved a second time") 
     CHECK(shifted_curve(default_curve(Preset::Undervolt), temp_ceiling(limit, 67) - profile_ceiling(cool)) == default_curve(Preset::Undervolt));
 }
 
+
+TEST_CASE("a profile's measurement against stock survives a round-trip") {
+    Config c;
+    c.profile = sample();
+    CHECK(to_json(c).find("against_stock") == std::string::npos);   // as every profile was written before
+    CHECK_FALSE(from_json(to_json(c)).profile->against_stock.has_value());
+    // The RTX 5070's All in one run of 2026-10-17 (hardware check 99).
+    c.profile->against_stock = AgainstStock{{5922, 2817, 14002, 72, 67, 200}, {6067, 2894, 15850, 72, 35, 170}};
+    const Config back = from_json(to_json(c));
+    REQUIRE(back.profile.has_value());
+    REQUIRE(back.profile->against_stock.has_value());
+    CHECK(*back.profile->against_stock == *c.profile->against_stock);
+}
+
+TEST_CASE("a measurement against stock that cannot be read is absent, and the profile stays") {
+    const std::string head = R"({"profile":{"preset":"quiet","power_pct":80,"core_mhz":90,"mem_mhz":600,"driver":"x","gpu":"g","saved_at":"y")";
+    const std::string run = R"({"score":5922.4,"core_mhz":2817,"mem_mhz":14002,"peak_temp_c":72,"fan_pct":67,"power_w":200})";
+    const Config good = from_json(head + R"(,"against_stock":{"stock":)" + run + R"(,"tuned":)" + run + "}}}");
+    REQUIRE(good.profile);
+    REQUIRE(good.profile->against_stock);
+    CHECK(good.profile->against_stock->stock.score == doctest::Approx(5922.4));
+    for (const std::string& bad : std::vector<std::string>{"17", R"({"stock":)" + run + "}", R"({"stock":)" + run + R"(,"tuned":{"score":"fast"}})"}) {
+        const Config c = from_json(head + R"(,"against_stock":)" + bad + "}}");
+        REQUIRE(c.profile);
+        CHECK_FALSE(c.profile->against_stock);
+    }
+}
