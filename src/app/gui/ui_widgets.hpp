@@ -16,8 +16,9 @@ inline const ImVec4 kCard{0.090f, 0.102f, 0.122f, 1};
 inline const ImVec4 kInner{0.110f, 0.125f, 0.149f, 1};
 inline const ImVec4 kInnerHover{0.140f, 0.158f, 0.188f, 1};
 inline const ImVec4 kBorder{0.170f, 0.192f, 0.227f, 1};
-inline const ImVec4 kAccent{0.180f, 0.435f, 0.835f, 1};
-inline const ImVec4 kAccentHover{0.231f, 0.502f, 0.906f, 1};
+// Dark enough for kText on it to read at 4.5:1 (primary buttons).
+inline const ImVec4 kAccent{0.150f, 0.380f, 0.750f, 1};
+inline const ImVec4 kAccentHover{0.190f, 0.440f, 0.830f, 1};
 inline const ImVec4 kAccentBright{0.290f, 0.580f, 1.000f, 1};
 inline const ImVec4 kSelectedBg{0.098f, 0.145f, 0.220f, 1};
 inline const ImVec4 kText{0.900f, 0.910f, 0.930f, 1};
@@ -32,7 +33,7 @@ enum Icon : unsigned {
     kIconTemp = 0xE9CA, kIconPower = 0xE945, kIconFan = 0xF16A, kIconRefresh = 0xE72C, kIconUndo = 0xE777,
     kIconPlay = 0xF5B0, kIconStop = 0xE71A, kIconClock = 0xE823, kIconStar = 0xE734, kIconQuiet = 0xE992,
     kIconLeaf = 0xEC0A, kIconGauge = 0xEC4A, kIconShield = 0xEA18, kIconList = 0xE8FD, kIconBack = 0xE72B,
-    kIconDownload = 0xE896, kIconStarFilled = 0xE735,
+    kIconDownload = 0xE896, kIconStarFilled = 0xE735, kIconCancel = 0xE711,
 };
 
 struct PresetInfo {
@@ -45,8 +46,8 @@ inline constexpr PresetInfo kPresets[] = {
     {Preset::BestOfMyGpu, kIconStar, "Best of my GPU",
      "Highest confirmed clocks with a safety margin and the most power the card allows."},
     {Preset::CoolAndEfficient, kIconLeaf, "Cool & efficient",
-     "Power only: the lowest power limit that costs under 2 % speed, clocks left stock."},
-    {Preset::Quiet, kIconQuiet, "Quiet", "Milder clocks and the lowest power limit that costs under 2 % speed."},
+     "Power only: the lowest power limit that costs under 2\xC2\xA0% speed, clocks left stock."},
+    {Preset::Quiet, kIconQuiet, "Quiet", "Milder clocks and the lowest power limit that costs under 2\xC2\xA0% speed."},
     {Preset::MaxPerformance, kIconGauge, "Max performance",
      "Highest confirmed clocks minus one step and the highest power limit."},
 };
@@ -75,6 +76,15 @@ std::string duration_text(double seconds);
 std::string undervolt_text(const UndervoltTune& u);
 std::string score_text(double score);
 std::string against(double before, double after, const char* unit);
+// "Done: 4.6 % faster, 6 % more power": the result in one line, from the
+// two runs a result page compares. Just "Done" when either has no score.
+std::string done_heading(const StabilityResult& before, const StabilityResult& after);
+// The engine's words, said for the window: its lines also go to the command
+// line and boot.log, where `gao --reset` and boot-apply are the right names.
+std::string for_window(std::string text);
+// A run the user stopped (Abort) or did not start (the question about other
+// programs): no failure, and not shown as one.
+bool stopped_by_user(const std::string& reason);
 
 void text_bold(const char* text, float scale = 1.0f);
 void heading(const char* text);

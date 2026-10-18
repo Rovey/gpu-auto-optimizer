@@ -78,13 +78,16 @@ struct UiState {
     // One click is to be all of it: a run that ends saved also switches
     // apply-at-logon on, unless this is unticked on the Optimize page.
     bool keep_at_logon = true;
+    bool aborting = false;   // Abort was clicked; the run is putting the card back
 };
 
 struct UiActions {
     std::function<void(Preset)> optimize;
     std::function<void()> abort;
     std::function<void(BusyAnswer)> answer_busy;          // to the run's question about other programs on the card
-    std::function<void()> restart_elevated;
+    // With a profile: the elevated copy opens on the Optimize page with it
+    // selected, so the choice made here is not lost.
+    std::function<void(std::optional<Preset>)> restart_elevated;
     std::function<void()> apply_profile;
     std::function<void()> retest;                         // the saved tune, five minutes, on the driver that is installed now
     std::function<void()> revert_to_stock;

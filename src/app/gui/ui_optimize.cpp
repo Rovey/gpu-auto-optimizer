@@ -29,6 +29,11 @@ void icon_badge(Icon icon, float side, const ImVec4& fill, const ImVec4& edge, c
     ImGui::PopFont();
 }
 
+// What a profile card says. A no-break space keeps the temperature and its unit on one line.
+std::string card_text(const PresetInfo& p) {
+    return std::string(p.summary) + " Up to " + std::to_string(objectives_for(p.preset).max_temp_c) + "\xC2\xA0\xC2\xB0""C.";
+}
+
 // One profile as a card; clicking it selects it. h 0: as tall as its contents.
 // The selected card says so with its border and its badge; there is no
 // radio button next to them saying it a third time.
@@ -40,7 +45,7 @@ void preset_card(UiState& s, const PresetInfo& p, float w, float h) {
     ImGui::PushStyleVar(ImGuiStyleVar_ChildBorderSize, selected ? 2.0f : 1.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(em() * 0.8f, em() * 0.7f));
     ImGui::BeginChild("preset", ImVec2(w, h),
-                      ImGuiChildFlags_Borders | ImGuiChildFlags_AlwaysUseWindowPadding |
+                      ImGuiChildFlags_Borders | ImGuiChildFlags_AlwaysUseWindowPadding | ImGuiChildFlags_NavFlattened |
                           (h == 0 ? ImGuiChildFlags_AutoResizeY : ImGuiChildFlags_None),
                       ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
     ImGui::PopStyleVar(2);
@@ -49,9 +54,20 @@ void preset_card(UiState& s, const PresetInfo& p, float w, float h) {
     icon_badge(p.icon, badge, selected ? kAccent : kCard, selected ? kAccentBright : kBorder, selected ? kText : kDim);
     ImGui::SameLine(0, em() * 0.7f);
     ImGui::SetCursorPosY(ImGui::GetCursorPosY() + (badge - em() * 1.05f) / 2 - em() * 0.08f);   // level with the badge
-    text_bold(p.title, 1.05f);
-    wrapped(kDim, std::string(p.summary) + " Up to " + std::to_string(objectives_for(p.preset).max_temp_c) +
-                      " \xC2\xB0""C.");
+    // A title wider than a narrow card is drawn smaller, not cut off.
+    ImGui::PushFont(g_bold, base() * 1.05f);
+    const float need = ImGui::CalcTextSize(p.title).x, room = ImGui::GetContentRegionAvail().x;
+    ImGui::PopFont();
+    text_bold(p.title, need > room && need > 0 ? std::max(0.8f, 1.05f * room / need) : 1.05f);
+    wrapped(kDim, card_text(p));
+    // The card as one button over its contents, for the keyboard: Tab
+    // reaches it, Enter or Space selects it. No higher than the contents, or
+    // a card as tall as its contents would grow by it every frame.
+    const ImVec2 start = ImGui::GetCursorStartPos();
+    const float bottom = ImGui::GetCursorPosY() - ImGui::GetStyle().ItemSpacing.y;
+    ImGui::SetCursorPos(start);
+    if (ImGui::InvisibleButton("select", ImVec2(ImGui::GetContentRegionAvail().x, std::max(1.0f, bottom - start.y))))
+        s.preset = p.preset;
     ImGui::EndChild();
     if (ImGui::IsItemClicked()) s.preset = p.preset;
     ImGui::PopID();
@@ -63,8 +79,14 @@ void preset_cards(UiState& s) {
     preset_card(s, kAllInOne, ImGui::GetContentRegionAvail().x, 0);
     const float gap = ImGui::GetStyle().ItemSpacing.x;
     const float w = (ImGui::GetContentRegionAvail().x - gap * 3) / 4;
+    // Side by side the four are as tall as each other: as the one with the
+    // most text needs, in a narrow window too.
+    float h = em() * 8.3f;
+    for (const PresetInfo& p : kPresets)
+        h = std::max(h, em() * (0.7f * 2 + 2.1f) + ImGui::GetStyle().ItemSpacing.y +
+                            ImGui::CalcTextSize(card_text(p).c_str(), nullptr, false, w - em() * 0.8f * 2).y + em() * 0.2f);
     for (size_t i = 0; i < std::size(kPresets); ++i) {
-        preset_card(s, kPresets[i], w, em() * 8.3f);
+        preset_card(s, kPresets[i], w, h);
         if (i + 1 < std::size(kPresets)) ImGui::SameLine();
     }
     preset_card(s, kUndervolt, ImGui::GetContentRegionAvail().x, 0);   // as tall as its text, at any width
@@ -85,31 +107,40 @@ void choose(UiState& s, const UiActions& act) {
     preset_cards(s);
     ImGui::Spacing();
     // The undervolt search keeps the fans on the curve in use; the
-    // all-in-one run measures its own.
-    ImGui::BeginDisabled(undervolt || all);
-    ImGui::AlignTextToFramePadding();
-    ImGui::TextUnformatted("Fan curve during the run");
-    ImGui::SameLine(0, em());
-    if (ImGui::RadioButton("Profile's own", !s.optimize_fan)) s.optimize_fan.reset();
-    ImGui::SameLine(0, em());
-    if (const auto p = fan_preset_buttons("run", s.optimize_fan)) s.optimize_fan = p;
-    ImGui::EndDisabled();
+    // all-in-one run measures its own. Said, instead of a row that only
+    // looks a little dimmer and does nothing.
+    if (all) {
+        dim("Fan curve during the run: All in one measures its own fan curve.");
+    } else if (undervolt) {
+        dim("Fan curve during the run: Undervolt keeps the fan curve that is in use.");
+    } else {
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted("Fan curve during the run");
+        ImGui::SameLine(0, em());
+        if (ImGui::RadioButton("Profile's own", !s.optimize_fan)) s.optimize_fan.reset();
+        ImGui::SameLine(0, em());
+        if (const auto p = fan_preset_buttons("run", s.optimize_fan)) s.optimize_fan = p;
+    }
     ImGui::Spacing();
     const ImVec2 big(em() * 13, em() * 2.6f);
     ImGui::PushFont(g_bold, base() * 1.15f);
-    const bool go = s.elevated ? primary_button(with_icon(kIconPlay, undervolt ? "Undervolt GPU" : "Optimize GPU"), big)
-                               : primary_button("Restart as administrator", big);
+    // Without administrator rights the same button asks for them first; the
+    // elevated copy opens here with this profile selected.
+    const bool go = primary_button(with_icon(kIconPlay, undervolt ? "Undervolt GPU" : "Optimize GPU"), big);
     ImGui::PopFont();
-    if (go) s.elevated ? act.optimize(s.preset) : act.restart_elevated();
+    if (go) s.elevated ? act.optimize(s.preset) : act.restart_elevated(s.preset);
     ImGui::SameLine(0, em() * 1.5f);
     ImGui::BeginGroup();
     ImGui::TextUnformatted((ic(kIconClock) + (all ? "  About 40 minutes of full GPU load."
                                               : undervolt ? "  About 13 minutes of full GPU load."
                                                           : "  About 15 minutes of full GPU load."))
                                .c_str());
-    dim("Abort stops at any time: the card goes back to stock, or to your saved tune when that was on it.");
-    dim("A setting that crashes the machine is never tried again.");
-    dim("Close games and other programs that use the graphics card first: they change what the run measures.");
+    if (!s.elevated) wrapped(kText, "Windows asks for administrator rights first; the app then opens here again.");
+    wrapped(kDim, "The screen can go black for a few seconds while the run looks for the card's limit. That is expected. Save "
+                  "your work first: rarely, Windows needs a sign-out or a restart afterwards.");
+    wrapped(kDim, "Abort stops at any time: the card goes back to stock, or to your saved tune when that was on it.");
+    wrapped(kDim, "A setting that crashes the machine is never tried again.");
+    wrapped(kDim, "Close games and other programs that use the graphics card first: they change what the run measures.");
     ImGui::EndGroup();
     // One click is all of it: the result is kept at every logon without
     // another one. Shown while that is still off, so that it can be declined.
@@ -117,7 +148,7 @@ void choose(UiState& s, const UiActions& act) {
         ImGui::Spacing();
         ImGui::Checkbox("Keep the result applied at every logon", &s.keep_at_logon);
         ImGui::SameLine(0, em());
-        dim("Copies the app to Program Files and starts it in the tray at logon.");
+        wrapped(kDim, "Copies the app to Program Files and starts it in the tray at logon.");
     }
     end_card();
 }
@@ -222,15 +253,38 @@ void run_screen(UiState& s, const OptimizeWorker::Snapshot& run, const UiActions
               : s.preset == Preset::Undervolt ? "Finding the undervolt"
                                               : (std::string("Optimizing: ") + title_of(s.preset)).c_str(),
               1.4f);
+    if (!run.running) s.aborting = false;
     if (run.running) {
-        const std::string abort = with_icon(kIconStop, "Abort");
-        align_right(button_width(abort) + em());
-        if (ImGui::Button(abort.c_str(), ImVec2(button_width(abort) + em(), 0))) act.abort();
+        // How far the whole run is, against the time the choose screen gave it.
+        const int about = run.is_retest ? 5 : s.preset == Preset::AllInOne ? 40 : s.preset == Preset::Undervolt ? 13 : 15;
+        const int spent = std::max(1, static_cast<int>(std::ceil(run.run_spent / 60)));
+        char so_far[64];
+        if (spent <= about) std::snprintf(so_far, sizeof(so_far), "%d of about %d min", spent, about);
+        else std::snprintf(so_far, sizeof(so_far), "%d min (about %d expected)", spent, about);
+        const std::string abort = with_icon(kIconCancel, "Abort run");
+        const char* stopping = "Stopping and putting the card back...";
+        const float right = s.aborting ? ImGui::CalcTextSize(stopping).x : button_width(abort) + em();
+        align_right(ImGui::CalcTextSize(so_far).x + em() * 1.5f + right);
+        ImGui::AlignTextToFramePadding();
+        dim(so_far);
+        ImGui::SameLine(0, em() * 1.5f);
+        if (s.aborting) {
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextColored(kWarn, "%s", stopping);
+        } else {
+            ImGui::PushStyleColor(ImGuiCol_Border, kBad);
+            if (ImGui::Button(abort.c_str(), ImVec2(right, 0))) {
+                s.aborting = true;
+                act.abort();
+            }
+            ImGui::PopStyleColor();
+        }
     }
-    dim(run.is_retest ? "Five minutes of full load with the tune applied. Aborting stops the test; the card goes back to "
-                        "stock, or to the saved tune when that was on it before."
-                      : "Aborting stops the running probe; the card goes back to stock, or to the saved tune when that was "
-                        "on it before the run.");
+    wrapped(kDim, run.is_retest ? "Five minutes of full load with the tune applied. Abort stops the test and puts the card back to "
+                                  "stock, or to your saved tune if it was on before."
+                                : "The screen can go black for a moment while the run looks for the card's limit; do not switch "
+                                  "the PC off, the run recovers by itself. Abort stops the run and puts the card back to stock, "
+                                  "or to your saved tune if it was on before.");
     ImGui::Spacing();
     // The run looked at what else uses the card before it began, found
     // something, and waits for what to do about it.
@@ -245,7 +299,7 @@ void run_screen(UiState& s, const OptimizeWorker::Snapshot& run, const UiActions
         ImGui::SameLine();
         if (ImGui::Button("Go on anyway")) act.answer_busy(BusyAnswer::GoOn);
         ImGui::SameLine();
-        if (ImGui::Button("Cancel")) act.answer_busy(BusyAnswer::Stop);
+        if (ImGui::Button("Don't start")) act.answer_busy(BusyAnswer::Stop);
         ImGui::Spacing();
     }
     // The step the run is at. One that lasts counts down; one that takes
@@ -257,8 +311,9 @@ void run_screen(UiState& s, const OptimizeWorker::Snapshot& run, const UiActions
         if (run.measuring_seconds > 0) {
             const double left = std::max(0.0, run.measuring_seconds - run.measuring_spent);
             char time[48];
-            std::snprintf(time, sizeof(time), "%d:%02d left of %s", static_cast<int>(left) / 60, static_cast<int>(left) % 60,
-                          duration_text(run.measuring_seconds).c_str());
+            if (run.measuring_seconds < 90) std::snprintf(time, sizeof(time), "%d s left", static_cast<int>(std::ceil(left)));
+            else std::snprintf(time, sizeof(time), "%d:%02d left of %s", static_cast<int>(left) / 60, static_cast<int>(left) % 60,
+                               duration_text(run.measuring_seconds).c_str());
             // At the right edge, over the end of the bar it belongs to: the
             // step's name changes length from step to step, the time does not.
             align_right(ImGui::CalcTextSize(time).x);
@@ -276,7 +331,7 @@ void run_screen(UiState& s, const OptimizeWorker::Snapshot& run, const UiActions
     ImGui::Spacing();
     const float w = (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) / 2;
     char overlay[64];
-    std::snprintf(overlay, sizeof(overlay), "temperature %s", reading(s.telemetry.temp_c, " C").c_str());
+    std::snprintf(overlay, sizeof(overlay), "temperature %s", reading(s.telemetry.temp_c, " \xC2\xB0""C").c_str());
     plot("##temp", s.temp_history, 30, 90, overlay, w);
     ImGui::SameLine();
     std::snprintf(overlay, sizeof(overlay), "power %s W", reading(s.telemetry.power_w, "").c_str());
@@ -288,11 +343,11 @@ void run_screen(UiState& s, const OptimizeWorker::Snapshot& run, const UiActions
     // What is left of the page, and never less than a few lines: a card that
     // sizes itself has no height to hand on to the list inside it.
     begin_card("probes", std::max(em() * 14, ImGui::GetContentRegionAvail().y));
-    heading("Probes");
+    heading("Details");
     ImGui::PushStyleColor(ImGuiCol_ChildBg, kInner);
     ImGui::BeginChild("lines", ImVec2(0, ImGui::GetContentRegionAvail().y), ImGuiChildFlags_Borders);
     ImGui::PopStyleColor();
-    for (const std::string& line : run.log) ImGui::TextUnformatted(line.c_str());
+    for (const std::string& line : run.log) ImGui::TextUnformatted(for_window(line).c_str());
     if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY()) ImGui::SetScrollHereY(1.0f);
     ImGui::EndChild();
     end_card();
