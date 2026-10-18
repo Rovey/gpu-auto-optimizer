@@ -148,6 +148,11 @@ add_executable(core_tests
   tests/test_stability.cpp
   tests/test_journal.cpp
   tests/test_search.cpp
+  tests/test_search_bandwidth.cpp
+  tests/test_search_bounds.cpp
+  tests/test_search_recovery.cpp
+  tests/test_search_reset_budget.cpp
+  tests/test_search_stock.cpp
   tests/test_busy_card.cpp
   tests/test_boot.cpp
   tests/test_retest.cpp
