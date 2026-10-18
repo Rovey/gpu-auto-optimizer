@@ -22,7 +22,7 @@
 
 ## One click, then nothing
 
-1. **You press one button.** **Optimize GPU**, with **All in one** already selected. There are no values to enter and nothing to read up on. In about 35 minutes the app measures your card at stock, finds its overclock, puts an undervolt on top of it, measures the quietest fan curve that keeps it cool, and tests the result as a whole for five minutes.
+1. **You press one button.** **Optimize GPU**, with **All in one** already selected. There are no values to enter and nothing to read up on. In about 40 minutes the app measures your card at stock, finds its overclock, puts an undervolt on top of it, measures the quietest fan curve that keeps it cool, and tests the result as a whole for five minutes.
 2. **It shows you what you got.** Your card at stock next to your card now: score, power, temperature and fan speed, each measured for five minutes.
 3. **It stays that way.** From then on the result is applied at every logon; the run switches that on itself, and one tick declines it. The tray app puts the tune back within half a minute after a driver reset, runs the fan curve, and says so with one quiet line when a new version is out.
 
@@ -194,7 +194,7 @@ flowchart LR
 | Command | What it does |
 |---|---|
 | `gao --optimize best\|quiet\|cool\|max [--fan-curve silent\|normal\|cool\|aggressive]` | Runs the search; exit code 0 when saved, 2 when applied but not saved |
-| `gao --optimize all` | All in one: stock measured, overclock, undervolt on top, fan tune, final test; about 35 minutes |
+| `gao --optimize all` | All in one: stock measured, overclock, undervolt on top, fan tune, final test; about 40 minutes |
 | `gao --undervolt` | Runs the undervolt search; saved like `--optimize`, in place of a saved overclock |
 | `gao --undervolt --on-overclock` | The undervolt searched on top of the saved overclock and saved into it |
 | `gao --apply` | Re-applies the saved profile |

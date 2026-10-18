@@ -362,7 +362,8 @@ void recover_device() {
 
 // ---------------------------------------------------------------- tray
 
-void tray_icon(DWORD message, const wchar_t* tip = nullptr, const wchar_t* balloon = nullptr) {
+// warning: the balloon has the warning icon, for news that something failed.
+void tray_icon(DWORD message, const wchar_t* tip = nullptr, const wchar_t* balloon = nullptr, bool warning = false) {
     if (g.demo) return;
     NOTIFYICONDATAW nid{};
     nid.cbSize = sizeof(nid);
@@ -377,7 +378,7 @@ void tray_icon(DWORD message, const wchar_t* tip = nullptr, const wchar_t* ballo
         nid.uFlags |= NIF_INFO;
         wcsncpy_s(nid.szInfoTitle, L"GPU Auto Optimizer", _TRUNCATE);
         wcsncpy_s(nid.szInfo, balloon, _TRUNCATE);
-        nid.dwInfoFlags = NIIF_INFO | NIIF_RESPECT_QUIET_TIME;
+        nid.dwInfoFlags = (warning ? NIIF_WARNING : NIIF_INFO) | NIIF_RESPECT_QUIET_TIME;
     }
     // At logon the taskbar may not exist yet when the first NIM_ADD runs: a
     // failed modify means the icon is missing, so add it.
@@ -399,9 +400,9 @@ void note(const std::string& text, bool warn = false) {
 
 // A tray balloon. Pass log=false when the event is already in boot.log,
 // which the window's log shows too.
-void notify(const std::string& text, bool log = true) {
+void notify(const std::string& text, bool log = true, bool warning = false) {
     if (log) note(text, true);
-    tray_icon(NIM_MODIFY, nullptr, gao::widen(text).c_str());
+    tray_icon(NIM_MODIFY, nullptr, gao::widen(text).c_str(), warning);
 }
 
 void show_window() {
@@ -419,6 +420,18 @@ void show_window() {
     g.recover_at = 0;
 }
 
+void act_apply();
+void act_revert();
+
+// What a tray command did, as a balloon while the window is hidden: its
+// note in the window's log is not seen then.
+template <class Act> void from_tray(Act act) {
+    const size_t before = g.ui.notes.size();
+    act();
+    if (!g.visible && g.ui.notes.size() > before)
+        tray_icon(NIM_MODIFY, nullptr, gao::widen(g.ui.notes.back().text).c_str(), g.ui.notes.back().warn);
+}
+
 void tray_menu(int x, int y) {
     const bool busy = g.worker->running() || gao::app::tuning_in_progress();
     HMENU menu = CreatePopupMenu();
@@ -431,9 +444,26 @@ void tray_menu(int x, int y) {
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(menu, MF_STRING, kMenuExit, L"Exit");
     SetForegroundWindow(g.hwnd);   // or the menu does not close when clicking elsewhere
-    TrackPopupMenu(menu, TPM_RIGHTBUTTON, x, y, 0, g.hwnd, nullptr);
+    const UINT cmd = static_cast<UINT>(TrackPopupMenu(menu, TPM_RIGHTBUTTON | TPM_RETURNCMD | TPM_NONOTIFY, x, y, 0, g.hwnd, nullptr));
     PostMessageW(g.hwnd, WM_NULL, 0, 0);
     DestroyMenu(menu);
+    // Here, not in WM_COMMAND: that one also takes the Exit an update or a
+    // newer copy posts (end_other_instance), which must not wait for a click.
+    switch (cmd) {
+        case kMenuOpen: show_window(); break;
+        case kMenuReapply: from_tray(act_apply); break;
+        case kMenuRevert: from_tray(act_revert); break;
+        case kMenuExit:
+            if (g.worker->running() &&
+                MessageBoxW(g.hwnd,
+                            L"An optimize run is in progress. Stop it and exit?\n\nThe card goes back to stock, or to your saved "
+                            L"tune if it was on before.",
+                            L"GPU Auto Optimizer", MB_YESNO | MB_ICONWARNING | MB_SETFOREGROUND) != IDYES)
+                break;
+            g.exit_requested = true;
+            if (g.worker->running()) g.worker->abort();   // it restores stock, then we exit
+            break;
+    }
 }
 
 // ---------------------------------------------------------------- state
@@ -555,7 +585,16 @@ void restart_elevated(const wchar_t* arguments) {
     }
 }
 
-void act_restart_elevated() { restart_elevated(nullptr); }
+// With a profile: the elevated copy opens on the Optimize page with it selected.
+void act_restart_elevated(std::optional<gao::Preset> preset) {
+    if (g.demo) {   // never elevated: the Optimize button plays the run again
+        if (preset) act_optimize(*preset);
+        return;
+    }
+    if (!preset) return restart_elevated(nullptr);
+    const std::wstring arguments = L"--open-optimize=" + std::to_wstring(static_cast<int>(*preset));
+    restart_elevated(arguments.c_str());
+}
 
 void start_update_check() {
     if (!g.ui.update_check) return;
@@ -654,7 +693,7 @@ void act_revert() {
     const bool ok = g.gpu.reset_to_stock && g.gpu.reset_to_stock();
     g.watch = false;   // stock by choice: the watchdog must not undo it
     note(ok ? "Back at stock. The saved tune is not re-applied until you apply it again."
-            : "Reset to stock FAILED; try gao --reset.",
+            : "Setting the card back to stock FAILED; restart the PC.",
          !ok);
     refresh_status(false);
 }
@@ -919,7 +958,8 @@ void on_telemetry() {
             note("The fans stalled below " + std::to_string(g.ui.fan_min_pct) + " %; that is their minimum from now on.");
         }
         if (g.ui.fan_state.mode != before && g.ui.fan_state.mode == gao::FanMode::Failed)
-            notify("A fan speed did not verify, so the NVIDIA driver controls the fans again. Fan control is off until the app restarts.");
+            notify("A fan speed did not verify, so the NVIDIA driver controls the fans again. Fan control is off until the app restarts.",
+                   true, true);
         if (g.ui.fan_state.mode != before && g.ui.fan_state.mode == gao::FanMode::Foreign)
             notify("Another program (Afterburner, NVIDIA App...) set the fan speed. Leaving the fans alone.");
     }
@@ -934,7 +974,7 @@ void on_telemetry() {
     }
     wchar_t tip[128];
     const gao::Telemetry& t = g.ui.telemetry;
-    swprintf_s(tip, L"GPU Auto Optimizer\n%d C, %d MHz%s", t.temp_c, t.core_mhz, g.watch ? L", tune kept applied" : L"");
+    swprintf_s(tip, L"GPU Auto Optimizer\n%d \u00B0C, %d MHz%s", t.temp_c, t.core_mhz, g.watch ? L", tune kept applied" : L"");
     tray_icon(NIM_MODIFY, tip);
     // A finished optimize run: its result is applied, so watch it from now on.
     const bool running = g.worker->running();
@@ -1008,12 +1048,13 @@ void on_watchdog() {
             g.watchdog.reapply_result(ok, std::chrono::steady_clock::now());
             if (ok) {
                 gao::app::boot_log("watchdog: the tune had been reset (driver reset or TDR); re-applied");
-                notify("The tune had been reset (driver reset or TDR) and was re-applied.", false);
+                notify("Your tune was put back after a graphics driver reset.", false);
             } else {
                 // Tried again later (Watchdog::kRetryFirstDelay): a flat top can fail under full load.
                 gao::app::boot_log("watchdog: re-apply failed: " + why + "; trying again later");
                 if (!retry)   // one balloon per reset, not one per attempt
-                    notify("The tune had been reset and could not be re-applied yet: " + why + ". It is tried again later.", false);
+                    notify("The tune had been reset and could not be re-applied yet: " + why + ". It is tried again later.", false,
+                           true);
             }
             break;
         }
@@ -1025,9 +1066,9 @@ void on_watchdog() {
                                (stock ? "card at stock" : "reset to stock FAILED, run `gao --reset`"));
             notify(std::string("The tune was reset, or the driver reset with it applied, 4 times within an hour, which usually "
                                "means it is not stable. ") +
-                       (stock ? "The card is back at stock" : "Setting the card to stock FAILED (run gao --reset)") +
-                       " and the tune is not re-applied; optimize again.",
-                   false);
+                       (stock ? "The card is back at stock and the tune is not re-applied; optimize again."
+                              : "Setting the card to stock FAILED: restart the PC. The tune is not re-applied; optimize again."),
+                   false, true);
             break;
         }
         case gao::WatchAction::BackOffForeign:
@@ -1035,7 +1076,12 @@ void on_watchdog() {
             notify("Another program (Afterburner, NVIDIA App...) changed the GPU settings. Leaving them alone.", false);
             break;
         case gao::WatchAction::NotifyDriverChanged:
-            notify("The NVIDIA driver or the card changed since the tune was made. Optimize again to tune for it.");
+            // The same words as at logon for a driver update: the tune is
+            // tested again in five minutes, not found again in forty.
+            if (!gpu_id.empty() && gpu_id == cfg.profile->gpu)
+                notify("The NVIDIA driver was updated: your tune is no longer applied. Click here and test it (5 minutes).");
+            else
+                notify("This is not the card the tune was made on. Optimize again to tune for it.");
             break;
     }
     refresh_status(false);
@@ -1084,6 +1130,17 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 g.input_frames = 2;
             }
             return 0;
+        case WM_GETMINMAXINFO: {
+            // Below this the pages cut their text off; never more than the screen has.
+            auto* limits = reinterpret_cast<MINMAXINFO*>(lp);
+            const float scale = GetDpiForWindow(hwnd) / 96.0f;
+            MONITORINFO mi{sizeof(mi)};
+            if (GetMonitorInfoW(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &mi)) {
+                limits->ptMinTrackSize.x = std::min(static_cast<LONG>(1000 * scale), mi.rcWork.right - mi.rcWork.left);
+                limits->ptMinTrackSize.y = std::min(static_cast<LONG>(700 * scale), mi.rcWork.bottom - mi.rcWork.top);
+            }
+            return 0;
+        }
         case WM_DPICHANGED: {
             gao::gui::apply_style(HIWORD(wp) / 96.0f);
             const RECT* r = reinterpret_cast<const RECT*>(lp);
@@ -1287,8 +1344,22 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdline, int) {
     if (!g.hwnd || !create_device()) return 1;
     SetPropW(g.hwnd, kVersionProp, reinterpret_cast<HANDLE>(static_cast<UINT_PTR>(gao::kVersionNumber)));
     const float scale = GetDpiForWindow(g.hwnd) / 96.0f;   // the monitor the window actually opened on
-    SetWindowPos(g.hwnd, nullptr, 0, 0, static_cast<int>(1180 * scale), static_cast<int>(860 * scale),
-                 SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+    {
+        // On that monitor's free area: at 150 % on a 1080p screen 860 is
+        // taller than the screen.
+        MONITORINFO mi{sizeof(mi)};
+        RECT at{};
+        GetWindowRect(g.hwnd, &at);
+        int w = static_cast<int>(1180 * scale), h = static_cast<int>(860 * scale), x = at.left, y = at.top;
+        if (GetMonitorInfoW(MonitorFromWindow(g.hwnd, MONITOR_DEFAULTTONEAREST), &mi)) {
+            const RECT& work = mi.rcWork;
+            w = std::min(w, static_cast<int>(work.right - work.left));
+            h = std::min(h, static_cast<int>(work.bottom - work.top));
+            x = std::clamp(x, static_cast<int>(work.left), static_cast<int>(work.right) - w);
+            y = std::clamp(y, static_cast<int>(work.top), static_cast<int>(work.bottom) - h);
+        }
+        SetWindowPos(g.hwnd, nullptr, x, y, w, h, SWP_NOZORDER | SWP_NOACTIVATE);
+    }
     const BOOL dark = TRUE;   // a dark title bar to match the dark window
     DwmSetWindowAttribute(g.hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark, sizeof(dark));
 
@@ -1305,6 +1376,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdline, int) {
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
     io.IniFilename = nullptr;   // nothing to persist; the layout is fixed
+    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;   // Tab, arrows, Enter and Space work the window
     wchar_t windows[MAX_PATH];
     const UINT wn = GetWindowsDirectoryW(windows, MAX_PATH);
     gao::gui::load_fonts(wn && wn < MAX_PATH ? (std::filesystem::path(windows) / L"Fonts").string() : std::string());
@@ -1375,6 +1447,15 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdline, int) {
     if (g.demo) {
         g.ui.page = gao::gui::Page::Optimize;
         g.worker->start_demo(g.demo_asks);
+    }
+    // --open-optimize=N: started elevated from the Optimize page's button,
+    // with profile N selected there (act_restart_elevated).
+    if (const wchar_t* open = cmdline ? std::wcsstr(cmdline, L"--open-optimize=") : nullptr) {
+        const int preset = _wtoi(open + 16);
+        if (preset >= 0 && preset <= static_cast<int>(gao::Preset::AllInOne)) {
+            g.ui.page = gao::gui::Page::Optimize;
+            g.ui.preset = static_cast<gao::Preset>(preset);
+        }
     }
 
     // Render only when needed: nothing while hidden, a few frames after input,

@@ -31,6 +31,7 @@ public:
         std::string measuring;
         double measuring_seconds = 0;   // its length
         double measuring_spent = 0;     // how long it has been running
+        double run_spent = 0;           // how long the whole run has been running
         // The run waits for an answer: these programs use the card (core/busy_card.hpp). Empty: no question.
         std::vector<BusyProgram> busy_question;
         // The run was stopped and put back the tune that was on the card before it.
@@ -78,6 +79,7 @@ private:
     std::string measuring_;
     double measuring_seconds_ = 0;
     std::chrono::steady_clock::time_point measuring_from_;
+    std::chrono::steady_clock::time_point started_;
     std::vector<BusyProgram> busy_question_;
     std::optional<BusyAnswer> busy_answer_;
     bool put_back_ = false;

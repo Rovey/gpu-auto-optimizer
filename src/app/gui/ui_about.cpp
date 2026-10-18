@@ -10,11 +10,11 @@ void about(const UiState& s, const UiActions& act) {
     text_bold("GPU Auto Optimizer", 1.6f);
     dim(("Version " + std::string(kVersion)).c_str());
     ImGui::Spacing();
-    wrapped(kText, "Finds the power limit and the core and memory clock offsets your NVIDIA card runs stably at, and keeps them "
-                   "applied. Every setting it writes is read back and checked, a failed apply ends at stock, and a crash journal "
-                   "makes sure a setting that froze the machine is never tried again.");
+    wrapped(kText, "Tunes your NVIDIA card (clocks, power limit, undervolt and fan curve) and keeps the result applied. Every "
+                   "setting it writes is read back and checked, a failed apply ends at stock, and a crash journal makes sure a "
+                   "setting that froze the machine is never tried again.");
     ImGui::Spacing();
-    wrapped(kDim, "State: %ProgramData%\\GpuAutoOptimizer (gao.json, journal.jsonl, boot.log)");
+    wrapped(kDim, "Settings and logs: %ProgramData%\\GpuAutoOptimizer (send run.log with a problem report)");
     wrapped(kDim, "Command line: gao.exe --help");
     wrapped(kDim, "Source: github.com/Rovey/gpu-auto-optimizer. MIT License.");
     ImGui::Spacing();

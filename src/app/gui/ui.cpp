@@ -33,7 +33,9 @@ void update_line(const UiState& s, const UiActions& act) {
     const bool clicked = ImGui::InvisibleButton("##update", size) && !s.update_busy;
     const bool hovered = ImGui::IsItemHovered();
     const ImVec4 colour = s.update_busy ? kDim : hovered ? kText : kAccentBright;
-    const std::string text = ic(kIconDownload) + (s.update_busy ? "  Updating..." : "  Update available");
+    const std::string text = ic(kIconDownload) + (s.update_busy            ? "  Updating..."
+                                                   : !s.update_error.empty() ? "  Update failed, click to retry"
+                                                                             : "  Update available");
     ImGui::GetWindowDrawList()->AddText(ImVec2(p.x, p.y + (size.y - em()) / 2), ImGui::GetColorU32(colour), text.c_str());
     if (hovered && !s.update_busy) {
         ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
@@ -48,7 +50,8 @@ void update_line(const UiState& s, const UiActions& act) {
 void sidebar(UiState& s, const UiActions& act) {
     ImGui::PushStyleColor(ImGuiCol_ChildBg, kNav);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(em() * 0.6f, em() * 0.8f));
-    ImGui::BeginChild("nav", ImVec2(em() * 13, 0), ImGuiChildFlags_AlwaysUseWindowPadding, ImGuiWindowFlags_NoScrollbar);
+    ImGui::BeginChild("nav", ImVec2(em() * 13, 0), ImGuiChildFlags_AlwaysUseWindowPadding | ImGuiChildFlags_NavFlattened,
+                      ImGuiWindowFlags_NoScrollbar);
     ImGui::PopStyleVar();
     ImGui::PopStyleColor();
     nav_item(s, Page::Dashboard, kIconHome, "Dashboard");
@@ -60,7 +63,7 @@ void sidebar(UiState& s, const UiActions& act) {
     if (update) update_line(s, act);
     ImGui::SetCursorPosY(ImGui::GetWindowHeight() - em() * 2.2f);
     ImGui::PushStyleColor(ImGuiCol_Text, s.elevated ? kGood : kDim);
-    ImGui::TextUnformatted((ic(kIconShield) + (s.elevated ? "  Administrator" : "  Read-only")).c_str());
+    ImGui::TextUnformatted((ic(kIconShield) + (s.elevated ? "  Administrator" : "  Not administrator")).c_str());
     ImGui::PopStyleColor();
     ImGui::EndChild();
 }
@@ -84,7 +87,10 @@ void draw_ui(UiState& s, const OptimizeWorker::Snapshot& run, const UiActions& a
     sidebar(s, act);
     ImGui::SameLine(0, 0);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(em() * 0.9f, em() * 0.9f));
-    ImGui::BeginChild("content", ImVec2(0, 0), ImGuiChildFlags_AlwaysUseWindowPadding);
+    // The scrollbar's room always kept: a page that grows past the window
+    // (the question about other programs) does not move what is at its right edge.
+    ImGui::BeginChild("content", ImVec2(0, 0), ImGuiChildFlags_AlwaysUseWindowPadding | ImGuiChildFlags_NavFlattened,
+                      ImGuiWindowFlags_AlwaysVerticalScrollbar);
     ImGui::PopStyleVar();
     switch (s.page) {
         case Page::Dashboard: dashboard(s, act); break;

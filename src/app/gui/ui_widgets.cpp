@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
+#include <utility>
 
 namespace gao::gui {
 
@@ -80,6 +82,39 @@ std::string against(double before, double after, const char* unit) {
     return buf;
 }
 
+std::string done_heading(const StabilityResult& before, const StabilityResult& after) {
+    if (before.score <= 0 || after.score <= 0) return "Done";
+    char buf[96];
+    const double speed = (after.score / before.score - 1) * 100;
+    if (speed >= 0.05) std::snprintf(buf, sizeof(buf), "Done: %.1f %% faster", speed);
+    else if (speed <= -0.05) std::snprintf(buf, sizeof(buf), "Done: %.1f %% slower", -speed);
+    else std::snprintf(buf, sizeof(buf), "Done: the same speed");
+    std::string out = buf;
+    if (before.avg_power_w > 0 && after.avg_power_w > 0) {
+        const double power = (static_cast<double>(after.avg_power_w) / before.avg_power_w - 1) * 100;
+        if (power >= 0.5) std::snprintf(buf, sizeof(buf), ", %.0f %% more power", power);
+        else if (power <= -0.5) std::snprintf(buf, sizeof(buf), ", %.0f %% less power", -power);
+        else std::snprintf(buf, sizeof(buf), ", the same power");
+        out += buf;
+    }
+    return out;
+}
+
+std::string for_window(std::string text) {
+    static const std::pair<const char*, const char*> kWords[] = {
+        {"run `gao --reset`", "click Revert to stock on the Dashboard; if that fails too, restart the PC"},
+        {"boot-apply", "Apply at logon"},
+    };
+    for (const auto& [from, to] : kWords)
+        for (size_t at = text.find(from); at != std::string::npos; at = text.find(from, at + std::strlen(to)))
+            text.replace(at, std::strlen(from), to);
+    return text;
+}
+
+bool stopped_by_user(const std::string& reason) {
+    return reason.starts_with("aborted") || reason.starts_with("other programs are using the graphics card");
+}
+
 // ------------------------------------------------------------------ widgets
 
 void text_bold(const char* text, float scale) {
@@ -109,7 +144,7 @@ void begin_card(const char* id, float height, const ImVec4& bg, float width) {
     ImGui::PushStyleColor(ImGuiCol_ChildBg, bg);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(em() * 0.9f, em() * 0.75f));
     ImGui::BeginChild(id, ImVec2(width, height),
-                      ImGuiChildFlags_Borders | ImGuiChildFlags_AlwaysUseWindowPadding |
+                      ImGuiChildFlags_Borders | ImGuiChildFlags_AlwaysUseWindowPadding | ImGuiChildFlags_NavFlattened |
                           (height == 0 ? ImGuiChildFlags_AutoResizeY : ImGuiChildFlags_None),
                       ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
     ImGui::PopStyleVar();
@@ -175,7 +210,11 @@ void tile(const char* id, Icon icon, const char* label, const std::string& value
     // style's own line spacing between them the value hung at the bottom.
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(ImGui::GetStyle().ItemSpacing.x, em() * 0.15f));
     ImGui::BeginGroup();
+    // The label too, down to four fifths of its size, in a narrow window.
+    const float label_need = ImGui::CalcTextSize(label).x, label_room = ImGui::GetContentRegionAvail().x - em() * 0.3f;
+    ImGui::PushFont(nullptr, label_need > label_room && label_need > 0 ? base() * std::max(0.8f, label_room / label_need) : 0.0f);
     dim(label);
+    ImGui::PopFont();
     // A value that is wider than the tile is drawn smaller, down to the
     // label's own size, so that it is never cut off.
     float scale = 1.3f;

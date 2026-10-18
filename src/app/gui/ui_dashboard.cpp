@@ -3,13 +3,14 @@
 #include "core/watchdog.hpp"
 #include <algorithm>
 #include <cstdio>
+#include <utility>
 #include <vector>
 
 namespace gao::gui {
 
 namespace {
 
-constexpr size_t kLogShort = 6;   // log lines on the dashboard before "View full log"
+constexpr size_t kLogShort = 3;   // log lines on the dashboard before "View full log"
 
 bool g_full_log = false;
 
@@ -24,10 +25,12 @@ void gpu_card(const UiState& s, const UiActions& act) {
     dim(("Driver " + (s.driver.empty() ? std::string("unknown") : s.driver)).c_str());
     ImGui::PopStyleVar();
     ImGui::EndGroup();
-    const std::string detect = with_icon(kIconRefresh, "Detect GPU");
-    align_right(button_width(detect));
+    // Rarely needed: an icon, its words in the tooltip.
+    const std::string detect = ic(kIconRefresh);
+    align_right(ImGui::GetFrameHeight());
     ImGui::SetCursorPosY(top);
-    if (ImGui::Button(detect.c_str())) act.detect_gpu();
+    if (ImGui::Button(detect.c_str(), ImVec2(ImGui::GetFrameHeight(), 0))) act.detect_gpu();
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Look for the card again (after a driver update)");
     ImGui::Spacing();
     telemetry_tiles(s);
     end_card();
@@ -59,7 +62,7 @@ std::string stock_to_tune(double stock, double tuned, const char* unit, bool per
 
 void tuning_card(UiState& s, const UiActions& act) {
     begin_card("tuning");
-    heading("Current tuning");
+    heading("Your tune");
     const float gap = ImGui::GetStyle().ItemSpacing.x;
     // The rows first, and the card after them: a value that wraps takes more
     // than one line, and a card that counted rows cut the last one off.
@@ -81,6 +84,8 @@ void tuning_card(UiState& s, const UiActions& act) {
             if (ours) row("Applied now", std::string(title_of(s.profile->preset)) + " (the saved tune)", kGood);
             else if (stock) row("Applied now", "Stock");
             else row("Applied now", "Set by another program", kWarn);
+            if (!ours && !stock && s.profile)
+                row("", "Close that program, then click Apply saved tune to put yours back.", kDim);
             if (undervolt)
                 row("Undervolt", ours ? undervolt_text(*s.profile->undervolt)
                                          : s.curve == CurveState::Stock ? "Not applied"
@@ -95,10 +100,12 @@ void tuning_card(UiState& s, const UiActions& act) {
         }
         if (s.profile) {
             const Profile& p = *s.profile;
-            std::string tune = std::to_string(p.power_pct) + " %, core " + offset(p.core_mhz) + ", memory " + offset(p.mem_mhz);
-            if (p.undervolt) {   // clocks and power are stock under an undervolt: name only what is not
+            std::string tune = "power limit " + std::to_string(p.power_pct) + " %, core " + offset(p.core_mhz) + ", memory " +
+                               offset(p.mem_mhz);
+            if (p.undervolt) {   // under an undervolt name only what is not stock
                 tune = undervolt_text(*p.undervolt);
-                if (p.power_pct != 100) tune += ", " + std::to_string(p.power_pct) + " %";
+                if (p.power_pct != 100) tune += ", power limit " + std::to_string(p.power_pct) + " %";
+                if (p.core_mhz != 0) tune += ", core " + offset(p.core_mhz);
                 if (p.mem_mhz != 0) tune += ", memory " + offset(p.mem_mhz);
             }
             row("Saved tune", std::string(title_of(p.preset)) + ": " + tune + " (" + p.saved_at + ")");
@@ -109,7 +116,7 @@ void tuning_card(UiState& s, const UiActions& act) {
                 row("Fans under load", stock_to_tune(m->stock.fan_pct, m->tuned.fan_pct, " %", false));
                 row("Peak temperature", stock_to_tune(m->stock.peak_temp_c, m->tuned.peak_temp_c, " \xC2\xB0""C", false));
             } else if (s.profile_gpu_ok) {
-                row("Against stock", "Measured by the next run: this tune was saved by an older version.", kDim);
+                row("Against stock", "Not measured for this tune (it was made by an older version).", kDim);
             }
             if (!s.profile_gpu_ok)
                 row("", "Tuned on " + std::string(s.profile_driver_ok ? "" : "driver " + p.driver + " and ") +
@@ -124,50 +131,55 @@ void tuning_card(UiState& s, const UiActions& act) {
             row("Saved tune", "None yet. Pick a profile and optimize.", kDim);
         }
         if (s.strikes > 0)
-            row("Crash strikes", std::to_string(s.strikes) + " of " + std::to_string(kMaxBootStrikes) +
-                                            " (apply at logon stops at " + std::to_string(kMaxBootStrikes) + ")",
+            row("Crashes after logon", std::to_string(s.strikes) + " of " + std::to_string(kMaxBootStrikes) +
+                                                  " (apply at logon stops at " + std::to_string(kMaxBootStrikes) + ")",
                        kWarn);
     }
     const ImGuiStyle& style = ImGui::GetStyle();
     const float right_w = std::max(em() * 17, ImGui::GetContentRegionAvail().x * 0.36f);
     const float left_w = ImGui::GetContentRegionAvail().x - right_w - gap;
-    const float label_w = em() * 10;
-    // What is left for a value: the card's padding and the table's cell padding off both columns.
-    const float value_w = std::max(em() * 8, left_w - em() * 0.9f * 2 - label_w - style.CellPadding.x * 4);
-    float rows_h = 0;
-    for (const Row& r : rows)
-        rows_h += std::max(em(), ImGui::CalcTextSize(r.value.c_str(), nullptr, false, value_w).y) + style.CellPadding.y * 2;
     // Four buttons in the actions column, with the spacing between them and the column's padding.
     const float buttons_h = em() * 2.3f * 4 + style.ItemSpacing.y * 3 + style.WindowPadding.y * 2;
-    const float h = std::max(buttons_h, rows_h + em() * 1.8f);
+    // As tall as the rows were in the last frame: how a value wraps is only
+    // known once the table has laid it out, and an estimate cut the last row
+    // off in a narrow window.
+    static float rows_h = 0;
+    const float h = std::max(buttons_h, rows_h);
 
     begin_card("values", h, kInner, left_w);
     if (ImGui::BeginTable("rows", 2, ImGuiTableFlags_SizingFixedFit)) {
-        ImGui::TableSetupColumn("label", ImGuiTableColumnFlags_WidthFixed, label_w);
+        ImGui::TableSetupColumn("label", ImGuiTableColumnFlags_WidthFixed, em() * 10);
         ImGui::TableSetupColumn("value", ImGuiTableColumnFlags_WidthStretch);
         for (const Row& r : rows) tuning_row(r.label, r.value, r.color);
         ImGui::EndTable();
     }
+    rows_h = ImGui::GetCursorPosY() - style.ItemSpacing.y + em() * 0.75f;   // begin_card's padding below
     end_card();
 
     ImGui::SameLine();
     ImGui::PushStyleColor(ImGuiCol_ChildBg, kInner);
-    ImGui::BeginChild("actions", ImVec2(0, h), ImGuiChildFlags_Borders | ImGuiChildFlags_AlwaysUseWindowPadding);
+    ImGui::BeginChild("actions", ImVec2(0, h),
+                      ImGuiChildFlags_Borders | ImGuiChildFlags_AlwaysUseWindowPadding | ImGuiChildFlags_NavFlattened);
     ImGui::PopStyleColor();
     const float bw = ImGui::GetContentRegionAvail().x, bh = em() * 2.3f;
-    if (s.elevated && s.profile && s.profile_gpu_ok && !s.profile_driver_ok && !s.driver.empty()) {
+    // The one thing to do next is the blue button: a run while there is no
+    // tune, the test after a driver update, and administrator rights only
+    // while the tune is not on the card.
+    if (!s.profile) {
+        if (primary_button(with_icon(kIconPulse, "Optimize GPU..."), ImVec2(bw, bh))) s.page = Page::Optimize;
+    } else if (s.elevated && s.profile_gpu_ok && !s.profile_driver_ok && !s.driver.empty()) {
         // After a driver update the tune is not applied as it is: five minutes show whether it still holds.
         if (primary_button("Test the tune (5 min)", ImVec2(bw, bh))) act.retest();
     } else if (s.elevated) {
-        ImGui::BeginDisabled(!s.profile);
         if (primary_button("Apply saved tune", ImVec2(bw, bh))) act.apply_profile();
-        ImGui::EndDisabled();
+    } else if (s.applied && tune_applied(*s.profile, *s.applied, s.curve)) {
+        if (ImGui::Button("Restart as administrator", ImVec2(bw, bh))) act.restart_elevated(std::nullopt);
     } else {
-        if (primary_button("Restart as administrator", ImVec2(bw, bh))) act.restart_elevated();
+        if (primary_button("Restart as administrator", ImVec2(bw, bh))) act.restart_elevated(std::nullopt);
     }
     // Apply at logon: a framed row with a switch.
     ImGui::PushStyleColor(ImGuiCol_ChildBg, kCard);
-    ImGui::BeginChild("logon", ImVec2(bw, bh), ImGuiChildFlags_Borders, ImGuiWindowFlags_NoScrollbar);
+    ImGui::BeginChild("logon", ImVec2(bw, bh), ImGuiChildFlags_Borders | ImGuiChildFlags_NavFlattened, ImGuiWindowFlags_NoScrollbar);
     ImGui::PopStyleColor();
     ImGui::SetCursorPos(ImVec2(em() * 0.8f, (bh - em()) / 2 - 1));
     ImGui::TextUnformatted("Apply at logon");
@@ -181,8 +193,9 @@ void tuning_card(UiState& s, const UiActions& act) {
     ImGui::BeginDisabled(!s.elevated);
     if (ImGui::Button(with_icon(kIconUndo, "Revert to stock").c_str(), ImVec2(bw, bh))) act.revert_to_stock();
     ImGui::EndDisabled();
-    // The profiles are picked on the Optimize page; the dashboard only leads there.
-    if (ImGui::Button(with_icon(kIconPulse, "Optimize...").c_str(), ImVec2(bw, bh))) s.page = Page::Optimize;
+    // The profiles are picked on the Optimize page; the dashboard only leads
+    // there (with no tune yet, the blue button above does).
+    if (s.profile && ImGui::Button(with_icon(kIconPulse, "Optimize...").c_str(), ImVec2(bw, bh))) s.page = Page::Optimize;
     ImGui::EndChild();
     end_card();
 }
@@ -191,6 +204,37 @@ struct LogLine {
     std::string time, text;
     bool warn;
 };
+
+// A boot.log line as the dashboard says it. boot.log keeps the engine's
+// words: it is what a problem report sends.
+std::string plain(std::string text) {
+    static const std::pair<const char*, const char*> kSaid[] = {
+        {"ran 2 minutes without a crash; strike cleared", "No crash in the 2 minutes after logon: the tune is confirmed."},
+        {"watchdog: another program changed the GPU settings; leaving them alone",
+         "Another program changed the card's settings. Your tune is not re-applied until you click Apply saved tune."},
+        {"watchdog: the tune had been reset (driver reset or TDR); re-applied",
+         "Your tune was put back after a graphics driver reset."},
+    };
+    for (const auto& [line, said] : kSaid)
+        if (text == line) return said;
+    // "applied <tune>, strike 1 clears in 2 minutes": the logon apply.
+    if (text.starts_with("applied ")) {
+        if (const size_t strike = text.rfind(", strike "); strike != std::string::npos) text.erase(strike);
+        text = "Applied at logon: " + text.substr(8);
+        // The profile by its title, as the window names it ("all" -> "All in one").
+        for (int i = 0; i <= static_cast<int>(Preset::AllInOne); ++i) {
+            const std::string name = std::string(preset_name(static_cast<Preset>(i))) + ":";
+            if (text.compare(18, name.size(), name) == 0) {
+                text.replace(18, name.size() - 1, title_of(static_cast<Preset>(i)));
+                break;
+            }
+        }
+    }
+    if (text.starts_with("watchdog: re-apply failed: ")) text = "Could not put the tune back yet: " + text.substr(27);
+    if (text.starts_with("watchdog: 4 resets within an hour; stopped re-applying, "))
+        text = "Reset 4 times within an hour, so the tune is no longer re-applied: " + text.substr(56);
+    return for_window(std::move(text));
+}
 
 // boot.log lines and this session's notes, newest first.
 std::vector<LogLine> log_lines(const UiState& s) {
@@ -201,9 +245,10 @@ std::vector<LogLine> log_lines(const UiState& s) {
                   false};
         l.warn = l.text.find("not applied") != std::string::npos || l.text.find("failed") != std::string::npos ||
                  l.text.find("stopped") != std::string::npos || l.text.find("another program") != std::string::npos;
+        l.text = plain(std::move(l.text));
         out.push_back(std::move(l));
     }
-    for (const Note& n : s.notes) out.push_back({n.time, n.text, n.warn});
+    for (const Note& n : s.notes) out.push_back({n.time, for_window(n.text), n.warn});
     // Same-minute entries keep their order: boot.log first, then notes.
     std::stable_sort(out.begin(), out.end(), [](const LogLine& a, const LogLine& b) { return a.time > b.time; });
     return out;

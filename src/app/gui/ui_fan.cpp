@@ -138,12 +138,14 @@ void fan_page(UiState& s, const UiActions& act) {
     heading("Fan curve");
     if (!s.fan_available) {
         wrapped(kDim, s.elevated ? "This card's fans cannot be controlled through the NVIDIA driver."
-                                 : "Fan control needs administrator rights. Restart as administrator from the dashboard.");
+                                 : "Fan control needs administrator rights.");
+        if (!s.elevated && primary_button("Restart as administrator")) act.restart_elevated(std::nullopt);
         end_card();
         return;
     }
     if (!s.fan_curve) {
         wrapped(kDim, "Optimize first: the fan curve belongs to a saved tune.");
+        if (primary_button(with_icon(kIconPulse, "Optimize..."))) s.page = Page::Optimize;
         end_card();
         return;
     }
@@ -201,7 +203,7 @@ void fan_page(UiState& s, const UiActions& act) {
     }
     ImGui::EndDisabled();
     ImGui::SameLine();
-    if (ImGui::Button("Profile default")) {
+    if (ImGui::Button("Back to the tested curve")) {
         selected = -1;
         act.reset_fan_curve();
     }
@@ -218,11 +220,8 @@ void fan_page(UiState& s, const UiActions& act) {
     if (s.fan_tested && quieter_than(edit, *s.fan_tested, s.fan_max_temp_c))
         wrapped(kWarn, "This curve is quieter than the one the tune was tested with, so the card runs warmer than during the "
                        "test. Optimize again to be sure the tune holds.");
-    wrapped(kDim, "Below the card's minimum (yellow line) a fan cannot run slower. The fans start at the stop threshold and stop "
-                  "again only once the card is 8 \xC2\xB0""C cooler and idle (under a fifth of its power limit) for a minute "
-                  "(longer if they had to restart soon after stopping); until then they run at the minimum, then the NVIDIA "
-                  "driver has them. From the red line (the profile's temperature limit) the fans "
-                  "always run at 100 %.");
+    wrapped(kDim, "Drag the points. Yellow line: the slowest your fans can spin. Red line: from here the fans always run at "
+                  "100 %. Shaded area: the fans may stop while the card is cool and idle. White line: the card now.");
     if (s.fan_limit_raised_c > 0)
         wrapped(kDim, "On this card the limit is " + std::to_string(s.fan_max_temp_c) + " \xC2\xB0""C, not the profile's " +
                       std::to_string(s.fan_max_temp_c - s.fan_limit_raised_c) + " \xC2\xB0""C: it reached that by itself at stock. "
