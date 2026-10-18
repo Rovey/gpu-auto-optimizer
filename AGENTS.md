@@ -25,9 +25,10 @@ Everything we compile is `/W4 /WX`; fix warnings, do not suppress them.
 
 ## Layout
 
-Two executables on one engine: `gao.exe` (CLI, `src/app/main.cpp`) and
-`GpuAutoOptimizer.exe` (window + tray + watchdog, `src/app/gui/`). Logic both
-need lives in `src/app/common.*`, never in either entry point.
+Two executables on one engine: `gao.exe` (CLI, `src/app/main.cpp`, its commands
+in `src/app/cli_*`) and `GpuAutoOptimizer.exe` (window + tray + watchdog,
+`src/app/gui/`). Logic both need lives in `src/app/common*`, never in either
+entry point.
 
 ## Rules the design depends on
 

@@ -590,7 +590,7 @@ TEST_CASE("find_undervolt at a chosen clock: when the margin allows no more rais
 
 namespace {
 
-// The card at stock as every run measures it first (app/common.cpp, measure_stock): five minutes
+// The card at stock as every run measures it first (app/common_run_steps.cpp, measure_stock): five minutes
 // with the fans left to the NVIDIA driver, stopped at kStockTempC.
 StabilityResult stock_run(Verdict verdict, double seconds, int peak_temp_c) {
     StabilityResult s;

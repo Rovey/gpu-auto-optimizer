@@ -49,11 +49,20 @@ src/hw/       the only code that touches hardware or the OS state folders.
   nvidia_app.*    whether the NVIDIA app's Automatic Tuning is on, read from the driver's settings database
   update_io.*     what an update needs from Windows: HTTPS download, SHA-256, unzip, file version
 src/app/
-  common.*        logic both programs share: optimize, logon apply, apply-at-logon on/off
-  main.cpp        gao.exe, the command line
+  common.hpp      logic both programs share: optimize, logon apply, apply-at-logon on/off
+  common.cpp      the process, locks, config and logs
+  common_*.cpp    run steps, optimize, All in one, retest, results, logon apply (common_boot)
+  common_internal.hpp  helpers the common_*.cpp files share
+  guarded_gpu.*   driver calls that cannot take the process down, reconnected after a driver reset
+  main.cpp        gao.exe, the command line: entry point, dispatch, usage
+  cli_*           the gao.exe commands: cli_hardware (card reads and writes), cli_runs (stress tests and runs)
   gui/            GpuAutoOptimizer.exe: window, tray, optimize worker thread, watchdog loop
-tests/        doctest, core only
+    ui.*            the frame and the navigation
+    ui_widgets.*    widgets the pages share
+    ui_*.cpp        one per page: dashboard, fan, optimize, results, about
+tests/        doctest: core_tests (src/core/), app_tests (the app layer, without a GPU)
 third_party/  doctest, nlohmann/json, Dear ImGui: vendored as source, no package manager
+docs/images/  the README's pictures; mark.svg (32 px and up) and mark-small.svg (16 to 24 px) are the sources of src/app/app.ico
 ```
 
 ## Profiles as data

@@ -97,12 +97,15 @@ target_link_libraries(hw PUBLIC core d3d11 dxgi d3dcompiler shell32 ole32 oleaut
 
 # UI-independent application logic shared by both executables.
 add_library(app STATIC
-  src/app/common.hpp src/app/common.cpp
+  src/app/common.hpp src/app/common.cpp src/app/common_internal.hpp
+  src/app/common_run_steps.cpp src/app/common_optimize.cpp src/app/common_all_in_one.cpp
+  src/app/common_retest.cpp src/app/common_results.cpp src/app/common_boot.cpp
   src/app/guarded_gpu.hpp src/app/guarded_gpu.cpp
 )
 target_link_libraries(app PUBLIC core hw PRIVATE gao_warnings gao_hardening)
 
-add_executable(gao src/app/main.cpp src/app/gao.manifest src/app/app.rc)
+add_executable(gao src/app/main.cpp src/app/cli_commands.hpp src/app/cli_hardware.cpp src/app/cli_runs.cpp
+               src/app/gao.manifest src/app/app.rc)
 target_link_libraries(gao PRIVATE app gao_warnings gao_hardening)
 # d3dcompiler_47.dll, d3d11.dll and dxgi.dll are not KnownDLLs: delay-load
 # them so they resolve after SetDefaultDllDirectories(SYSTEM32) in main(),
@@ -128,6 +131,10 @@ target_link_libraries(imgui PUBLIC d3d11 dwmapi PRIVATE gao_hardening)
 add_executable(GpuAutoOptimizer WIN32
   src/app/gui/main_gui.cpp
   src/app/gui/ui.hpp src/app/gui/ui.cpp
+  src/app/gui/ui_widgets.hpp src/app/gui/ui_widgets.cpp
+  src/app/gui/ui_dashboard.cpp src/app/gui/ui_fan.cpp
+  src/app/gui/ui_optimize.cpp src/app/gui/ui_results.cpp
+  src/app/gui/ui_about.cpp
   src/app/gui/worker.hpp src/app/gui/worker.cpp
   src/app/gao.manifest
   src/app/app.rc
@@ -148,6 +155,11 @@ add_executable(core_tests
   tests/test_stability.cpp
   tests/test_journal.cpp
   tests/test_search.cpp
+  tests/test_search_bandwidth.cpp
+  tests/test_search_bounds.cpp
+  tests/test_search_recovery.cpp
+  tests/test_search_reset_budget.cpp
+  tests/test_search_stock.cpp
   tests/test_busy_card.cpp
   tests/test_boot.cpp
   tests/test_retest.cpp
