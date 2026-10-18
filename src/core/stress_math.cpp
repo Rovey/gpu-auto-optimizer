@@ -28,6 +28,11 @@ std::vector<float> reference_matmul(const std::vector<float>& a,
     return c;
 }
 
+int duty_pause_ms(const double elapsed_ms, const int duty_pct) {
+    if (duty_pct >= 100 || duty_pct <= 0 || elapsed_ms <= 0) return 0;
+    return static_cast<int>(elapsed_ms * (100 - duty_pct) / duty_pct + 0.5);
+}
+
 std::string bandwidth_runs_text(const std::vector<double>& runs) {
     int readings = 0, discarded = 0;
     double lo = 0, hi = 0;

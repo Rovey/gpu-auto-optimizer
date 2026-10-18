@@ -32,4 +32,10 @@ std::vector<float> reference_matmul(const std::vector<float>& a,
 // way to tell why it did not.
 std::string bandwidth_runs_text(const std::vector<double>& runs);
 
+// A light load for --stress --duty: the pause after a batch that took
+// elapsed_ms, so the card works duty_pct of the time and idles the rest. A
+// card that stays cool while it draws more than at idle is how the fans'
+// idle rule is checked on hardware (core/fan_curve.hpp). 0 at 100 % or more.
+int duty_pause_ms(double elapsed_ms, int duty_pct);
+
 }
