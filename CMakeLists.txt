@@ -104,7 +104,8 @@ add_library(app STATIC
 )
 target_link_libraries(app PUBLIC core hw PRIVATE gao_warnings gao_hardening)
 
-add_executable(gao src/app/main.cpp src/app/gao.manifest src/app/app.rc)
+add_executable(gao src/app/main.cpp src/app/cli_commands.hpp src/app/cli_hardware.cpp src/app/cli_runs.cpp
+               src/app/gao.manifest src/app/app.rc)
 target_link_libraries(gao PRIVATE app gao_warnings gao_hardening)
 # d3dcompiler_47.dll, d3d11.dll and dxgi.dll are not KnownDLLs: delay-load
 # them so they resolve after SetDefaultDllDirectories(SYSTEM32) in main(),
