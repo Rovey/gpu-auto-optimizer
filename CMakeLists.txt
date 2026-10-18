@@ -97,7 +97,9 @@ target_link_libraries(hw PUBLIC core d3d11 dxgi d3dcompiler shell32 ole32 oleaut
 
 # UI-independent application logic shared by both executables.
 add_library(app STATIC
-  src/app/common.hpp src/app/common.cpp
+  src/app/common.hpp src/app/common.cpp src/app/common_internal.hpp
+  src/app/common_run_steps.cpp src/app/common_optimize.cpp src/app/common_all_in_one.cpp
+  src/app/common_retest.cpp src/app/common_results.cpp src/app/common_boot.cpp
   src/app/guarded_gpu.hpp src/app/guarded_gpu.cpp
 )
 target_link_libraries(app PUBLIC core hw PRIVATE gao_warnings gao_hardening)
