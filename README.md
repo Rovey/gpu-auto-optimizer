@@ -141,6 +141,7 @@ Keeping the result applied copies the app to `%ProgramFiles%\GpuAutoOptimizer\` 
 |---|---|
 | OS | Windows 10 (version 1803 or later) or 11, 64-bit |
 | GPU | NVIDIA, Pascal (GTX 10-series) or newer, with a current driver |
+| GPUs per PC | One: the app tunes the first NVIDIA card. A second NVIDIA card in the same PC is not supported |
 | Rights | Administrator to optimize or apply; reading telemetry does not need them |
 
 ## Profiles
