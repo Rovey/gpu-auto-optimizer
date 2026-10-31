@@ -19,7 +19,8 @@ enum class BootDecision { Apply, NoProfile, SeveralGpus, TooManyStrikes, DriverC
 bool several_gpus(int nvidia_gpus);
 inline constexpr const char* kSeveralGpusRefusal =
     "this PC has more than one NVIDIA GPU, and GPU Auto Optimizer supports one: with two, the card it tunes and the card "
-    "it tests can be different ones. Nothing was changed";
+    "it tests can be different ones. Nothing was changed. If you have two NVIDIA cards and want to help make this work, "
+    "open an issue at https://github.com/Rovey/gpu-auto-optimizer/issues";
 
 // Order: no profile, several GPUs, strikes, driver, GPU. An empty (unknown)
 // driver or GPU id never matches, so a failed NVML query cannot apply offsets
