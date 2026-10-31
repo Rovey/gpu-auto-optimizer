@@ -183,6 +183,8 @@ add_executable(app_tests
   tests/test_nvidia_app.cpp
   tests/test_gpu_users.cpp
   tests/test_run_outcome.cpp
+  tests/test_screen_flow.cpp
+  tests/test_ui_text.cpp
 )
 target_link_libraries(app_tests PRIVATE app doctest gao_warnings)
 add_test(NAME app_tests COMMAND app_tests)

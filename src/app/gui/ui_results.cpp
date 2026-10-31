@@ -42,8 +42,9 @@ constexpr const char* kStockFailed =
 
 // A run that ended without a result. A stop the user chose (Abort, or not
 // starting next to other programs) is said calmly; anything else in red, with
-// the engine's reason and where its log is. at_stock: empty when the card
-// was not touched; false when setting it back failed.
+// the engine's reason and where its log is. A refusal (app::is_refusal) says
+// so with its reason alone. at_stock: empty when the card was not touched;
+// false when setting it back failed.
 void no_result(bool ran, const std::string& reason, std::optional<bool> at_stock, bool put_back) {
     if (stopped_by_user(reason)) {
         heading("Stopped");
@@ -58,7 +59,10 @@ void no_result(bool ran, const std::string& reason, std::optional<bool> at_stock
     heading(ran ? "Not applied" : "Not started");
     std::string said = for_window(reason);
     if (!said.empty()) said[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(said[0])));
-    wrapped(kBad, said);
+    const auto [text, link] = split_link(said);
+    wrapped(kBad, text);
+    if (!link.empty()) wrapped(kBad, link);
+    if (!ran && app::is_refusal(reason)) return;
     if (ran && !put_back) wrapped(kText, at_stock.value_or(true) ? "The card is back at stock." : kStockFailed);
     wrapped(kDim, "Nothing was saved. If this looks wrong, send run.log from %ProgramData%\\GpuAutoOptimizer with a problem report.");
 }
