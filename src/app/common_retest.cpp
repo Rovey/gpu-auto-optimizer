@@ -9,6 +9,7 @@ namespace gao::app {
 RetestOutcome run_retest(const OptimizeHooks& hooks) {
     RetestOutcome out;
     auto fail = [&](const std::string& why) { out.error = why; return out; };
+    if (const std::string gpus = several_gpus_refusal(); !gpus.empty()) return fail(gpus);
     if (const std::string tool = other_tool(); !tool.empty()) return fail(tool);
     if (!is_elevated()) return fail("testing a tune sets clocks and power limits and needs administrator rights");
     const TuningLock lock;

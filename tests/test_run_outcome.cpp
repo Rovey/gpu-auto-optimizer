@@ -120,3 +120,9 @@ TEST_CASE("a retest's result lines carry the test's score") {
     CHECK(lines[0].find("STABLE score=5742 it/s") != std::string::npos);
     CHECK(lines[1].rfind("RESULT: the tune holds on driver 617.42 (it was tested on 617.14) and is applied: ", 0) == 0);
 }
+
+TEST_CASE("the logon refusal on a PC with two NVIDIA GPUs says why") {
+    const std::string text = gao::app::decision_text(gao::BootDecision::SeveralGpus, gao::Config{}, "617.14");
+    CHECK(text == gao::kSeveralGpusRefusal);
+    CHECK(text.find("more than one NVIDIA GPU") != std::string::npos);
+}

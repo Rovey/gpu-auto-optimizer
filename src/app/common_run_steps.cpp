@@ -3,6 +3,7 @@
 #include "core/watchdog.hpp"
 #include "hw/gpu_users.hpp"
 #include "hw/nvidia_app.hpp"
+#include "hw/nvml.hpp"
 #include "hw/stress.hpp"
 #include <chrono>
 #include <cstdio>
@@ -39,6 +40,14 @@ std::string stock_line(const StabilityResult& s) {
                   s.score, s.avg_core_mhz, s.peak_temp_c, reading(s.end_fan_pct, " %").c_str(), s.avg_power_w);
     return line;
 }
+}
+
+// Why no run starts on this PC (core/boot.hpp: several_gpus); empty when it
+// may. A failed count reads as one card: the run's own NVML init reports it.
+std::string several_gpus_refusal() {
+    Nvml nvml;
+    if (!nvml.Init()) return {};
+    return several_gpus(nvml.DeviceCount()) ? kSeveralGpusRefusal : std::string();
 }
 
 // Why no run starts next to another tuning tool (core/search.hpp); empty when

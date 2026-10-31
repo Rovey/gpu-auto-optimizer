@@ -124,6 +124,7 @@ AllInOneOutcome run_all_in_one(const OptimizeHooks& outer) {
     auto log = [&](const std::string& m) { if (outer.log) outer.log(m); };
     auto stop = [&](const std::string& why) { out.error = why; return out; };
     auto aborted = [&] { return outer.aborted && outer.aborted(); };
+    if (const std::string gpus = several_gpus_refusal(); !gpus.empty()) return stop(gpus);
     if (const std::string tool = other_tool(); !tool.empty()) return stop(tool);
     if (!is_elevated()) return stop("tuning changes clocks, the voltage/frequency curve and the fans and needs administrator rights");
     // Held across the steps (each takes it again, on this thread), so that
