@@ -1,0 +1,57 @@
+name: Result on my card
+description: Share what a run gave on your GPU, good or bad. It helps tune the defaults for cards we have not tested.
+labels: [card result]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The project is tested on an RTX 4070 and an RTX 5070. Results from other cards show where the search works and where it does not.
+        The last lines of `run.log` (from `RESULT:` on) are all that is needed.
+  - type: input
+    id: version
+    attributes:
+      label: App version
+      placeholder: "0.4.8"
+    validations:
+      required: true
+  - type: input
+    id: gpu
+    attributes:
+      label: GPU
+      placeholder: "RTX 3080 (Founders Edition)"
+    validations:
+      required: true
+  - type: input
+    id: driver
+    attributes:
+      label: NVIDIA driver version
+      description: The `driver:` line of `gao --status`, or the NVIDIA app.
+      placeholder: "617.14"
+    validations:
+      required: true
+  - type: dropdown
+    id: run
+    attributes:
+      label: Which run
+      options:
+        - All in one
+        - Best of my GPU
+        - Cool & efficient
+        - Quiet
+        - Max performance
+        - Undervolt
+    validations:
+      required: true
+  - type: textarea
+    id: result
+    attributes:
+      label: The result
+      description: The `RESULT:` line and the lines after it in `%ProgramData%\GpuAutoOptimizer\run.log`.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: notes
+    attributes:
+      label: Anything you noticed
+      description: Stable in games? A driver reset, a noise, fans that behaved oddly?
