@@ -23,11 +23,6 @@ std::optional<AgainstStock> against_stock(const StabilityResult& stock, const St
 
 namespace {
 
-constexpr const char* kAutoTuningRefusal =
-    "Automatic Tuning is switched on in the NVIDIA app: NVIDIA's own scanner loads the card and changes its clocks when it sees fit, "
-    "also in the middle of a run. Switch it off (NVIDIA app, System, Performance) and start again. If the NVIDIA app shows it as off "
-    "already, restart the PC and look again";
-
 // After a measurement at stock that the temperature stopped: without load,
 // this far below it before the run loads the card again, or this long. The
 // steps that follow have limits of their own.
@@ -40,6 +35,11 @@ std::string stock_line(const StabilityResult& s) {
                   s.score, s.avg_core_mhz, s.peak_temp_c, reading(s.end_fan_pct, " %").c_str(), s.avg_power_w);
     return line;
 }
+}
+
+bool is_refusal(const std::string& reason) {
+    return reason == kSeveralGpusRefusal || reason == kAutoTuningRefusal || reason == kAlreadyRunning ||
+           reason.ends_with(kOtherToolRefusalTail);
 }
 
 // Why no run starts on this PC (core/boot.hpp: several_gpus); empty when it
@@ -91,7 +91,7 @@ StockOutcome measure_stock(const OptimizeHooks& hooks) {
     StockOutcome out;
     auto fail = [&](const std::string& why) { out.error = why; return out; };
     const TuningLock lock;
-    if (!lock.owned()) return fail("another optimize is already running (in the app or on the command line)");
+    if (!lock.owned()) return fail(kAlreadyRunning);
     std::string why;
     if (!prepare_state(&why)) return fail(why);
     GuardedGpu hw(kGpu);
