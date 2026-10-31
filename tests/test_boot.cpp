@@ -52,6 +52,34 @@ TEST_CASE("decide_boot: each outcome") {
     CHECK(decide_boot(with_profile("610.74", 2), "610.74", "GPU-1") == BootDecision::Apply);
 }
 
+TEST_CASE("several_gpus: more than one NVIDIA GPU refuses; one, none or an unknown count does not") {
+    // NVML counts NVIDIA devices only, so a PC with one NVIDIA card and an
+    // Intel or AMD integrated GPU counts 1.
+    CHECK_FALSE(several_gpus(1));
+    CHECK_FALSE(several_gpus(0));
+    CHECK_FALSE(several_gpus(-1));   // the count query failed
+    CHECK(several_gpus(2));
+    CHECK(several_gpus(4));
+}
+
+TEST_CASE("decide_boot: a second NVIDIA GPU refuses the logon apply") {
+    CHECK(decide_boot(with_profile("610.74"), "610.74", "GPU-1", 1) == BootDecision::Apply);
+    CHECK(decide_boot(with_profile("610.74"), "610.74", "GPU-1", -1) == BootDecision::Apply);
+    CHECK(decide_boot(with_profile("610.74"), "610.74", "GPU-1", 2) == BootDecision::SeveralGpus);
+    // After "no profile" (nothing to say then), before strikes, driver and card.
+    CHECK(decide_boot(Config{}, "610.74", "GPU-1", 2) == BootDecision::NoProfile);
+    CHECK(decide_boot(with_profile("610.74", 3), "615.20", "GPU-2", 2) == BootDecision::SeveralGpus);
+}
+
+TEST_CASE("the tray balloon for a second NVIDIA GPU fits in a balloon") {
+    const std::string balloon = kSeveralGpusBalloon;
+    CHECK(balloon.size() < kTrayBalloonMaxChars);
+    CHECK(balloon.find("more than one NVIDIA GPU") != std::string::npos);
+    CHECK(balloon.find("Click for details.") != std::string::npos);
+    // The refusal itself does not fit, which is why the balloon is shorter.
+    CHECK(std::string("not applied: ").size() + std::string(kSeveralGpusRefusal).size() > kTrayBalloonMaxChars);
+}
+
 TEST_CASE("decide_boot: strikes are checked before the driver") {
     CHECK(decide_boot(with_profile("610.74", 5), "615.20", "GPU-1") == BootDecision::TooManyStrikes);
 }

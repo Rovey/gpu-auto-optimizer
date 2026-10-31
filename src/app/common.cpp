@@ -123,6 +123,7 @@ std::string profile_text(const Profile& p) {
 std::string decision_text(BootDecision d, const Config& c, const std::string& driver) {
     switch (d) {
         case BootDecision::NoProfile: return "no saved profile; run an optimize first";
+        case BootDecision::SeveralGpus: return kSeveralGpusRefusal;
         case BootDecision::TooManyStrikes:
             return "disabled after " + std::to_string(kMaxBootStrikes) + " crashes; turn boot-apply on again to retry";
         case BootDecision::DriverChanged:

@@ -7,8 +7,11 @@
 
 namespace gao {
 
-BootDecision decide_boot(const Config& c, const std::string& driver, const std::string& gpu) {
+bool several_gpus(int nvidia_gpus) { return nvidia_gpus > 1; }
+
+BootDecision decide_boot(const Config& c, const std::string& driver, const std::string& gpu, int nvidia_gpus) {
     if (!c.profile) return BootDecision::NoProfile;
+    if (several_gpus(nvidia_gpus)) return BootDecision::SeveralGpus;
     if (c.boot_strikes >= kMaxBootStrikes) return BootDecision::TooManyStrikes;
     if (driver.empty() || driver != c.profile->driver) return BootDecision::DriverChanged;
     if (gpu.empty() || gpu != c.profile->gpu) return BootDecision::GpuChanged;
