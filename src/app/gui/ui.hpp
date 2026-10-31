@@ -4,10 +4,12 @@
 #include "core/config.hpp"
 #include "core/types.hpp"
 #include "core/vf_curve.hpp"
+#include <algorithm>
 #include <deque>
 #include <functional>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace gao::gui {
@@ -96,6 +98,19 @@ inline Screen follow_run(UiState& s, const OptimizeWorker::Snapshot& run) {
     if (run.running) s.screen = Screen::Run;
     else if (s.screen == Screen::Run && run.ended()) s.screen = Screen::Results;
     return s.screen;
+}
+
+// A reason with a link in it, as {the text without the link, the link}: the
+// window gives the link a line of its own, because wrapping breaks it at its
+// dots. The link runs from "https://" to the next space. Without one the
+// link is empty.
+inline std::pair<std::string, std::string> split_link(const std::string& text) {
+    const size_t from = text.find("https://");
+    if (from == std::string::npos) return {text, {}};
+    const size_t to = std::min(text.find(' ', from), text.size());
+    std::string rest = text.substr(0, from) + (to < text.size() ? text.substr(to + 1) : std::string());
+    while (!rest.empty() && rest.back() == ' ') rest.pop_back();
+    return {rest, text.substr(from, to - from)};
 }
 
 struct UiActions {
