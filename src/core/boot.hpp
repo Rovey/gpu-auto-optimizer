@@ -1,6 +1,7 @@
 #pragma once
 #include "core/config.hpp"
 #include "core/types.hpp"
+#include <cstddef>
 #include <string>
 
 namespace gao {
@@ -21,6 +22,13 @@ inline constexpr const char* kSeveralGpusRefusal =
     "this PC has more than one NVIDIA GPU, and GPU Auto Optimizer supports one: with two, the card it tunes and the card "
     "it tests can be different ones. Nothing was changed. If you have two NVIDIA cards and want to help make this work, "
     "open an issue at https://github.com/Rovey/gpu-auto-optimizer/issues";
+// The tray balloon for that refusal at logon. A balloon holds 255 characters
+// (NOTIFYICONDATAW::szInfo, 256 with the terminator) and the refusal is
+// longer, so the balloon only says what happened; a click opens the window,
+// whose log has the whole refusal.
+inline constexpr size_t kTrayBalloonMaxChars = 255;
+inline constexpr const char* kSeveralGpusBalloon =
+    "Your tune is not applied: this PC has more than one NVIDIA GPU. Click for details.";
 
 // Order: no profile, several GPUs, strikes, driver, GPU. An empty (unknown)
 // driver or GPU id never matches, so a failed NVML query cannot apply offsets

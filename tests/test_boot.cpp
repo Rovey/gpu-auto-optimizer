@@ -71,6 +71,15 @@ TEST_CASE("decide_boot: a second NVIDIA GPU refuses the logon apply") {
     CHECK(decide_boot(with_profile("610.74", 3), "615.20", "GPU-2", 2) == BootDecision::SeveralGpus);
 }
 
+TEST_CASE("the tray balloon for a second NVIDIA GPU fits in a balloon") {
+    const std::string balloon = kSeveralGpusBalloon;
+    CHECK(balloon.size() < kTrayBalloonMaxChars);
+    CHECK(balloon.find("more than one NVIDIA GPU") != std::string::npos);
+    CHECK(balloon.find("Click for details.") != std::string::npos);
+    // The refusal itself does not fit, which is why the balloon is shorter.
+    CHECK(std::string("not applied: ").size() + std::string(kSeveralGpusRefusal).size() > kTrayBalloonMaxChars);
+}
+
 TEST_CASE("decide_boot: strikes are checked before the driver") {
     CHECK(decide_boot(with_profile("610.74", 5), "615.20", "GPU-1") == BootDecision::TooManyStrikes);
 }
