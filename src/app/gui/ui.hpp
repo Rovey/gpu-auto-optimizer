@@ -79,7 +79,24 @@ struct UiState {
     // apply-at-logon on, unless this is unticked on the Optimize page.
     bool keep_at_logon = true;
     bool aborting = false;   // Abort was clicked; the run is putting the card back
+    unsigned seen_run = 0;   // the last run the Optimize page followed (OptimizeWorker::Snapshot::run_id)
 };
+
+// The Optimize page's screen for this frame. A run that started since the
+// page last looked is followed, also one that ended before any frame saw it
+// running: a refusal (another tuning tool open, more than one NVIDIA GPU)
+// ends at once, and then shows as "Not started" with its reason instead of
+// leaving the page where it was. The run screen moves on to the results
+// when the run has ended.
+inline Screen follow_run(UiState& s, const OptimizeWorker::Snapshot& run) {
+    if (run.run_id != s.seen_run) {
+        s.seen_run = run.run_id;
+        s.screen = Screen::Run;
+    }
+    if (run.running) s.screen = Screen::Run;
+    else if (s.screen == Screen::Run && run.ended()) s.screen = Screen::Results;
+    return s.screen;
+}
 
 struct UiActions {
     std::function<void(Preset)> optimize;
