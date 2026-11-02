@@ -120,3 +120,15 @@ TEST_CASE("a retest's result lines carry the test's score") {
     CHECK(lines[0].find("STABLE score=5742 it/s") != std::string::npos);
     CHECK(lines[1].rfind("RESULT: the tune holds on driver 617.42 (it was tested on 617.14) and is applied: ", 0) == 0);
 }
+
+TEST_CASE("the logon refusal on a PC with two NVIDIA GPUs says why") {
+    const std::string text = gao::app::decision_text(gao::BootDecision::SeveralGpus, gao::Config{}, "617.14");
+    CHECK(text == gao::kSeveralGpusRefusal);
+    CHECK(text.find("more than one NVIDIA GPU") != std::string::npos);
+    CHECK(text.find("Nothing was changed.") != std::string::npos);
+    // It ends with what someone with two cards can do about it.
+    const std::string ask = "If you have two NVIDIA cards and want to help make this work, open an issue at "
+                            "https://github.com/Rovey/gpu-auto-optimizer/issues";
+    CHECK(text.size() >= ask.size());
+    CHECK(text.compare(text.size() - ask.size(), ask.size(), ask) == 0);
+}

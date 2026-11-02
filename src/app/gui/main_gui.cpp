@@ -1402,6 +1402,9 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdline, int) {
             } else if (logon.decision == gao::BootDecision::DriverChanged && !g.ui.driver.empty()) {
                 // apply_at_logon wrote boot.log. The balloon opens the window, where the one button is.
                 notify("The NVIDIA driver was updated: your tune is not applied. Click here and test it (5 minutes).", false);
+            } else if (logon.decision == gao::BootDecision::SeveralGpus) {
+                note("Apply at logon: " + logon.message, true);   // the whole refusal, link included
+                notify(gao::kSeveralGpusBalloon, false);
             } else if (logon.decision != gao::BootDecision::NoProfile) {
                 notify(logon.message, false);   // apply_at_logon wrote boot.log
             }

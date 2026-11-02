@@ -25,6 +25,7 @@ constexpr int kBusyLookS = 3;
 
 MeasuredRun measured_run(const StabilityResult& r);
 std::optional<AgainstStock> against_stock(const StabilityResult& stock, const StabilityResult& tuned);
+std::string several_gpus_refusal();
 std::string other_tool();
 BusyGate busy_before_run(const OptimizeHooks& hooks);
 

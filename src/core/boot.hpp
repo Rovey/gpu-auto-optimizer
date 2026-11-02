@@ -1,6 +1,7 @@
 #pragma once
 #include "core/config.hpp"
 #include "core/types.hpp"
+#include <cstddef>
 #include <string>
 
 namespace gao {
@@ -8,12 +9,32 @@ namespace gao {
 // Logons that crashed within 2 minutes of applying before boot-apply gives up.
 inline constexpr int kMaxBootStrikes = 3;
 
-enum class BootDecision { Apply, NoProfile, TooManyStrikes, DriverChanged, GpuChanged };
+enum class BootDecision { Apply, NoProfile, SeveralGpus, TooManyStrikes, DriverChanged, GpuChanged };
 
-// Order: no profile, strikes, driver, GPU. An empty (unknown) driver or GPU
-// id never matches, so a failed NVML query cannot apply offsets that were
-// tested on some other driver or card.
-BootDecision decide_boot(const Config& c, const std::string& driver, const std::string& gpu);
+// One NVIDIA GPU per PC is supported. NVML, NVAPI and DXGI each list the cards
+// in their own order and the app takes the first of each, so with two NVIDIA
+// cards the one that is tuned and the one the stress load runs on can differ.
+// NVML counts NVIDIA devices only: an Intel or AMD integrated GPU is not one.
+// An unknown count (-1, a failed query) does not refuse; the calls that follow
+// report that failure themselves.
+bool several_gpus(int nvidia_gpus);
+inline constexpr const char* kSeveralGpusRefusal =
+    "this PC has more than one NVIDIA GPU, and GPU Auto Optimizer supports one: with two, the card it tunes and the card "
+    "it tests can be different ones. Nothing was changed. If you have two NVIDIA cards and want to help make this work, "
+    "open an issue at https://github.com/Rovey/gpu-auto-optimizer/issues";
+// The tray balloon for that refusal at logon. A balloon holds 255 characters
+// (NOTIFYICONDATAW::szInfo, 256 with the terminator) and the refusal is
+// longer, so the balloon only says what happened; a click opens the window,
+// whose log has the whole refusal.
+inline constexpr size_t kTrayBalloonMaxChars = 255;
+inline constexpr const char* kSeveralGpusBalloon =
+    "Your tune is not applied: this PC has more than one NVIDIA GPU. Click for details.";
+
+// Order: no profile, several GPUs, strikes, driver, GPU. An empty (unknown)
+// driver or GPU id never matches, so a failed NVML query cannot apply offsets
+// that were tested on some other driver or card. nvidia_gpus: what NVML
+// counts (Nvml::DeviceCount).
+BootDecision decide_boot(const Config& c, const std::string& driver, const std::string& gpu, int nvidia_gpus = 1);
 
 // Sets power, core and memory from the profile; each GpuControl setter
 // verifies by read-back. A setter the card lacks is fine only when the

@@ -15,6 +15,7 @@ OptimizeOutcome run_optimize(Preset preset, const OptimizeHooks& hooks, const st
     auto log = [&](const std::string& m) { if (hooks.log) hooks.log(m); };
     auto fail = [&](const std::string& why) { out.error = why; return out; };
     if (preset == Preset::Undervolt) return fail("the undervolt is not a clock search; it has its own run");
+    if (const std::string gpus = several_gpus_refusal(); !gpus.empty()) return fail(gpus);
     if (const std::string tool = other_tool(); !tool.empty()) return fail(tool);
     if (!is_elevated()) return fail("optimizing changes clocks and power limits and needs administrator rights");
     const TuningLock lock;
@@ -230,6 +231,7 @@ UndervoltOutcome run_undervolt(const OptimizeHooks& hooks, bool on_saved_tune, c
     UndervoltOutcome out;
     auto log = [&](const std::string& m) { if (hooks.log) hooks.log(m); };
     auto fail = [&](const std::string& why) { out.error = why; return out; };
+    if (const std::string gpus = several_gpus_refusal(); !gpus.empty()) return fail(gpus);
     if (const std::string tool = other_tool(); !tool.empty()) return fail(tool);
     if (!is_elevated()) return fail("undervolting changes the card's voltage/frequency curve and needs administrator rights");
     const TuningLock lock;

@@ -22,7 +22,7 @@ BootApplyOutcome apply_at_logon() {
     if (!nvml.Init()) return done("NVML init failed: " + nvml.Error());
     Config cfg = load_config();
     const std::string driver = nvml.DriverVersion();
-    const auto d = decide_boot(cfg, driver, nvml.GpuUuid(kGpu));
+    const auto d = decide_boot(cfg, driver, nvml.GpuUuid(kGpu), nvml.DeviceCount());
     out.decision = d;
     if (d != BootDecision::Apply) return done("not applied: " + decision_text(d, cfg, driver));
     // The strike is on disk before the hardware is touched: a crash from here
