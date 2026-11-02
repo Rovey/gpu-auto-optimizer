@@ -1,0 +1,71 @@
+name: Bug report
+description: Something went wrong in a run, at logon, with the fans or in the window.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. The logs in `%ProgramData%\GpuAutoOptimizer` usually say what happened, so please attach them.
+        To put your card back at stock first: `gao --reset` in an elevated shell, and `gao --fan auto` for the fans.
+  - type: input
+    id: version
+    attributes:
+      label: App version
+      description: On the About page, or `gao --version`.
+      placeholder: "0.4.8"
+    validations:
+      required: true
+  - type: input
+    id: gpu
+    attributes:
+      label: GPU
+      description: The model, and the brand of the card if you know it.
+      placeholder: "RTX 4070 (MSI Ventus 2X)"
+    validations:
+      required: true
+  - type: input
+    id: driver
+    attributes:
+      label: NVIDIA driver version
+      description: The `driver:` line of `gao --status`, or the NVIDIA app.
+      placeholder: "617.14"
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Where did it happen?
+      options:
+        - A run (Optimize, Undervolt, All in one, fan tune)
+        - Apply at logon or the tune watchdog
+        - Fan control
+        - The window or the tray icon
+        - Updating the app
+        - The command line (gao.exe)
+        - Something else
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead. A crash, a freeze, a black screen or a driver reset is worth mentioning, with the time.
+    validations:
+      required: true
+  - type: textarea
+    id: status
+    attributes:
+      label: Output of `gao --status`
+      description: Run it in a shell in the app's folder (`C:\Program Files\GpuAutoOptimizer` once installed) and paste the output.
+      render: text
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: |
+        Drag `run.log` and `boot.log` from `%ProgramData%\GpuAutoOptimizer` into this box. They hold the GPU's id, the driver version and the settings that were tried.
+  - type: textarea
+    id: other
+    attributes:
+      label: Other GPU software
+      description: MSI Afterburner, EVGA Precision, the NVIDIA app's Automatic Tuning, a second GPU, a laptop with integrated graphics, and so on.
