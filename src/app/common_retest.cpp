@@ -13,7 +13,7 @@ RetestOutcome run_retest(const OptimizeHooks& hooks) {
     if (const std::string tool = other_tool(); !tool.empty()) return fail(tool);
     if (!is_elevated()) return fail("testing a tune sets clocks and power limits and needs administrator rights");
     const TuningLock lock;
-    if (!lock.owned()) return fail("another optimize is already running (in the app or on the command line)");
+    if (!lock.owned()) return fail(kAlreadyRunning);
     std::string why;
     if (!prepare_state(&why)) return fail(why);
     if (const BusyGate busy = busy_before_run(hooks); !busy.refusal.empty()) return fail(busy.refusal);

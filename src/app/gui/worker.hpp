@@ -22,6 +22,10 @@ public:
     struct Snapshot {
         bool running = false;
         std::vector<std::string> log;
+        // Counts the runs started, from 0 (none yet). It changes the moment a
+        // run starts, so a run that is refused before the window draws it
+        // running is still seen to have started.
+        unsigned run_id = 0;
         std::optional<app::OptimizeOutcome> outcome;     // set once an optimize run has ended
         std::optional<app::UndervoltOutcome> undervolt;  // set once an undervolt search has ended
         std::optional<app::AllInOneOutcome> all_in_one;  // set once an all-in-one run has ended
@@ -83,6 +87,7 @@ private:
     std::vector<BusyProgram> busy_question_;
     std::optional<BusyAnswer> busy_answer_;
     bool put_back_ = false;
+    unsigned run_id_ = 0;
     std::condition_variable busy_cv_;
     std::atomic<bool> running_{false};
     std::atomic<bool> abort_{false};

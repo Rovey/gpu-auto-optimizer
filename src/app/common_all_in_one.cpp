@@ -27,7 +27,7 @@ FanStepOutcome fan_step(const OptimizeHooks& hooks, int start_pct) {
     auto log = [&](const std::string& m) { if (hooks.log) hooks.log(m); };
     auto fail = [&](const std::string& why) { out.error = why; return out; };
     const TuningLock lock;
-    if (!lock.owned()) return fail("another optimize is already running (in the app or on the command line)");
+    if (!lock.owned()) return fail(kAlreadyRunning);
     std::string why;
     if (!prepare_state(&why)) return fail(why);
     GuardedGpu hw(kGpu);
@@ -130,7 +130,7 @@ AllInOneOutcome run_all_in_one(const OptimizeHooks& outer) {
     // Held across the steps (each takes it again, on this thread), so that
     // the watchdog does not put a half-made tune back in between.
     const TuningLock lock;
-    if (!lock.owned()) return stop("another optimize is already running (in the app or on the command line)");
+    if (!lock.owned()) return stop(kAlreadyRunning);
     if (const BusyGate busy = busy_before_run(outer); !busy.refusal.empty()) return stop(busy.refusal);
     OptimizeHooks hooks = outer;   // for the steps: the question about other programs has been asked
     hooks.busy_asked = true;

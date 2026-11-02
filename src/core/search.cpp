@@ -170,8 +170,7 @@ std::string other_tool_refusal(const std::vector<std::string>& running) {
     };
     const char* tool = runs("msiafterburner.exe") ? "MSI Afterburner" : runs("rtss.exe") ? "RivaTuner Statistics Server (RTSS)" : nullptr;
     if (!tool) return {};
-    return std::string(tool) + " is running. Close it, also its icon in the notification area, and start again: a run cannot share "
-           "the card with a program that sets clocks and fans or draws over what the card shows";
+    return std::string(tool) + kOtherToolRefusalTail;
 }
 
 namespace {

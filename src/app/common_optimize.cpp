@@ -19,7 +19,7 @@ OptimizeOutcome run_optimize(Preset preset, const OptimizeHooks& hooks, const st
     if (const std::string tool = other_tool(); !tool.empty()) return fail(tool);
     if (!is_elevated()) return fail("optimizing changes clocks and power limits and needs administrator rights");
     const TuningLock lock;
-    if (!lock.owned()) return fail("another optimize is already running (in the app or on the command line)");
+    if (!lock.owned()) return fail(kAlreadyRunning);
     std::string why;
     if (!prepare_state(&why)) return fail(why);
     const BusyGate busy = busy_before_run(hooks);
@@ -235,7 +235,7 @@ UndervoltOutcome run_undervolt(const OptimizeHooks& hooks, bool on_saved_tune, c
     if (const std::string tool = other_tool(); !tool.empty()) return fail(tool);
     if (!is_elevated()) return fail("undervolting changes the card's voltage/frequency curve and needs administrator rights");
     const TuningLock lock;
-    if (!lock.owned()) return fail("another optimize is already running (in the app or on the command line)");
+    if (!lock.owned()) return fail(kAlreadyRunning);
     std::string why;
     if (!prepare_state(&why)) return fail(why);
     if (const BusyGate busy = busy_before_run(hooks); !busy.refusal.empty()) return fail(busy.refusal);

@@ -203,6 +203,10 @@ std::string stock_refusal(const StabilityResult& stock);
 // sets clocks and fans itself, and RivaTuner hooks into every program that
 // uses the card, the stress load among them.
 std::string other_tool_refusal(const std::vector<std::string>& running);
+// What follows the tool's name in that refusal.
+inline constexpr const char* kOtherToolRefusalTail =
+    " is running. Close it, also its icon in the notification area, and start again: a run cannot share the card with a "
+    "program that sets clocks and fans or draws over what the card shows";
 
 struct OptimizeIo {
     Probe probe;

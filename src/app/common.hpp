@@ -49,6 +49,18 @@ bool prepare_state(std::string* why);
 std::string profile_text(const Profile& p);
 std::string decision_text(BootDecision d, const Config& c, const std::string& driver);
 
+inline constexpr const char* kAlreadyRunning = "another optimize is already running (in the app or on the command line)";
+inline constexpr const char* kAutoTuningRefusal =
+    "Automatic Tuning is switched on in the NVIDIA app: NVIDIA's own scanner loads the card and changes its clocks when it sees fit, "
+    "also in the middle of a run. Switch it off (NVIDIA app, System, Performance) and start again. If the NVIDIA app shows it as off "
+    "already, restart the PC and look again";
+// Whether a run's reason for not starting is a refusal: something on the PC
+// the user can change (more than one NVIDIA GPU, another tuning tool open,
+// Automatic Tuning on, a run already under way), not a fault. The window
+// leaves the pointer to run.log out for those; a fault keeps it, because the
+// log is what a bug report needs.
+bool is_refusal(const std::string& reason);
+
 // Held (process-wide, across gao.exe and the tray app) for the whole of an
 // optimize: the watchdog must not re-apply the saved tune under a running
 // search, and two searches must not run at once.

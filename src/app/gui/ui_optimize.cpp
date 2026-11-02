@@ -351,14 +351,12 @@ void run_screen(UiState& s, const OptimizeWorker::Snapshot& run, const UiActions
     if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY()) ImGui::SetScrollHereY(1.0f);
     ImGui::EndChild();
     end_card();
-    if (!run.running && run.ended()) s.screen = Screen::Results;
 }
 
 }
 
 void optimize_page(UiState& s, const OptimizeWorker::Snapshot& run, const UiActions& act) {
-    if (run.running) s.screen = Screen::Run;
-    switch (s.screen) {
+    switch (follow_run(s, run)) {
         case Screen::Choose: choose(s, act); break;
         case Screen::Run: run_screen(s, run, act); break;
         case Screen::Results: results(s, run, act); break;
