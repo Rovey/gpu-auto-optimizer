@@ -83,9 +83,13 @@ void tuning_card(UiState& s, const UiActions& act) {
             const bool ours = s.profile && tune_applied(*s.profile, a, s.curve);
             if (ours) row("Applied now", std::string(title_of(s.profile->preset)) + " (the saved tune)", kGood);
             else if (stock) row("Applied now", "Stock");
+            else if (s.run_active) row("Applied now", "What the optimize run is testing");
             else row("Applied now", "Set by another program", kWarn);
-            if (!ours && !stock && s.profile)
-                row("", "Close that program, then click Apply saved tune to put yours back.", kDim);
+            // Only where the button it names is there (the actions card).
+            if (!ours && !stock && !s.run_active && s.profile && s.profile_gpu_ok && s.profile_driver_ok)
+                row("", s.elevated ? "Close that program, then click Apply saved tune to put yours back."
+                                   : "Close that program, then restart as administrator and click Apply saved tune to put yours back.",
+                    kDim);
             if (undervolt)
                 row("Undervolt", ours ? undervolt_text(*s.profile->undervolt)
                                          : s.curve == CurveState::Stock ? "Not applied"
@@ -273,7 +277,9 @@ void log_card(const UiState& s) {
             ImGui::TableNextColumn();
             dim(lines[i].time.c_str());
             ImGui::TableNextColumn();
-            wrapped(lines[i].warn ? kWarn : kText, lines[i].text);
+            const auto [text, link] = split_link(lines[i].text);   // a link on a line of its own: wrapping breaks it at its dots
+            wrapped(lines[i].warn ? kWarn : kText, text);
+            if (!link.empty()) wrapped(lines[i].warn ? kWarn : kText, link);
         }
         ImGui::EndTable();
     }
