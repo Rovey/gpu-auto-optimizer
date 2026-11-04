@@ -253,7 +253,6 @@ void run_screen(UiState& s, const OptimizeWorker::Snapshot& run, const UiActions
               : s.preset == Preset::Undervolt ? "Finding the undervolt"
                                               : (std::string("Optimizing: ") + title_of(s.preset)).c_str(),
               1.4f);
-    if (!run.running) s.aborting = false;
     if (run.running) {
         // How far the whole run is, against the time the choose screen gave it.
         const int about = run.is_retest ? 5 : s.preset == Preset::AllInOne ? 40 : s.preset == Preset::Undervolt ? 13 : 15;

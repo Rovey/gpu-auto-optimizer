@@ -53,3 +53,21 @@ TEST_CASE("after its results are closed, the same run does not come back") {
     // The next refused run is followed again.
     CHECK(follow_run(s, refused(2, "MSI Afterburner is running")) == Screen::Results);
 }
+
+TEST_CASE("an Abort in one run does not take the Abort button from the next") {
+    UiState s;
+    OptimizeWorker::Snapshot run;
+    run.run_id = 1;
+    run.running = true;
+    follow_run(s, run);
+    s.aborting = true;   // Abort run was clicked
+    run.running = false;
+    run.outcome = gao::app::OptimizeOutcome{};
+    run.outcome->error = "aborted";
+    CHECK(follow_run(s, run) == Screen::Results);
+    OptimizeWorker::Snapshot next;
+    next.run_id = 2;
+    next.running = true;
+    CHECK(follow_run(s, next) == Screen::Run);
+    CHECK_FALSE(s.aborting);
+}
