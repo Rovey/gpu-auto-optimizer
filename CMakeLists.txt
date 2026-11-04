@@ -38,7 +38,7 @@ target_include_directories(doctest SYSTEM INTERFACE third_party)
 # <string>/<ostream>, which breaks as soon as a test streams a real std type.
 target_compile_definitions(doctest INTERFACE DOCTEST_CONFIG_USE_STD_HEADERS)
 
-# Pure logic. No Windows, no driver, no D3D â€” this is what CI tests.
+# Pure logic. No Windows, no driver, no D3D — this is what CI tests.
 add_library(core STATIC
   src/core/version.hpp
   src/core/types.hpp

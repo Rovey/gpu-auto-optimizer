@@ -614,6 +614,20 @@ void start_update_check() {
     }).detach();
 }
 
+// Whether this copy may start itself again, after an update or a driver
+// fault. Elevated, the new copy inherits the rights without a prompt (also
+// through "runas"), so only from Program Files, which only administrators
+// can write: in the folder the zip was unpacked to, any program of the user
+// could have swapped the exe.
+bool may_restart_itself() {
+    if (!g.ui.elevated) return true;
+    wchar_t self[MAX_PATH];
+    const DWORD n = GetModuleFileNameW(nullptr, self, MAX_PATH);
+    std::error_code ec;
+    return n != 0 && n < MAX_PATH &&
+           std::filesystem::equivalent(std::filesystem::path(self).parent_path(), gao::installed_dir(), ec);
+}
+
 void act_install_update() {
     if (!g.update || g.ui.update_busy) return;
     if (g.worker->running() || gao::app::tuning_in_progress()) {
@@ -657,9 +671,13 @@ void on_update_news() {
     }
     if (news.installed) {
         g.ui.update_busy = false;
-        if (news.ok) {   // the files are replaced: leave, and start the new copy on the way out
+        if (news.ok && may_restart_itself()) {   // the files are replaced: leave, and start the new copy on the way out
             g.restart = true;
             g.exit_requested = true;
+        } else if (news.ok) {
+            note("Updated to version " + g.ui.update_version + ". Close GPU Auto Optimizer and start it again to use it.");
+            g.update.reset();
+            g.ui.update_version.clear();
         } else {
             g.ui.update_error = news.message;
             note("The update failed: " + news.message, true);
@@ -877,6 +895,11 @@ void restart_after_fault() {
     if (!gao::Nvml::Abandoned() || g.exit_requested || GetTickCount64() < g.fault_restart_from) return;
     if (g.worker->running() || gao::app::tuning_in_progress() || g.ui.update_busy) return;
     if (g.visible && g.worker->snapshot().ended()) return;
+    if (!may_restart_itself()) {   // this copy cannot use the driver library any more; one of Program Files can
+        gao::app::boot_log("a call into the NVIDIA driver library faulted; the app closed itself. Start it again");
+        g.exit_requested = true;
+        return;
+    }
     g.restart_args = L" --resume --after-fault";
     if (!g.visible) g.restart_args += L" --hidden";
     if (g.watch) g.restart_args += L" --watch=" + std::to_wstring(g.watchdog.recent(std::chrono::steady_clock::now()));
@@ -1523,27 +1546,12 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdline, int) {
             // Released first, or the new copy would take this one for a
             // running instance and only bring it forward.
             if (g.instance_mutex) CloseHandle(g.instance_mutex);
-            // Elevated, the new copy inherits the rights. Only from Program
-            // Files, which only administrators can write: in the folder the
-            // zip was unpacked to, any program of the user could have swapped
-            // the exe. From there Windows asks again.
-            std::error_code ec;
-            const bool admin_only = std::filesystem::equivalent(std::filesystem::path(self).parent_path(), gao::installed_dir(), ec);
-            if (g.ui.elevated && !admin_only) {
-                SHELLEXECUTEINFOW sei{sizeof(sei)};
-                sei.lpVerb = L"runas";
-                sei.lpFile = self;
-                sei.lpParameters = g.restart_args.c_str();
-                sei.nShow = SW_SHOWNORMAL;
-                ShellExecuteExW(&sei);
-            } else {
-                std::wstring command = L"\"" + std::wstring(self) + L"\"" + g.restart_args;
-                STARTUPINFOW si{sizeof(si)};
-                PROCESS_INFORMATION pi{};
-                if (CreateProcessW(self, command.data(), nullptr, nullptr, FALSE, 0, nullptr, nullptr, &si, &pi)) {
-                    CloseHandle(pi.hProcess);
-                    CloseHandle(pi.hThread);
-                }
+            std::wstring command = L"\"" + std::wstring(self) + L"\"" + g.restart_args;
+            STARTUPINFOW si{sizeof(si)};
+            PROCESS_INFORMATION pi{};
+            if (CreateProcessW(self, command.data(), nullptr, nullptr, FALSE, 0, nullptr, nullptr, &si, &pi)) {
+                CloseHandle(pi.hProcess);
+                CloseHandle(pi.hThread);
             }
         }
     }
