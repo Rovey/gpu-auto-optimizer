@@ -12,7 +12,6 @@ namespace gao::app {
 
 namespace {
 constexpr wchar_t kTuningMutex[] = L"Local\\GpuAutoOptimizer.Tuning";
-constexpr wchar_t kTrayWindowClass[] = L"GpuAutoOptimizerWindow";
 }
 
 TuningLock::TuningLock() {

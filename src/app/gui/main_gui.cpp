@@ -51,7 +51,7 @@ using gao::app::kGpu;
 
 namespace {
 
-constexpr wchar_t kWindowClass[] = L"GpuAutoOptimizerWindow";   // also used by gao --reset
+constexpr const wchar_t* kWindowClass = gao::app::kTrayWindowClass;   // also used by gao --reset
 constexpr wchar_t kInstanceMutex[] = L"Local\\GpuAutoOptimizer.Instance";
 constexpr UINT WM_APP_TRAY = WM_APP + 1;   // tray icon callback
 constexpr UINT WM_APP_WAKE = WM_APP + 2;   // the optimize worker has news
@@ -392,8 +392,13 @@ void tray_icon(DWORD message, const wchar_t* tip = nullptr, const wchar_t* ballo
     }
 }
 
+// Notes written this session. The list stops growing at 100, so this, not its
+// size, tells whether something added one.
+unsigned g_notes_written = 0;
+
 // A line in the window's log for this session.
 void note(const std::string& text, bool warn = false) {
+    ++g_notes_written;
     g.ui.notes.push_back({gao::app::now_text(), text, warn});
     if (g.ui.notes.size() > 100) g.ui.notes.erase(g.ui.notes.begin());
 }
@@ -426,9 +431,9 @@ void act_revert();
 // What a tray command did, as a balloon while the window is hidden: its
 // note in the window's log is not seen then.
 template <class Act> void from_tray(Act act) {
-    const size_t before = g.ui.notes.size();
+    const unsigned before = g_notes_written;
     act();
-    if (!g.visible && g.ui.notes.size() > before)
+    if (!g.visible && g_notes_written != before)
         tray_icon(NIM_MODIFY, nullptr, gao::widen(g.ui.notes.back().text).c_str(), g.ui.notes.back().warn);
 }
 
@@ -1189,10 +1194,7 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             }
             return 0;
         case WM_COMMAND:
-            switch (LOWORD(wp)) {
-                case kMenuOpen: show_window(); break;
-                case kMenuReapply: act_apply(); break;
-                case kMenuRevert: act_revert(); break;
+            switch (LOWORD(wp)) {   // the tray menu handles its own commands (tray_menu); this one comes from end_other_instance
                 case kMenuExit:
                     g.exit_requested = true;
                     if (g.worker->running()) g.worker->abort();   // it restores stock, then we exit
@@ -1403,7 +1405,8 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdline, int) {
                 // apply_at_logon wrote boot.log. The balloon opens the window, where the one button is.
                 notify("The NVIDIA driver was updated: your tune is not applied. Click here and test it (5 minutes).", false);
             } else if (logon.decision == gao::BootDecision::SeveralGpus) {
-                note("Apply at logon: " + logon.message, true);   // the whole refusal, link included
+                // apply_at_logon wrote the whole refusal, link included, to boot.log, which the
+                // window's log shows; a balloon holds only the short one.
                 notify(gao::kSeveralGpusBalloon, false);
             } else if (logon.decision != gao::BootDecision::NoProfile) {
                 notify(logon.message, false);   // apply_at_logon wrote boot.log
@@ -1520,12 +1523,27 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdline, int) {
             // Released first, or the new copy would take this one for a
             // running instance and only bring it forward.
             if (g.instance_mutex) CloseHandle(g.instance_mutex);
-            std::wstring command = L"\"" + std::wstring(self) + L"\"" + g.restart_args;
-            STARTUPINFOW si{sizeof(si)};
-            PROCESS_INFORMATION pi{};
-            if (CreateProcessW(self, command.data(), nullptr, nullptr, FALSE, 0, nullptr, nullptr, &si, &pi)) {
-                CloseHandle(pi.hProcess);
-                CloseHandle(pi.hThread);
+            // Elevated, the new copy inherits the rights. Only from Program
+            // Files, which only administrators can write: in the folder the
+            // zip was unpacked to, any program of the user could have swapped
+            // the exe. From there Windows asks again.
+            std::error_code ec;
+            const bool admin_only = std::filesystem::equivalent(std::filesystem::path(self).parent_path(), gao::installed_dir(), ec);
+            if (g.ui.elevated && !admin_only) {
+                SHELLEXECUTEINFOW sei{sizeof(sei)};
+                sei.lpVerb = L"runas";
+                sei.lpFile = self;
+                sei.lpParameters = g.restart_args.c_str();
+                sei.nShow = SW_SHOWNORMAL;
+                ShellExecuteExW(&sei);
+            } else {
+                std::wstring command = L"\"" + std::wstring(self) + L"\"" + g.restart_args;
+                STARTUPINFOW si{sizeof(si)};
+                PROCESS_INFORMATION pi{};
+                if (CreateProcessW(self, command.data(), nullptr, nullptr, FALSE, 0, nullptr, nullptr, &si, &pi)) {
+                    CloseHandle(pi.hProcess);
+                    CloseHandle(pi.hThread);
+                }
             }
         }
     }

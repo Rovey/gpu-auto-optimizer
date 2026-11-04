@@ -137,10 +137,6 @@ bool remove_vf_shape(const GpuControl& gpu, std::string* why);
 enum class CurveState { Stock, FlatTop, Other };
 CurveState curve_state(const std::vector<VfPoint>& curve, int anchor_uv, int base_raw = 0);
 
-// The slot of the lowest-voltage point that runs at least freq_khz: where
-// the card reaches that frequency by itself. -1 when no point does.
-int stock_point_for(const std::vector<VfPoint>& curve, int freq_khz);
-
 // The step the card's clock moves in, read off the curve: the largest of the
 // usual grids (15, 7.5, 5, 2.5 MHz) that every frequency fits, allowing for a
 // read-out cut to whole MHz; otherwise the greatest common divisor of the

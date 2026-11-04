@@ -278,15 +278,6 @@ TEST_CASE("clear_vf_curve puts every offset back to zero and verifies it") {
     CHECK(clear_vf_curve(none, &why));
 }
 
-TEST_CASE("stock_point_for finds where the card reaches a frequency by itself") {
-    FakeCurve card;
-    const auto curve = *card.gpu().read_vf_curve();
-    CHECK(stock_point_for(curve, 2700000) == 12);   // 1000 mV
-    CHECK(stock_point_for(curve, 2650000) == 12);   // the first point that reaches it
-    CHECK(stock_point_for(curve, 1500000) == 0);
-    CHECK(stock_point_for(curve, 3100000) == -1);   // the card never runs that
-}
-
 TEST_CASE("no raised point ever reads above the target on the way, whatever the card does with the write") {
     struct Quirk { double units; int bin; bool nearest; int min_raw; };
     for (const Quirk& q : {Quirk{1.0, 0, false, -2000000000}, Quirk{0.5, 0, false, -2000000000}, Quirk{2.0, 0, false, -2000000000},

@@ -105,7 +105,7 @@ int curve() {
 // the hardware checks; `gao --reset` undoes it.
 int curve_flatten(int mv, int mhz, int tail_drop_mhz, int core_mhz) {
     const gao::app::TuningLock lock;
-    if (!lock.owned()) { std::printf("another optimize is already running (in the app or on the command line)\n"); return 1; }
+    if (!lock.owned()) { std::printf("%s\n", gao::app::kAlreadyRunning); return 1; }
     // A running tray app would take the missing core offset for a driver
     // reset and write its saved tune over the flat top: it is told to leave
     // the card alone, as after `gao --reset`.

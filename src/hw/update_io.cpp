@@ -1,5 +1,6 @@
 #include "hw/update_io.hpp"
 #include "hw/app_files.hpp"
+#include "hw/boot_task.hpp"
 
 #include <windows.h>
 #include <bcrypt.h>
@@ -130,7 +131,9 @@ bool extract_zip(const std::filesystem::path& zip, const std::filesystem::path& 
     const UINT n = GetSystemDirectoryW(system, MAX_PATH);
     if (n == 0 || n >= MAX_PATH) return fail(error, "the System32 folder could not be resolved");
     const std::filesystem::path tar = std::filesystem::path(system) / L"tar.exe";
+    // Only the two executables: nothing else in the zip is ever used.
     std::wstring command = L"\"" + tar.wstring() + L"\" -xf \"" + zip.wstring() + L"\" -C \"" + into.wstring() + L"\"";
+    for (const wchar_t* name : kAppExes) command += L" " + std::wstring(name);
     STARTUPINFOW si{sizeof(si)};
     PROCESS_INFORMATION pi{};
     if (!CreateProcessW(tar.c_str(), command.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, system, &si, &pi))

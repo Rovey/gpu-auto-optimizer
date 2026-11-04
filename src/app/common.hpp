@@ -82,6 +82,8 @@ bool tuning_in_progress();
 // stock on purpose (gao --reset) stops it; the tune applied (gao --apply)
 // starts it again.
 enum class TrayNotice : unsigned { StockByChoice = 0, TuneApplied = 1 };
+// The window class of the tray app's window, by which gao finds it.
+inline constexpr wchar_t kTrayWindowClass[] = L"GpuAutoOptimizerWindow";
 void tell_tray(TrayNotice notice);
 // The registered window message tell_tray() posts; the notice is its wParam.
 unsigned tray_notice_message();
