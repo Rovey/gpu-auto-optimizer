@@ -170,7 +170,9 @@ bool retest_result(const app::RetestOutcome& o) {
     if (!o.ok) {
         if (stopped_by_user(o.error)) {
             heading("Stopped");
-            wrapped(kText, "You stopped the test.");
+            // "aborted -- reset to stock FAILED, ..." (common_retest.cpp) must not read as a calm stop.
+            if (o.error.find("FAILED") != std::string::npos) wrapped(kBad, std::string("You stopped the test. ") + kStockFailed);
+            else wrapped(kText, "You stopped the test.");
             return false;
         }
         heading("Not applied");
