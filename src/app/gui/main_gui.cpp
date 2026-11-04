@@ -569,20 +569,26 @@ void act_retest() {
 void act_abort() { g.worker->abort(); }
 void act_answer_busy(gao::BusyAnswer answer) { g.worker->answer_busy(answer); }
 
-void restart_elevated(const wchar_t* arguments) {
-    wchar_t self[MAX_PATH];
-    const DWORD n = GetModuleFileNameW(nullptr, self, MAX_PATH);
-    if (n == 0 || n >= MAX_PATH) return;
+// Starts this program again with administrator rights; Windows asks the user
+// (UAC) unless this process already has them. False when that was declined.
+bool runas_self(const wchar_t* arguments) {
+    const auto self = gao::app::own_exe();
+    if (self.empty()) return false;
     SHELLEXECUTEINFOW sei{sizeof(sei)};
     sei.lpVerb = L"runas";
-    sei.lpFile = self;
+    sei.lpFile = self.c_str();
     sei.lpParameters = arguments;
     sei.nShow = SW_SHOWNORMAL;
+    return ShellExecuteExW(&sei) != FALSE;
+}
+
+void restart_elevated(const wchar_t* arguments) {
+    if (gao::app::own_exe().empty()) return;
     // The elevated copy must not find our single-instance mutex: release it
     // first, and take it back if elevation is cancelled.
     CloseHandle(g.instance_mutex);
     g.instance_mutex = nullptr;
-    if (ShellExecuteExW(&sei)) {
+    if (runas_self(arguments)) {
         g.exit_requested = true;
     } else {
         g.instance_mutex = CreateMutexW(nullptr, TRUE, kInstanceMutex);
@@ -621,11 +627,9 @@ void start_update_check() {
 // could have swapped the exe.
 bool may_restart_itself() {
     if (!g.ui.elevated) return true;
-    wchar_t self[MAX_PATH];
-    const DWORD n = GetModuleFileNameW(nullptr, self, MAX_PATH);
+    const auto self = gao::app::own_exe();
     std::error_code ec;
-    return n != 0 && n < MAX_PATH &&
-           std::filesystem::equivalent(std::filesystem::path(self).parent_path(), gao::installed_dir(), ec);
+    return !self.empty() && std::filesystem::equivalent(self.parent_path(), gao::installed_dir(), ec);
 }
 
 void act_install_update() {
@@ -698,15 +702,12 @@ void act_apply() {
     if (!g.nvml_ok || !g.nvapi_ok) { note("The NVIDIA driver is not available right now.", true); return; }
     std::string why;
     if (!gao::app::prepare_state(&why)) { note(why, true); return; }
-    gao::Config cfg = gao::app::load_config();
-    cfg.boot_strikes = 0;   // strikes only gate the logon apply
-    const std::string driver = g.nvml_ok ? g.nvml->DriverVersion() : std::string();
-    const auto d = gao::decide_boot(cfg, driver, g.nvml_ok ? g.nvml->GpuUuid(kGpu) : std::string());
-    if (d != gao::BootDecision::Apply) { note("Not applied: " + gao::app::decision_text(d, cfg, driver), true); return; }
-    if (!gao::apply_profile(g.gpu, *cfg.profile, &why)) { note("Not applied: " + why, true); return; }
+    const auto tune = gao::app::saved_tune_for(g.nvml->DriverVersion(), g.nvml->GpuUuid(kGpu), &why);
+    if (!tune) { note("Not applied: " + why, true); return; }
+    if (!gao::apply_profile(g.gpu, *tune, &why)) { note("Not applied: " + why, true); return; }
     g.watch = true;
     g.watchdog = gao::Watchdog();
-    note("Applied " + gao::app::profile_text(*cfg.profile));
+    note("Applied " + gao::app::profile_text(*tune));
     refresh_status(false);
 }
 
@@ -1267,15 +1268,7 @@ bool offer_replace(unsigned theirs) {
     text += L".\n\nReplace it with version " + gao::widen(std::string(gao::kVersion)) +
             L"? Windows asks for administrator rights, because the running app has them.";
     if (MessageBoxW(nullptr, text.c_str(), L"GPU Auto Optimizer", MB_YESNO | MB_ICONQUESTION | MB_SETFOREGROUND) != IDYES) return false;
-    wchar_t self[MAX_PATH];
-    const DWORD n = GetModuleFileNameW(nullptr, self, MAX_PATH);
-    if (n == 0 || n >= MAX_PATH) return false;
-    SHELLEXECUTEINFOW sei{sizeof(sei)};
-    sei.lpVerb = L"runas";
-    sei.lpFile = self;
-    sei.lpParameters = L"--replace";
-    sei.nShow = SW_SHOWNORMAL;
-    return ShellExecuteExW(&sei) != FALSE;
+    return runas_self(L"--replace");
 }
 
 // --replace: the copy that runs in the tray makes way for this one. It is
@@ -1540,16 +1533,14 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdline, int) {
     ImGui_ImplWin32_Shutdown();
     ImGui::DestroyContext();
     if (g.restart) {   // an update replaced the executables, or a driver call faulted: start the new copy
-        wchar_t self[MAX_PATH];
-        const DWORD n = GetModuleFileNameW(nullptr, self, MAX_PATH);
-        if (n != 0 && n < MAX_PATH) {
+        if (const auto self = gao::app::own_exe(); !self.empty()) {
             // Released first, or the new copy would take this one for a
             // running instance and only bring it forward.
             if (g.instance_mutex) CloseHandle(g.instance_mutex);
-            std::wstring command = L"\"" + std::wstring(self) + L"\"" + g.restart_args;
+            std::wstring command = L"\"" + self.wstring() + L"\"" + g.restart_args;
             STARTUPINFOW si{sizeof(si)};
             PROCESS_INFORMATION pi{};
-            if (CreateProcessW(self, command.data(), nullptr, nullptr, FALSE, 0, nullptr, nullptr, &si, &pi)) {
+            if (CreateProcessW(self.c_str(), command.data(), nullptr, nullptr, FALSE, 0, nullptr, nullptr, &si, &pi)) {
                 CloseHandle(pi.hProcess);
                 CloseHandle(pi.hThread);
             }

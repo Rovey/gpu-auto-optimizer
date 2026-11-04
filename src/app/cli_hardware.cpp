@@ -187,18 +187,12 @@ int apply() {
     if (!nvml.Init()) { std::printf("NVML init failed: %s\n", nvml.Error().c_str()); return 1; }
     gao::Nvapi nvapi;
     if (!nvapi.Init()) { std::printf("NVAPI init failed: %s\n", nvapi.Error().c_str()); return 1; }
-    gao::Config cfg = gao::app::load_config();
-    cfg.boot_strikes = 0;   // strikes only gate boot-apply
-    const std::string driver = nvml.DriverVersion();
-    const auto d = gao::decide_boot(cfg, driver, nvml.GpuUuid(kGpu));
-    if (d != gao::BootDecision::Apply) {
-        std::printf("not applied: %s\n", gao::app::decision_text(d, cfg, driver).c_str());
-        return 1;
-    }
+    const auto tune = gao::app::saved_tune_for(nvml.DriverVersion(), nvml.GpuUuid(kGpu), &why);
+    if (!tune) { std::printf("not applied: %s\n", why.c_str()); return 1; }
     const gao::GpuControl gpu = gao::make_gpu_control(nvml, nvapi, kGpu);
-    if (!gao::apply_profile(gpu, *cfg.profile, &why)) { std::printf("not applied: %s\n", why.c_str()); return 1; }
+    if (!gao::apply_profile(gpu, *tune, &why)) { std::printf("not applied: %s\n", why.c_str()); return 1; }
     gao::app::tell_tray(gao::app::TrayNotice::TuneApplied);   // a running tray keeps it applied from now on
-    std::printf("applied %s\nOK\n", gao::app::profile_text(*cfg.profile).c_str());
+    std::printf("applied %s\nOK\n", gao::app::profile_text(*tune).c_str());
     return 0;
 }
 

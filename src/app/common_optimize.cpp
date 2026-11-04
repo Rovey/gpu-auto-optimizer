@@ -326,12 +326,9 @@ UndervoltOutcome run_undervolt(const OptimizeHooks& hooks, bool on_saved_tune, c
     base.measured = stock_run;
     std::optional<Profile> over;
     if (on_saved_tune) {
-        Config cfg = load_config();
-        cfg.boot_strikes = 0;
-        const std::string driver_now = hw.DriverVersion();
-        const BootDecision d = decide_boot(cfg, driver_now, hw.GpuUuid());
-        if (d != BootDecision::Apply) return fail("no saved tune to undervolt: " + decision_text(d, cfg, driver_now));
-        over = cfg.profile;
+        std::string refusal;
+        over = saved_tune_for(hw.DriverVersion(), hw.GpuUuid(), &refusal);
+        if (!over) return fail("no saved tune to undervolt: " + refusal);
         base = UndervoltBase{over->power_pct, over->core_mhz, over->mem_mhz, how.measured, how.clock_khz};
         log("on top of the saved tune: power " + std::to_string(base.power_pct) + " %, core +" + std::to_string(base.core_mhz) +
             " MHz, mem +" + std::to_string(base.mem_mhz) + " MHz");
