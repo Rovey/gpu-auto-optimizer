@@ -51,7 +51,7 @@ using gao::app::kGpu;
 
 namespace {
 
-constexpr wchar_t kWindowClass[] = L"GpuAutoOptimizerWindow";   // also used by gao --reset
+constexpr const wchar_t* kWindowClass = gao::app::kTrayWindowClass;   // also used by gao --reset
 constexpr wchar_t kInstanceMutex[] = L"Local\\GpuAutoOptimizer.Instance";
 constexpr UINT WM_APP_TRAY = WM_APP + 1;   // tray icon callback
 constexpr UINT WM_APP_WAKE = WM_APP + 2;   // the optimize worker has news
@@ -392,8 +392,13 @@ void tray_icon(DWORD message, const wchar_t* tip = nullptr, const wchar_t* ballo
     }
 }
 
+// Notes written this session. The list stops growing at 100, so this, not its
+// size, tells whether something added one.
+unsigned g_notes_written = 0;
+
 // A line in the window's log for this session.
 void note(const std::string& text, bool warn = false) {
+    ++g_notes_written;
     g.ui.notes.push_back({gao::app::now_text(), text, warn});
     if (g.ui.notes.size() > 100) g.ui.notes.erase(g.ui.notes.begin());
 }
@@ -426,9 +431,9 @@ void act_revert();
 // What a tray command did, as a balloon while the window is hidden: its
 // note in the window's log is not seen then.
 template <class Act> void from_tray(Act act) {
-    const size_t before = g.ui.notes.size();
+    const unsigned before = g_notes_written;
     act();
-    if (!g.visible && g.ui.notes.size() > before)
+    if (!g.visible && g_notes_written != before)
         tray_icon(NIM_MODIFY, nullptr, gao::widen(g.ui.notes.back().text).c_str(), g.ui.notes.back().warn);
 }
 
@@ -564,20 +569,26 @@ void act_retest() {
 void act_abort() { g.worker->abort(); }
 void act_answer_busy(gao::BusyAnswer answer) { g.worker->answer_busy(answer); }
 
-void restart_elevated(const wchar_t* arguments) {
-    wchar_t self[MAX_PATH];
-    const DWORD n = GetModuleFileNameW(nullptr, self, MAX_PATH);
-    if (n == 0 || n >= MAX_PATH) return;
+// Starts this program again with administrator rights; Windows asks the user
+// (UAC) unless this process already has them. False when that was declined.
+bool runas_self(const wchar_t* arguments) {
+    const auto self = gao::app::own_exe();
+    if (self.empty()) return false;
     SHELLEXECUTEINFOW sei{sizeof(sei)};
     sei.lpVerb = L"runas";
-    sei.lpFile = self;
+    sei.lpFile = self.c_str();
     sei.lpParameters = arguments;
     sei.nShow = SW_SHOWNORMAL;
+    return ShellExecuteExW(&sei) != FALSE;
+}
+
+void restart_elevated(const wchar_t* arguments) {
+    if (gao::app::own_exe().empty()) return;
     // The elevated copy must not find our single-instance mutex: release it
     // first, and take it back if elevation is cancelled.
     CloseHandle(g.instance_mutex);
     g.instance_mutex = nullptr;
-    if (ShellExecuteExW(&sei)) {
+    if (runas_self(arguments)) {
         g.exit_requested = true;
     } else {
         g.instance_mutex = CreateMutexW(nullptr, TRUE, kInstanceMutex);
@@ -607,6 +618,18 @@ void start_update_check() {
         }
         PostMessageW(hwnd, WM_APP_UPDATE, 0, 0);
     }).detach();
+}
+
+// Whether this copy may start itself again, after an update or a driver
+// fault. Elevated, the new copy inherits the rights without a prompt (also
+// through "runas"), so only from Program Files, which only administrators
+// can write: in the folder the zip was unpacked to, any program of the user
+// could have swapped the exe.
+bool may_restart_itself() {
+    if (!g.ui.elevated) return true;
+    const auto self = gao::app::own_exe();
+    std::error_code ec;
+    return !self.empty() && std::filesystem::equivalent(self.parent_path(), gao::installed_dir(), ec);
 }
 
 void act_install_update() {
@@ -652,9 +675,13 @@ void on_update_news() {
     }
     if (news.installed) {
         g.ui.update_busy = false;
-        if (news.ok) {   // the files are replaced: leave, and start the new copy on the way out
+        if (news.ok && may_restart_itself()) {   // the files are replaced: leave, and start the new copy on the way out
             g.restart = true;
             g.exit_requested = true;
+        } else if (news.ok) {
+            note("Updated to version " + g.ui.update_version + ". Close GPU Auto Optimizer and start it again to use it.");
+            g.update.reset();
+            g.ui.update_version.clear();
         } else {
             g.ui.update_error = news.message;
             note("The update failed: " + news.message, true);
@@ -675,15 +702,12 @@ void act_apply() {
     if (!g.nvml_ok || !g.nvapi_ok) { note("The NVIDIA driver is not available right now.", true); return; }
     std::string why;
     if (!gao::app::prepare_state(&why)) { note(why, true); return; }
-    gao::Config cfg = gao::app::load_config();
-    cfg.boot_strikes = 0;   // strikes only gate the logon apply
-    const std::string driver = g.nvml_ok ? g.nvml->DriverVersion() : std::string();
-    const auto d = gao::decide_boot(cfg, driver, g.nvml_ok ? g.nvml->GpuUuid(kGpu) : std::string());
-    if (d != gao::BootDecision::Apply) { note("Not applied: " + gao::app::decision_text(d, cfg, driver), true); return; }
-    if (!gao::apply_profile(g.gpu, *cfg.profile, &why)) { note("Not applied: " + why, true); return; }
+    const auto tune = gao::app::saved_tune_for(g.nvml->DriverVersion(), g.nvml->GpuUuid(kGpu), &why);
+    if (!tune) { note("Not applied: " + why, true); return; }
+    if (!gao::apply_profile(g.gpu, *tune, &why)) { note("Not applied: " + why, true); return; }
     g.watch = true;
     g.watchdog = gao::Watchdog();
-    note("Applied " + gao::app::profile_text(*cfg.profile));
+    note("Applied " + gao::app::profile_text(*tune));
     refresh_status(false);
 }
 
@@ -872,6 +896,11 @@ void restart_after_fault() {
     if (!gao::Nvml::Abandoned() || g.exit_requested || GetTickCount64() < g.fault_restart_from) return;
     if (g.worker->running() || gao::app::tuning_in_progress() || g.ui.update_busy) return;
     if (g.visible && g.worker->snapshot().ended()) return;
+    if (!may_restart_itself()) {   // this copy cannot use the driver library any more; one of Program Files can
+        gao::app::boot_log("a call into the NVIDIA driver library faulted; the app closed itself. Start it again");
+        g.exit_requested = true;
+        return;
+    }
     g.restart_args = L" --resume --after-fault";
     if (!g.visible) g.restart_args += L" --hidden";
     if (g.watch) g.restart_args += L" --watch=" + std::to_wstring(g.watchdog.recent(std::chrono::steady_clock::now()));
@@ -1189,10 +1218,7 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             }
             return 0;
         case WM_COMMAND:
-            switch (LOWORD(wp)) {
-                case kMenuOpen: show_window(); break;
-                case kMenuReapply: act_apply(); break;
-                case kMenuRevert: act_revert(); break;
+            switch (LOWORD(wp)) {   // the tray menu handles its own commands (tray_menu); this one comes from end_other_instance
                 case kMenuExit:
                     g.exit_requested = true;
                     if (g.worker->running()) g.worker->abort();   // it restores stock, then we exit
@@ -1242,15 +1268,7 @@ bool offer_replace(unsigned theirs) {
     text += L".\n\nReplace it with version " + gao::widen(std::string(gao::kVersion)) +
             L"? Windows asks for administrator rights, because the running app has them.";
     if (MessageBoxW(nullptr, text.c_str(), L"GPU Auto Optimizer", MB_YESNO | MB_ICONQUESTION | MB_SETFOREGROUND) != IDYES) return false;
-    wchar_t self[MAX_PATH];
-    const DWORD n = GetModuleFileNameW(nullptr, self, MAX_PATH);
-    if (n == 0 || n >= MAX_PATH) return false;
-    SHELLEXECUTEINFOW sei{sizeof(sei)};
-    sei.lpVerb = L"runas";
-    sei.lpFile = self;
-    sei.lpParameters = L"--replace";
-    sei.nShow = SW_SHOWNORMAL;
-    return ShellExecuteExW(&sei) != FALSE;
+    return runas_self(L"--replace");
 }
 
 // --replace: the copy that runs in the tray makes way for this one. It is
@@ -1403,7 +1421,8 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdline, int) {
                 // apply_at_logon wrote boot.log. The balloon opens the window, where the one button is.
                 notify("The NVIDIA driver was updated: your tune is not applied. Click here and test it (5 minutes).", false);
             } else if (logon.decision == gao::BootDecision::SeveralGpus) {
-                note("Apply at logon: " + logon.message, true);   // the whole refusal, link included
+                // apply_at_logon wrote the whole refusal, link included, to boot.log, which the
+                // window's log shows; a balloon holds only the short one.
                 notify(gao::kSeveralGpusBalloon, false);
             } else if (logon.decision != gao::BootDecision::NoProfile) {
                 notify(logon.message, false);   // apply_at_logon wrote boot.log
@@ -1514,16 +1533,14 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdline, int) {
     ImGui_ImplWin32_Shutdown();
     ImGui::DestroyContext();
     if (g.restart) {   // an update replaced the executables, or a driver call faulted: start the new copy
-        wchar_t self[MAX_PATH];
-        const DWORD n = GetModuleFileNameW(nullptr, self, MAX_PATH);
-        if (n != 0 && n < MAX_PATH) {
+        if (const auto self = gao::app::own_exe(); !self.empty()) {
             // Released first, or the new copy would take this one for a
             // running instance and only bring it forward.
             if (g.instance_mutex) CloseHandle(g.instance_mutex);
-            std::wstring command = L"\"" + std::wstring(self) + L"\"" + g.restart_args;
+            std::wstring command = L"\"" + self.wstring() + L"\"" + g.restart_args;
             STARTUPINFOW si{sizeof(si)};
             PROCESS_INFORMATION pi{};
-            if (CreateProcessW(self, command.data(), nullptr, nullptr, FALSE, 0, nullptr, nullptr, &si, &pi)) {
+            if (CreateProcessW(self.c_str(), command.data(), nullptr, nullptr, FALSE, 0, nullptr, nullptr, &si, &pi)) {
                 CloseHandle(pi.hProcess);
                 CloseHandle(pi.hThread);
             }

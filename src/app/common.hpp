@@ -48,6 +48,10 @@ std::function<void(const std::string&)> logged_to(const std::filesystem::path& f
 bool prepare_state(std::string* why);
 std::string profile_text(const Profile& p);
 std::string decision_text(BootDecision d, const Config& c, const std::string& driver);
+// The saved tune, if it was made on this card and this driver; else nullopt
+// and *refusal says why. Unlike the logon apply, strikes do not count: they
+// only gate the apply at logon.
+std::optional<Profile> saved_tune_for(const std::string& driver, const std::string& gpu_id, std::string* refusal);
 
 inline constexpr const char* kAlreadyRunning = "another optimize is already running (in the app or on the command line)";
 inline constexpr const char* kAutoTuningRefusal =
@@ -82,6 +86,8 @@ bool tuning_in_progress();
 // stock on purpose (gao --reset) stops it; the tune applied (gao --apply)
 // starts it again.
 enum class TrayNotice : unsigned { StockByChoice = 0, TuneApplied = 1 };
+// The window class of the tray app's window, by which gao finds it.
+inline constexpr wchar_t kTrayWindowClass[] = L"GpuAutoOptimizerWindow";
 void tell_tray(TrayNotice notice);
 // The registered window message tell_tray() posts; the notice is its wParam.
 unsigned tray_notice_message();
@@ -291,5 +297,7 @@ bool install_update(const ReleaseInfo& release, std::string* message);
 // what an update does. Not so for a copy in Program Files without
 // administrator rights.
 bool own_folder_writable();
+// This program's executable; empty if Windows cannot say (a path over MAX_PATH).
+std::filesystem::path own_exe();
 
 }

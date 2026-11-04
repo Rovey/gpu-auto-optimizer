@@ -124,6 +124,17 @@ AllInOneOutcome run_all_in_one(const OptimizeHooks& outer) {
     auto log = [&](const std::string& m) { if (outer.log) outer.log(m); };
     auto stop = [&](const std::string& why) { out.error = why; return out; };
     auto aborted = [&] { return outer.aborted && outer.aborted(); };
+    // Once a step has touched the card, every way out ends at stock and says
+    // so, as fan_step's reasons do: the window reads the card's state from
+    // these words. A reason that already says it is kept as it is.
+    auto end_at_stock = [&](const std::string& why) {
+        if (why.find(" -- card at stock") != std::string::npos || why.find("reset to stock FAILED") != std::string::npos)
+            return stop(why);
+        GuardedGpu hw(kGpu);
+        std::string init_error;
+        const bool stock = hw.Init(&init_error) && hw.control().reset_to_stock && hw.control().reset_to_stock();
+        return stop(why + (stock ? " -- card at stock" : " -- reset to stock FAILED, run `gao --reset`"));
+    };
     if (const std::string gpus = several_gpus_refusal(); !gpus.empty()) return stop(gpus);
     if (const std::string tool = other_tool(); !tool.empty()) return stop(tool);
     if (!is_elevated()) return stop("tuning changes clocks, the voltage/frequency curve and the fans and needs administrator rights");
@@ -144,8 +155,9 @@ AllInOneOutcome run_all_in_one(const OptimizeHooks& outer) {
     log("step 2 of 5: the overclock");
     out.overclock = run_optimize(Preset::AllInOne, hooks, {}, out.stock);
     if (!out.overclock.ran) return stop(out.overclock.error);
-    if (!out.overclock.result.ok) return stop("the overclock: " + out.overclock.result.reason);
-    if (!out.overclock.saved) return stop("the overclock could not be saved: " + out.overclock.save_note);
+    if (aborted()) return end_at_stock("aborted");
+    if (!out.overclock.result.ok) return end_at_stock("the overclock: " + out.overclock.result.reason);
+    if (!out.overclock.saved) return end_at_stock("the overclock could not be saved: " + out.overclock.save_note);
     out.now = out.overclock.result.soak;
 
     log("step 3 of 5: the undervolt on top of it, at a clock between stock and the overclock");
@@ -155,7 +167,7 @@ AllInOneOutcome run_all_in_one(const OptimizeHooks& outer) {
     const int stock_mhz = out.stock.avg_core_mhz, oc_mhz = out.overclock.result.soak.avg_core_mhz;
     if (oc_mhz > stock_mhz && stock_mhz > 0) how.clock_khz = (stock_mhz + oc_mhz) / 2 * 1000;
     out.undervolt = run_undervolt(hooks, true, how);
-    if (aborted()) return stop("aborted");
+    if (aborted()) return end_at_stock("aborted");
     if (out.undervolt.ran && out.undervolt.result.ok && out.undervolt.saved) {
         out.now = out.undervolt.result.after;
     } else {
@@ -168,7 +180,7 @@ AllInOneOutcome run_all_in_one(const OptimizeHooks& outer) {
 
     log("step 4 of 5: the quietest fan speed that holds the temperature; step 5: the final test");
     const FanStepOutcome fan = fan_step(hooks, out.now.end_fan_pct > 0 ? out.now.end_fan_pct : 70);
-    if (!fan.error.empty()) return stop(fan.error);
+    if (!fan.error.empty()) return end_at_stock(fan.error);
     out.fan = fan.fan;
     out.fan_note = fan.note;
     if (fan.final.seconds > 0 && fan.final.verdict == Verdict::Stable) {
@@ -191,7 +203,7 @@ AllInOneOutcome run_all_in_one(const OptimizeHooks& outer) {
         }
     }
     Config cfg = load_config();
-    if (!cfg.profile) return stop("the saved tune could not be read back");
+    if (!cfg.profile) return end_at_stock("the saved tune could not be read back");
     // The steps saved their own comparisons; the run's is its first and its last five minutes.
     if (const auto against = against_stock(out.stock, out.now)) {
         cfg.profile->against_stock = against;

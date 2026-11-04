@@ -15,6 +15,15 @@
 
 namespace gao::app {
 
+std::optional<Profile> saved_tune_for(const std::string& driver, const std::string& gpu_id, std::string* refusal) {
+    Config cfg = load_config();
+    cfg.boot_strikes = 0;
+    const BootDecision d = decide_boot(cfg, driver, gpu_id);
+    if (d == BootDecision::Apply) return cfg.profile;
+    if (refusal) *refusal = decision_text(d, cfg, driver);
+    return std::nullopt;
+}
+
 BootApplyOutcome apply_at_logon() {
     BootApplyOutcome out;
     auto done = [&](const std::string& msg) { out.message = msg; boot_log(msg); return out; };
@@ -73,10 +82,9 @@ bool enable_boot(std::string* message) {
     if (!prepare_state(&why)) return say(why, false);
     const std::string sid = current_user_sid();
     if (sid.empty()) return say("could not determine the current user's SID", false);
-    wchar_t self[MAX_PATH];
-    const DWORD n = GetModuleFileNameW(nullptr, self, MAX_PATH);
-    if (n == 0 || n >= MAX_PATH) return say("could not find this program's own path", false);
-    if (!install_app(std::filesystem::path(self).parent_path(), &why))
+    const auto self = own_exe();
+    if (self.empty()) return say("could not find this program's own path", false);
+    if (!install_app(self.parent_path(), &why))
         return say(why, false);
     // The logon task starts the tray app, which applies the tune and stays
     // resident to keep it applied: no time limit.
@@ -111,12 +119,14 @@ bool disable_boot(std::string* message) {
                task_removed);
 }
 
-namespace {
-std::filesystem::path own_dir() {
+std::filesystem::path own_exe() {
     wchar_t self[MAX_PATH];
     const DWORD n = GetModuleFileNameW(nullptr, self, MAX_PATH);
-    return n == 0 || n >= MAX_PATH ? std::filesystem::path() : std::filesystem::path(self).parent_path();
+    return n == 0 || n >= MAX_PATH ? std::filesystem::path() : std::filesystem::path(self);
 }
+
+namespace {
+std::filesystem::path own_dir() { return own_exe().parent_path(); }
 }
 
 bool logon_copy_is_this_build() {

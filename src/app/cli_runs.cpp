@@ -116,7 +116,9 @@ static gao::BusyAnswer on_busy(const std::vector<gao::BusyProgram>& programs) {
     return gao::BusyAnswer::Stop;
 }
 
-int optimize(gao::Preset preset, const std::optional<gao::FanCurve>& fan_curve) {
+// What every run hands the engine: Ctrl+C, the log on screen and in run.log,
+// the busy-card refusal, and the reset to stock when the window is closed.
+static gao::app::OptimizeHooks cli_hooks() {
     gao::app::OptimizeHooks hooks;
     hooks.aborted = [] { return g_abort.load(); };
     hooks.log = gao::app::logged([](const std::string& msg) { std::printf("  %s\n", msg.c_str()); });
@@ -125,51 +127,43 @@ int optimize(gao::Preset preset, const std::optional<gao::FanCurve>& fan_curve) 
         g_gpu = gpu;
         SetConsoleCtrlHandler(OnConsoleCtrl, gpu ? TRUE : FALSE);
     };
-    const auto out = gao::app::run_optimize(preset, hooks, fan_curve);
-    // Through the log: on screen and in run.log alike.
-    for (const std::string& line : gao::app::result_lines(out)) hooks.log(line);
-    if (!out.ran || !out.result.ok) return 1;
-    if (out.saved) {
+    return hooks;
+}
+
+// The lines after a run that left a tune applied.
+static void after_tune(bool saved) {
+    if (saved) {
         std::printf("Saved: `gao --apply` re-applies it, `gao --boot on` applies it at every logon.\n");
         if (const std::string note = gao::app::update_logon_copy(); !note.empty()) std::printf("%s\n", note.c_str());
     }
     std::printf("Applied until reboot. `gao --reset` returns to stock.\n");
+}
+
+int optimize(gao::Preset preset, const std::optional<gao::FanCurve>& fan_curve) {
+    const gao::app::OptimizeHooks hooks = cli_hooks();
+    const auto out = gao::app::run_optimize(preset, hooks, fan_curve);
+    // Through the log: on screen and in run.log alike.
+    for (const std::string& line : gao::app::result_lines(out)) hooks.log(line);
+    if (!out.ran || !out.result.ok) return 1;
+    after_tune(out.saved);
     return out.saved ? 0 : 2;   // 2: tuned and applied, but --apply and boot-apply cannot use it
 }
 
 // Finds the undervolt, leaves it applied and saves it as the profile; on_overclock: on top of the saved tune, into it.
 int undervolt(bool on_overclock) {
-    gao::app::OptimizeHooks hooks;
-    hooks.aborted = [] { return g_abort.load(); };
-    hooks.log = gao::app::logged([](const std::string& msg) { std::printf("  %s\n", msg.c_str()); });
-    hooks.busy = on_busy;
-    hooks.active_gpu = [](const gao::GpuControl* gpu) {
-        g_gpu = gpu;
-        SetConsoleCtrlHandler(OnConsoleCtrl, gpu ? TRUE : FALSE);
-    };
+    const gao::app::OptimizeHooks hooks = cli_hooks();
     // A running tray app holds off for the whole run (the tuning lock), as
     // for --optimize, and afterwards finds the profile this run saved.
     const auto out = gao::app::run_undervolt(hooks, on_overclock);
     for (const std::string& line : gao::app::result_lines(out)) hooks.log(line);
     if (!out.ran || !out.result.ok) return 1;
-    if (out.saved) {
-        std::printf("Saved: `gao --apply` re-applies it, `gao --boot on` applies it at every logon.\n");
-        if (const std::string note = gao::app::update_logon_copy(); !note.empty()) std::printf("%s\n", note.c_str());
-    }
-    std::printf("Applied until reboot. `gao --reset` returns to stock.\n");
+    after_tune(out.saved);
     return out.saved ? 0 : 2;   // 2: found and applied, but --apply and boot-apply cannot use it
 }
 
 // The saved tune, tested again on the driver that is installed now.
 int retest() {
-    gao::app::OptimizeHooks hooks;
-    hooks.aborted = [] { return g_abort.load(); };
-    hooks.log = gao::app::logged([](const std::string& msg) { std::printf("  %s\n", msg.c_str()); });
-    hooks.busy = on_busy;
-    hooks.active_gpu = [](const gao::GpuControl* gpu) {
-        g_gpu = gpu;
-        SetConsoleCtrlHandler(OnConsoleCtrl, gpu ? TRUE : FALSE);
-    };
+    const gao::app::OptimizeHooks hooks = cli_hooks();
     const gao::app::RetestOutcome out = gao::app::run_retest(hooks);
     for (const std::string& line : gao::app::result_lines(out)) hooks.log(line);
     return out.ok ? 0 : 1;
@@ -177,23 +171,14 @@ int retest() {
 
 // The all-in-one run: stock, overclock, undervolt on top, fans, final test.
 int all_in_one() {
-    gao::app::OptimizeHooks hooks;
-    hooks.aborted = [] { return g_abort.load(); };
-    hooks.log = gao::app::logged([](const std::string& msg) { std::printf("  %s\n", msg.c_str()); });
-    hooks.busy = on_busy;
-    hooks.active_gpu = [](const gao::GpuControl* gpu) {
-        g_gpu = gpu;
-        SetConsoleCtrlHandler(OnConsoleCtrl, gpu ? TRUE : FALSE);
-    };
+    const gao::app::OptimizeHooks hooks = cli_hooks();
     // The measuring steps have no clock candidate applied, but they run for
     // minutes: Ctrl+C must stop them too, and end at stock.
     SetConsoleCtrlHandler(OnConsoleCtrl, TRUE);
     const gao::app::AllInOneOutcome out = gao::app::run_all_in_one(hooks);
     for (const std::string& line : gao::app::result_lines(out)) hooks.log(line);
     if (!out.ok) return 1;
-    std::printf("Saved: `gao --apply` re-applies it, `gao --boot on` applies it at every logon.\n");
-    if (const std::string note = gao::app::update_logon_copy(); !note.empty()) std::printf("%s\n", note.c_str());
-    std::printf("Applied until reboot. `gao --reset` returns to stock.\n");
+    after_tune(true);
     return 0;
 }
 

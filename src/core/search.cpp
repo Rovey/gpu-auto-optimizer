@@ -223,7 +223,7 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
     int resets_allowed = 1;          // one more reset event than this ends the run
     bool reset_in_step = false;      // the candidate or soak attempt under way had a reset event
     std::string reset_seen;          // what the last reset event looked like: a verdict, or the write that failed
-    bool power_ctl = obj.power && gpu.set_power_limit && gpu.power_limit_range_pct;   // false once skipped
+    bool power_ctl = gpu.set_power_limit && gpu.power_limit_range_pct;   // false once skipped
 
     // The only caller of gpu.recover, which can take half a minute, fail,
     // crash or hang. Rule: never call this while a journal entry is open, or a

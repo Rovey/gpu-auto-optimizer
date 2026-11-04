@@ -89,11 +89,13 @@ struct UiState {
 // running: a refusal (another tuning tool open, more than one NVIDIA GPU)
 // ends at once, and then shows as "Not started" with its reason instead of
 // leaving the page where it was. The run screen moves on to the results
-// when the run has ended.
+// when the run has ended. An Abort clicked in an earlier run is forgotten
+// here: the run screen is never drawn once a run has ended, so it cannot.
 inline Screen follow_run(UiState& s, const OptimizeWorker::Snapshot& run) {
     if (run.run_id != s.seen_run) {
         s.seen_run = run.run_id;
         s.screen = Screen::Run;
+        s.aborting = false;
     }
     if (run.running) s.screen = Screen::Run;
     else if (s.screen == Screen::Run && run.ended()) s.screen = Screen::Results;

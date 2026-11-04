@@ -166,11 +166,15 @@ bool all_in_one_result(const app::AllInOneOutcome& o, bool put_back) {
 }
 
 // The saved tune after its five minutes on a new driver. True: it is applied.
-bool retest_result(const app::RetestOutcome& o) {
+bool retest_result(const app::RetestOutcome& o, bool put_back) {
     if (!o.ok) {
         if (stopped_by_user(o.error)) {
             heading("Stopped");
-            wrapped(kText, "You stopped the test.");
+            // "aborted -- reset to stock FAILED, ..." (common_retest.cpp) must not read as a calm stop,
+            // unless the tune from before the test was put back after all (worker.cpp).
+            if (!put_back && o.error.find("FAILED") != std::string::npos)
+                wrapped(kBad, std::string("You stopped the test. ") + kStockFailed);
+            else wrapped(kText, "You stopped the test.");
             return false;
         }
         heading("Not applied");
@@ -209,7 +213,7 @@ void results(UiState& s, const OptimizeWorker::Snapshot& run, const UiActions& a
         return;
     }
     begin_card("results");
-    const bool applied = run.retest       ? retest_result(*run.retest)
+    const bool applied = run.retest       ? retest_result(*run.retest, run.put_back)
                          : run.all_in_one ? all_in_one_result(*run.all_in_one, run.put_back)
                          : run.undervolt  ? undervolt_result(*run.undervolt, run.put_back)
                                           : optimize_result(*run.outcome, run.put_back);

@@ -83,12 +83,6 @@ CurveState curve_state(const std::vector<VfPoint>& curve, int anchor_uv, int bas
     return anchor_raw >= base_raw - kVfTailDropKhz && lowered_above && !raised_above ? CurveState::FlatTop : CurveState::Other;
 }
 
-int stock_point_for(const std::vector<VfPoint>& curve, int freq_khz) {
-    for (const VfPoint& p : curve)   // lowest voltage first
-        if (p.freq_khz >= freq_khz) return p.index;
-    return -1;
-}
-
 namespace {
 // Writes zero to every point. The return code of the write is not what
 // counts: the caller reads back.

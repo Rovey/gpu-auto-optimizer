@@ -31,7 +31,7 @@ inline const ImVec4 kBad{0.930f, 0.400f, 0.400f, 1};
 enum Icon : unsigned {
     kIconHome = 0xE80F, kIconPulse = 0xE9D9, kIconInfo = 0xE946, kIconChip = 0xEEA1, kIconMemory = 0xE964,
     kIconTemp = 0xE9CA, kIconPower = 0xE945, kIconFan = 0xF16A, kIconRefresh = 0xE72C, kIconUndo = 0xE777,
-    kIconPlay = 0xF5B0, kIconStop = 0xE71A, kIconClock = 0xE823, kIconStar = 0xE734, kIconQuiet = 0xE992,
+    kIconPlay = 0xF5B0, kIconClock = 0xE823, kIconStar = 0xE734, kIconQuiet = 0xE992,
     kIconLeaf = 0xEC0A, kIconGauge = 0xEC4A, kIconShield = 0xEA18, kIconList = 0xE8FD, kIconBack = 0xE72B,
     kIconDownload = 0xE896, kIconStarFilled = 0xE735, kIconCancel = 0xE711,
 };

@@ -1,5 +1,6 @@
 #include "hw/update_io.hpp"
 #include "hw/app_files.hpp"
+#include "hw/boot_task.hpp"
 
 #include <windows.h>
 #include <bcrypt.h>
@@ -27,7 +28,9 @@ bool fail(std::string* error, const std::string& what) {
 
 // One GET; every chunk of the body goes to `sink`. False + *error on a
 // refused URL, a transport error, a status other than 200, a body over
-// max_bytes, or a sink that returns false.
+// max_bytes, a sink that returns false, or a body still not complete after
+// five minutes: the timeouts below are per call, and a connection that
+// trickles bytes would otherwise keep the app from exiting.
 bool https_fetch(const std::string& url, std::size_t max_bytes, const std::function<bool(const char*, std::size_t)>& sink,
                  std::string* error) {
     if (url.compare(0, 8, "https://") != 0) return fail(error, "not an https address");
@@ -65,6 +68,7 @@ bool https_fetch(const std::string& url, std::size_t max_bytes, const std::funct
 
     std::vector<char> buffer(64 * 1024);
     std::size_t total = 0;
+    const ULONGLONG deadline = GetTickCount64() + 5 * 60 * 1000;
     for (;;) {
         DWORD got = 0;
         if (!WinHttpReadData(request.h, buffer.data(), static_cast<DWORD>(buffer.size()), &got))
@@ -72,6 +76,7 @@ bool https_fetch(const std::string& url, std::size_t max_bytes, const std::funct
         if (got == 0) return true;
         total += got;
         if (total > max_bytes) return fail(error, "the download is larger than expected");
+        if (GetTickCount64() > deadline) return fail(error, "the download took longer than five minutes");
         if (!sink(buffer.data(), got)) return fail(error, "could not store the download");
     }
 }
@@ -130,7 +135,9 @@ bool extract_zip(const std::filesystem::path& zip, const std::filesystem::path& 
     const UINT n = GetSystemDirectoryW(system, MAX_PATH);
     if (n == 0 || n >= MAX_PATH) return fail(error, "the System32 folder could not be resolved");
     const std::filesystem::path tar = std::filesystem::path(system) / L"tar.exe";
+    // Only the two executables: nothing else in the zip is ever used.
     std::wstring command = L"\"" + tar.wstring() + L"\" -xf \"" + zip.wstring() + L"\" -C \"" + into.wstring() + L"\"";
+    for (const wchar_t* name : kAppExes) command += L" " + std::wstring(name);
     STARTUPINFOW si{sizeof(si)};
     PROCESS_INFORMATION pi{};
     if (!CreateProcessW(tar.c_str(), command.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, system, &si, &pi))

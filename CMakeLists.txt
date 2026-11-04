@@ -104,18 +104,21 @@ add_library(app STATIC
 )
 target_link_libraries(app PUBLIC core hw PRIVATE gao_warnings gao_hardening)
 
+# What both executables link with. The DLLs below are not KnownDLLs:
+# delay-load them so they resolve after SetDefaultDllDirectories(SYSTEM32) in
+# main()/wWinMain(), never from the exe's folder, which is wherever the zip
+# was unpacked. Then the linker half of the mitigations: Control Flow Guard
+# tables, CET shadow stack compatibility. (/DYNAMICBASE and /HIGHENTROPYVA
+# are already x64 defaults.)
+add_library(gao_exe_link INTERFACE)
+target_link_libraries(gao_exe_link INTERFACE delayimp)
+target_link_options(gao_exe_link INTERFACE /DELAYLOAD:d3dcompiler_47.dll /DELAYLOAD:d3d11.dll /DELAYLOAD:dxgi.dll
+                    /DELAYLOAD:winhttp.dll /DELAYLOAD:version.dll /DELAYLOAD:pdh.dll /DELAYLOAD:bcrypt.dll
+                    /DEPENDENTLOADFLAG:0x800 /GUARD:CF /CETCOMPAT)
+
 add_executable(gao src/app/main.cpp src/app/cli_commands.hpp src/app/cli_hardware.cpp src/app/cli_runs.cpp
                src/app/gao.manifest src/app/app.rc)
-target_link_libraries(gao PRIVATE app gao_warnings gao_hardening)
-# d3dcompiler_47.dll, d3d11.dll and dxgi.dll are not KnownDLLs: delay-load
-# them so they resolve after SetDefaultDllDirectories(SYSTEM32) in main(),
-# never from the exe's folder.
-target_link_libraries(gao PRIVATE delayimp)
-target_link_options(gao PRIVATE /DELAYLOAD:d3dcompiler_47.dll /DELAYLOAD:d3d11.dll /DELAYLOAD:dxgi.dll
-                   /DELAYLOAD:winhttp.dll /DELAYLOAD:version.dll /DEPENDENTLOADFLAG:0x800)
-# Linker half of the mitigations: Control Flow Guard tables, CET shadow stack
-# compatibility. (/DYNAMICBASE and /HIGHENTROPYVA are already x64 defaults.)
-target_link_options(gao PRIVATE /GUARD:CF /CETCOMPAT)
+target_link_libraries(gao PRIVATE app gao_warnings gao_hardening gao_exe_link)
 
 # Dear ImGui (vendored, unmodified) as its own library, compiled with the
 # compiler's defaults rather than our warning set.
@@ -139,18 +142,14 @@ add_executable(GpuAutoOptimizer WIN32
   src/app/gao.manifest
   src/app/app.rc
 )
-target_link_libraries(GpuAutoOptimizer PRIVATE app imgui gao_warnings gao_hardening delayimp)
-target_link_options(GpuAutoOptimizer PRIVATE /DELAYLOAD:d3dcompiler_47.dll /DELAYLOAD:d3d11.dll /DELAYLOAD:dxgi.dll
-                   /DELAYLOAD:dwmapi.dll /DELAYLOAD:winhttp.dll /DELAYLOAD:version.dll
-                   /DEPENDENTLOADFLAG:0x800 /GUARD:CF /CETCOMPAT)
+target_link_libraries(GpuAutoOptimizer PRIVATE app imgui gao_warnings gao_hardening gao_exe_link)
+target_link_options(GpuAutoOptimizer PRIVATE /DELAYLOAD:dwmapi.dll)
 
 enable_testing()
 add_executable(core_tests
   tests/test_main.cpp
-  tests/test_version.cpp
   tests/test_objectives.cpp
   tests/test_config.cpp
-  tests/test_types.cpp
   tests/test_stress_math.cpp
   tests/test_stability.cpp
   tests/test_journal.cpp

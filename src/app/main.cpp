@@ -134,11 +134,12 @@ int main(int argc, char** argv) {
         if (argc > 2) {
             const std::string p = argv[2];
             if (p == "all") return putting_back(all_in_one);
-            if (p == "best") preset = gao::Preset::BestOfMyGpu;
-            else if (p == "quiet") preset = gao::Preset::Quiet;
-            else if (p == "cool") preset = gao::Preset::CoolAndEfficient;
-            else if (p == "max") preset = gao::Preset::MaxPerformance;
-            else { std::printf("--optimize expects all, best, quiet, cool or max, got '%s'\n", argv[2]); return 1; }
+            const auto named = gao::preset_from_name(p);   // the undervolt has a command of its own
+            if (!named || *named == gao::Preset::Undervolt) {
+                std::printf("--optimize expects all, best, quiet, cool or max, got '%s'\n", argv[2]);
+                return 1;
+            }
+            preset = *named;
         }
         std::optional<gao::FanCurve> fan_curve;
         if (argc > 3) {

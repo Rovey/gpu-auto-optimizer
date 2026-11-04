@@ -23,7 +23,7 @@ void about(const UiState& s, const UiActions& act) {
     ImGui::SameLine(0, em() * 0.8f);
     ImGui::AlignTextToFramePadding();
     ImGui::TextUnformatted("Look for a new version when the app starts");
-    wrapped(kDim, "One request to github.com at start and once a day; nothing else is sent. A new version is shown at the bottom "
+    wrapped(kDim, "One request to api.github.com at start and once a day; nothing else is sent. A new version is shown at the bottom "
                   "left and installed only when you click it.");
     end_card();
 }
