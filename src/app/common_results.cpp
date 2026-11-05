@@ -1,5 +1,6 @@
 #include "app/common.hpp"
 #include "core/stability.hpp"
+#include "core/step_down.hpp"
 #include <cstdio>
 
 namespace gao::app {
@@ -108,6 +109,10 @@ std::vector<std::string> result_lines(const RetestOutcome& o) {
     std::vector<std::string> lines;
     if (o.result.test.seconds > 0) lines.push_back(measured_line(verdict_name(o.result.test.verdict), o.result.test, true));
     if (!o.ok) lines.push_back("RESULT: not applied -- " + o.error);
+    else if (o.final_step != o.first_step)
+        lines.push_back("RESULT: the tune held at " + step_text(o.final_step) + " after " + step_text(o.first_step) +
+                        " failed, on driver " + o.driver + " (it was tested on " + o.driver_was + "), and is applied: " +
+                        profile_text(o.profile));
     else
         lines.push_back("RESULT: the tune holds on driver " + o.driver + " (it was tested on " + o.driver_was + ") and is applied: " +
                         profile_text(o.profile));

@@ -1,5 +1,6 @@
 #include "app/common_internal.hpp"
 #include "hw/app_files.hpp"
+#include "core/step_down.hpp"
 #include "hw/stress.hpp"
 #include <chrono>
 #include <memory>
@@ -54,8 +55,10 @@ RetestOutcome run_retest(const OptimizeHooks& hooks) {
     io.measuring = hooks.measuring;
     if (hooks.active_gpu) hooks.active_gpu(&gpu);
     out.ran = true;
+    SteppedRetestResult stepped;
     const bool crashed = !guarded([&] {
-        out.result = retest_saved_tune(cfg, out.driver, gpu_id, gpu, io);
+        stepped = retest_stepping(cfg, out.driver, gpu_id, gpu, io, grid_khz_of(gpu));
+        out.result = stepped.last;
         if (fans) fans->release();
     });
     if (hooks.active_gpu) hooks.active_gpu(nullptr);
@@ -68,19 +71,35 @@ RetestOutcome run_retest(const OptimizeHooks& hooks) {
         (void)load.release();   // as in run_optimize: a load that faulted is left alone
         return to_stock("access violation while the tune was tested");
     }
-    if (!out.result.ok) {
-        if (out.result.test.seconds > 0)
-            boot_log("the saved tune was tested on driver " + out.driver + " and is not applied: " + out.result.reason);
-        return fail(out.result.reason + (out.result.at_stock ? " -- card at stock" : " -- reset to stock FAILED, run `gao --reset`"));
+    out.first_step = stepped.first_step;
+    out.final_step = stepped.final_step;
+    // An abort leaves the card at stock with the step under test in cfg: put it back.
+    std::string back;
+    bool reapplied = false;
+    if (!stepped.ok && out.result.test.verdict == Verdict::Aborted && cfg.profile) {
+        std::string apply_why;
+        reapplied = apply_profile(gpu, *cfg.profile, &apply_why);
+        if (!reapplied) back = " (and it could not be applied again: " + apply_why + ")";
     }
-    // Only the driver the tune belongs to, and the strikes, are this test's to change.
-    Config latest = load_config();
-    if (!latest.profile) return to_stock("the saved tune was removed while it was tested");
-    latest.profile->driver = out.driver;
-    latest.boot_strikes = 0;
-    if (!save_config(latest)) return to_stock("the tune held, but that could not be saved (" + config_path().string() + ")");
+    if (!stepped.ok && out.result.test.seconds > 0 && !reapplied)
+        boot_log("the saved tune was tested on driver " + out.driver + " and is not applied: " + out.result.reason);
+    // A step that held, or a tune that was lowered on the way: the whole retested profile is saved,
+    // with the strikes cleared when it held.
+    if (stepped.ok || stepped.stepped) {
+        Config latest = load_config();
+        if (!latest.profile) return to_stock("the saved tune was removed while it was tested");
+        latest.profile = cfg.profile;
+        if (stepped.ok) latest.boot_strikes = 0;
+        if (!save_config(latest))
+            return to_stock(std::string(stepped.ok ? "the tune held" : "the tune was lowered") + ", but that could not be saved (" +
+                            config_path().string() + ")");
+        out.profile = *latest.profile;
+    }
+    if (!stepped.ok)
+        return fail(out.result.reason + back +
+                    (reapplied ? std::string(" -- the tune under test is applied again")
+                               : (out.result.at_stock ? " -- card at stock" : " -- reset to stock FAILED, run `gao --reset`")));
     out.ok = true;
-    out.profile = *latest.profile;
     boot_log("tested again on driver " + out.driver + " (it was tested on " + out.driver_was + "): applied " + profile_text(out.profile));
     return out;
 }
