@@ -79,6 +79,31 @@ TEST_CASE("the saved tune's step says whether it was tested") {
     CHECK(gao::gui::step_status(s) == "-10 % (step 2), not tested on its own; from a tested tune");
     s.step_down->tested = true;
     CHECK(gao::gui::step_status(s) == "-10 % (step 2), tested");
+    gao::Profile failed = gao::at_step(p, 2, gao::kDefaultGridKhz);
+    failed.step_down->failed_step = 2;
+    CHECK(gao::gui::step_status(failed) == "-10 % (step 2), failed a test");
+    failed.step_down->failed_step = 1;
+    CHECK(gao::gui::step_status(failed) == "-10 % (step 2), not tested on its own; from a tested tune");
+}
+
+TEST_CASE("a tune that failed its test can be lowered, not raised or tested as it is") {
+    gao::gui::UiState s;
+    s.elevated = true;
+    s.profile_driver_ok = s.profile_gpu_ok = true;
+    s.profile = gao::at_step(clocks_tune(), 2, gao::kDefaultGridKhz);
+    CHECK(gao::gui::test_step_shown(s));
+    s.profile->step_down->failed_step = 2;
+    CHECK_FALSE(gao::gui::test_step_shown(s));
+    CHECK(gao::gui::step_usable(s));
+    CHECK(gao::can_step_down(*s.profile, gao::kDefaultGridKhz));
+    CHECK_FALSE(gao::can_step_up(*s.profile));
+    // A lower step is a new tune: it no longer failed.
+    CHECK_FALSE(gao::failed_its_test(gao::at_step(*s.profile, 3, gao::kDefaultGridKhz)));
+    s.profile->step_down->failed_step.reset();
+    s.profile->step_down->tested = true;
+    CHECK_FALSE(gao::gui::test_step_shown(s));   // tested already
+    s.profile = clocks_tune();
+    CHECK_FALSE(gao::gui::test_step_shown(s));   // the tune the run found: "Test the tune" is the button for it
 }
 
 TEST_CASE("the step buttons are off during a run and when the saved tune does not apply here") {

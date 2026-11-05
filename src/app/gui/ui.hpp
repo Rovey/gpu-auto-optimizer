@@ -159,10 +159,19 @@ inline std::string step_up_item(const Profile& p) {
     return "Raise tune 5 % (back to -" + std::to_string((n - 1) * kStepPct) + " %)";
 }
 
+// "Test this step (5 min)": a step that was not tested on its own and has not
+// failed a test, while the driver and card are the ones it was saved on.
+inline bool test_step_shown(const UiState& s) {
+    return s.elevated && s.profile && s.profile->step_down && s.profile->step_down->step > 0 && !s.profile->step_down->tested &&
+           !failed_its_test(*s.profile) && s.profile_gpu_ok && s.profile_driver_ok;
+}
+
 // The saved tune's step for the Dashboard: "-10 % (step 2), tested"; "" at step 0.
 inline std::string step_status(const Profile& p) {
     if (!p.step_down || p.step_down->step == 0) return {};
-    return step_text(p.step_down->step) + (p.step_down->tested ? ", tested" : ", not tested on its own; from a tested tune");
+    return step_text(p.step_down->step) + (failed_its_test(p)    ? ", failed a test"
+                                           : p.step_down->tested ? ", tested"
+                                                                 : ", not tested on its own; from a tested tune");
 }
 
 struct UiActions {

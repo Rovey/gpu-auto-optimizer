@@ -1,5 +1,6 @@
 #include "app/common_internal.hpp"
 #include <tlhelp32.h>
+#include "core/step_down.hpp"
 #include "core/watchdog.hpp"
 #include "hw/gpu_users.hpp"
 #include "hw/nvidia_app.hpp"
@@ -180,9 +181,17 @@ std::optional<Profile> tune_before_run() {
     return cfg.profile;
 }
 
-bool put_back_after_stop(const std::optional<Profile>& before, const OptimizeHooks& hooks) {
-    if (!before) return false;
+bool put_back_after_stop(const std::optional<Profile>& before_run, const OptimizeHooks& hooks) {
+    if (!before_run) return false;
     auto log = [&](const std::string& m) { if (hooks.log) hooks.log(m); };
+    // A stepped test that was stopped saved the step under test and put it back
+    // itself: the step the run found on the card failed, and does not go back.
+    const std::optional<Profile> before = put_back_target(before_run, load_config().profile);
+    if (!before) {
+        log("stopped: the tune that was on the card before the run is not put back: the saved tune is gone, or failed its test");
+        return false;
+    }
+    const bool same = *before == *before_run;
     const TuningLock lock;   // the watchdog keeps out of it meanwhile
     GuardedGpu hw(kGpu);
     std::string why;
@@ -198,7 +207,9 @@ bool put_back_after_stop(const std::optional<Profile>& before, const OptimizeHoo
             (clean ? "card at stock" : "reset to stock FAILED, run `gao --reset`"));
         return false;
     }
-    log("stopped: the tune that was on the card before the run is back: " + profile_text(*before));
+    log(std::string(same ? "stopped: the tune that was on the card before the run is back: "
+                         : "stopped: the saved tune (the step under test) is back: ") +
+        profile_text(*before));
     return true;
 }
 

@@ -3,6 +3,7 @@
 #define NOMINMAX
 #include <windows.h>
 #include "hw/app_files.hpp"
+#include "core/step_down.hpp"
 #include "core/version.hpp"
 #include <cstdio>
 #include <ctime>
@@ -130,8 +131,13 @@ std::string decision_text(BootDecision d, const Config& c, const std::string& dr
             if (driver.empty()) return "driver version unknown (NVML did not report it); not applied";
             return "the driver was updated (" + c.profile->driver + " -> " + driver + "); " + kDriverChangedAdvice;
         case BootDecision::GpuChanged: return "this is not the card the profile was tested on; optimize again";
-        case BootDecision::FailedTest:
-            return "the saved tune failed its test at every step down to -50 %; optimize again";
+        case BootDecision::FailedTest: {
+            // decide_boot says FailedTest only for a profile with step_down. The grid only rounds a flat
+            // top; the default is near enough to say whether a step remains.
+            const int step = c.profile ? current_step(*c.profile) : 0;
+            const bool lower = c.profile && can_step_down(*c.profile, kDefaultGridKhz);
+            return "the saved tune failed its test at " + step_text(step) + (lower ? "; optimize again or lower it 5 %" : "; optimize again");
+        }
         case BootDecision::Apply: return "apply";
     }
     return "unknown";

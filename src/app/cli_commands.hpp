@@ -41,6 +41,8 @@ extern bool g_busy_ok;
 // A run Ctrl+C stopped, with nothing of it kept (exit 1), puts back the tune
 // it found on the card: a tray app's watchdog would otherwise take the stock
 // it left for a driver reset. The window's runs do the same (gui/worker.cpp).
+// After a stepped --retest that was stopped, the step under test is back
+// instead, never the step that failed (put_back_after_stop).
 template <class Run> int putting_back(Run run) {
     const auto before = gao::app::tune_before_run();
     const int code = run();
