@@ -174,6 +174,19 @@ bool Nvml::Init(const Fake& fake) {
     return inited_;
 }
 
+std::optional<LibraryStamp> nvml_library_stamp() {
+    wchar_t dir[MAX_PATH];
+    const UINT n = GetSystemDirectoryW(dir, MAX_PATH);
+    if (!n || n >= MAX_PATH) return std::nullopt;
+    const std::wstring path = std::wstring(dir) + L"\\nvml.dll";
+    WIN32_FILE_ATTRIBUTE_DATA a{};
+    if (!GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &a)) return std::nullopt;
+    LibraryStamp s;
+    s.write_time = (static_cast<unsigned long long>(a.ftLastWriteTime.dwHighDateTime) << 32) | a.ftLastWriteTime.dwLowDateTime;
+    s.size = (static_cast<unsigned long long>(a.nFileSizeHigh) << 32) | a.nFileSizeLow;
+    return s;
+}
+
 bool Nvml::Init() {
     // System32 only: gao runs elevated at logon, and the exe's own folder
     // must never be able to supply this DLL.
