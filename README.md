@@ -104,6 +104,7 @@ again at logon. To undo things, use these buttons in the window. They need admin
 | To | Do this |
 |---|---|
 | Put the card back at stock now | Dashboard, **Revert to stock** (also in the tray icon's menu). The saved tune stays saved. It is not applied again until you click **Apply saved tune**, or until the next logon while **Apply at logon** is on. |
+| Make the tune a bit safer, or undo that | Dashboard, **−5 %** lowers the saved tune by 5 % of its gain over stock (core, memory and the undervolt's top clock; never the power limit or the fans), **+5 %** raises it one step back, never above the tune the run found. Also in the tray icon's menu as **Lower tune 5 %** and **Raise tune 5 %**. They apply at once and need administrator rights. |
 | Give the fans back to the NVIDIA driver | Fan page, switch **Fan control** off, or **Exit** the app from the tray icon. The fans also go back to the driver on sleep, logoff and crashes. |
 | Stop applying at logon | Dashboard, switch **Apply at logon** off. This removes the logon task, the Start menu entry and the copy in `C:\Program Files\GpuAutoOptimizer`. A copy that is still running is removed at the next restart. |
 | Remove it completely | Do the three steps above, exit the app, and delete the folder you unzipped. To remove the saved tune and the logs too, delete `%ProgramData%\GpuAutoOptimizer` (needs administrator rights). Nothing else is installed. |
@@ -373,6 +374,24 @@ is going. A run does not start while Automatic Tuning is on, and `gao --status` 
 </details>
 
 <details>
+<summary><b>A game stutters or the screen goes black for a moment with my tune</b></summary>
+
+Run results do not always hold in every game. To find out whether the tune is the cause without losing all of it, lower
+it: on the Dashboard click **−5 %** (or **Lower tune 5 %** in the tray icon's menu, which works in the middle of a game).
+Each step takes 5 % of what the tune gives over stock off the core offset, the memory offset and the undervolt's top clock
+(the voltage stays), up to ten steps (−50 %). Steps always count from the tune the run found, and the power limit and the
+fans do not change. **+5 %** goes one step back up, never above the tune the run found. The Dashboard shows the step, for
+example `−10 % (step 2)`, and says that it was not tested on its own, because it is derived from a tested tune.
+
+**Test this step (5 min)** loads the card for five minutes at the current step. If it holds, the Dashboard says
+`tested`. If it fails, the app lowers the step by itself until one holds, with one five-minute test per step, and keeps
+that one. A step that failed cannot be raised back to without a new run. At −50 % (step 10), or at a step that would change
+nothing, the card goes to stock and the tune is no longer applied at logon: optimize again. Abort puts back the step under
+test only when the test had already stepped down; otherwise the card ends at stock. On the command line: `gao --step-down`
+and `gao --step-up`. A new run starts over at the tune it finds.
+</details>
+
+<details>
 <summary><b>What happens after a driver update?</b></summary>
 
 The saved tune is tied to the driver version it was tuned on, because a new driver can change what is stable. After an
@@ -517,6 +536,8 @@ flowchart LR
 | `gao --undervolt --on-overclock` | The undervolt searched on top of the saved overclock and saved into it |
 | `gao --retest` | After a driver update: the saved tune under full load for five minutes; kept for the new driver when stable, stock when not |
 | `gao --apply` | Re-applies the saved profile |
+| `gao --step-down` | Lowers the saved tune by 5 % of its gain over stock (up to 10 steps), applies it and saves it |
+| `gao --step-up` | Raises it one step back, never above the tune the run found |
 | `gao --reset` | Returns to stock clocks and the default power limit |
 | `gao --boot on\|off` | Turns apply-at-logon on or off |
 | `gao --fan auto` | Hands every fan back to the NVIDIA driver, whatever set it (a running tray app takes them again on its next tick; switch Fan control off to keep the driver in charge) |
