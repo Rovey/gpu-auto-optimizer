@@ -54,7 +54,8 @@ service.
 ## Quick start
 
 1. **Download** `GpuAutoOptimizer-<version>-win-x64.zip` from the [latest release](https://github.com/Rovey/gpu-auto-optimizer/releases/latest).
-   It is under **Assets**. Do not download *Source code*.
+   It is under **Assets**. Do not download *Source code*. Download it only from this GitHub page: the app has no other
+   website, and copies offered elsewhere may not be what this repository built.
 2. **Unzip it** anywhere (right-click, **Extract all**).
 3. **Start `GpuAutoOptimizer.exe`.** The app is not code-signed yet, so Windows SmartScreen may say "Windows protected your
    PC". Choose **More info**, then **Run anyway**. See [Is it safe to run?](#is-it-safe-to-run) if your antivirus complains.
@@ -309,8 +310,10 @@ What it cannot do: promise that every card stays stable in every game, or keep a
 The executables are not code-signed yet, so SmartScreen does not know them. Choose **More info**, then **Run anyway**. The
 app also restarts itself with administrator rights, copies itself to Program Files and registers a logon task. Some antivirus
 programs treat that combination in an unknown program as suspicious, so one may warn or remove it. The source code is
-public, and every release is built by GitHub Actions from this repository. To check that your download is the one GitHub
-built:
+public, and every release is built by GitHub Actions from this repository and published only on its
+[releases page](https://github.com/Rovey/gpu-auto-optimizer/releases). Download sites that copy tools like this one have
+been used to spread malware (fake MSI Afterburner downloads, for one), so do not take it from anywhere else. To check that
+your download is the one GitHub built:
 
 ```powershell
 (Get-FileHash .\GpuAutoOptimizer-<version>-win-x64.zip -Algorithm SHA256).Hash   # compare with the .sha256 file of the release
