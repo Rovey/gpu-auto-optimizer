@@ -21,7 +21,8 @@ UndervoltTune lowered_undervolt(const UndervoltTune& orig, int step, int grid_kh
     int units = target / grid;
     if (target % grid != 0 && target < 0) --units;   // floor
     UndervoltTune u = orig;
-    u.freq_khz = units * grid;
+    // Never below the built-in curve: the flat top keeps a raise of 0 or more.
+    u.freq_khz = std::max(units * grid, orig.freq_khz - std::max(orig.raise_khz, 0));
     u.raise_khz = orig.raise_khz - (orig.freq_khz - u.freq_khz);
     return u;
 }
@@ -76,6 +77,15 @@ bool can_step_up(const Profile& p) {
     if (!p.step_down || p.step_down->step <= 0) return false;
     const auto& failed = p.step_down->failed_step;
     return !failed || p.step_down->step - 1 > *failed;
+}
+
+bool failed_its_test(const Profile& p) {
+    return p.step_down && p.step_down->failed_step && *p.step_down->failed_step >= p.step_down->step;
+}
+
+std::optional<Profile> put_back_target(const std::optional<Profile>& before, const std::optional<Profile>& saved) {
+    if (!before || !saved || failed_its_test(*saved)) return std::nullopt;
+    return saved;   // `before` itself when nothing changed it
 }
 
 std::string step_text(int step) {

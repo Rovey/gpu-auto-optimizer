@@ -112,3 +112,48 @@ TEST_CASE("step_text") {
     CHECK(step_text(2) == "-10 % (step 2)");
     CHECK(step_text(0).empty());
 }
+
+TEST_CASE("a lowered flat top never goes below the built-in curve") {
+    Profile p;
+    p.preset = Preset::Undervolt;
+    p.undervolt = UndervoltTune{960000, 2932000, 5000};   // the built-in point is at 2927000
+    // Step 1 drops 250 kHz; down to the 15 MHz grid that is 2925000, below the built-in point.
+    const Profile one = at_step(p, 1, 15000);
+    REQUIRE(one.undervolt);
+    CHECK(one.undervolt->freq_khz == 2927000);
+    CHECK(one.undervolt->raise_khz == 0);
+    CHECK(can_step_down(p, 15000));
+    // Every further step is clamped to the same point: it changes nothing.
+    CHECK_FALSE(can_step_down(one, 15000));
+    CHECK(at_step(p, kMaxStep, 15000).undervolt->raise_khz == 0);
+}
+
+TEST_CASE("a tune fails its test at or below its failed step") {
+    CHECK_FALSE(failed_its_test(owners()));
+    Profile p = at_step(owners(), 2, 7500);
+    CHECK_FALSE(failed_its_test(p));
+    p.step_down->failed_step = 1;
+    CHECK_FALSE(failed_its_test(p));
+    p.step_down->failed_step = 2;
+    CHECK(failed_its_test(p));
+    p.step_down->failed_step = 3;
+    CHECK(failed_its_test(p));
+}
+
+TEST_CASE("a stopped run puts back the tune it found, unless the saved tune changed under it") {
+    const Profile found = owners();
+    // Nothing was on the card: nothing to put back.
+    CHECK_FALSE(put_back_target(std::nullopt, found));
+    // The saved tune is the one the run found on the card: that goes back.
+    CHECK(put_back_target(found, found) == found);
+    // A stepped test that was stopped: the step under test is saved now, never the step that failed.
+    Profile under_test = at_step(found, 1, 7500);
+    under_test.step_down->failed_step = 0;
+    CHECK(put_back_target(found, under_test) == under_test);
+    // A saved tune that failed its test, or none: nothing goes back.
+    Profile failed = at_step(found, 2, 7500);
+    failed.step_down->failed_step = 2;
+    CHECK_FALSE(put_back_target(at_step(found, 1, 7500), failed));
+    CHECK_FALSE(put_back_target(failed, failed));
+    CHECK_FALSE(put_back_target(found, std::nullopt));
+}

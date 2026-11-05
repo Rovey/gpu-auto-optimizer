@@ -1,5 +1,6 @@
 #include "core/boot.hpp"
 #include "core/search.hpp"
+#include "core/step_down.hpp"
 #include "core/undervolt.hpp"
 #include "core/vf_curve.hpp"
 
@@ -15,8 +16,7 @@ BootDecision decide_boot(const Config& c, const std::string& driver, const std::
     if (c.boot_strikes >= kMaxBootStrikes) return BootDecision::TooManyStrikes;
     if (driver.empty() || driver != c.profile->driver) return BootDecision::DriverChanged;
     if (gpu.empty() || gpu != c.profile->gpu) return BootDecision::GpuChanged;
-    const auto& sd = c.profile->step_down;
-    if (sd && sd->failed_step && *sd->failed_step >= sd->step) return BootDecision::FailedTest;
+    if (failed_its_test(*c.profile)) return BootDecision::FailedTest;
     return BootDecision::Apply;
 }
 

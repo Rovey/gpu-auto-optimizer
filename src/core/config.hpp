@@ -71,6 +71,7 @@ struct Profile {
     std::optional<UndervoltTune> undervolt;   // set: a flat top on the curve, over core_mhz when that is not 0
     std::optional<AgainstStock> against_stock;   // empty: saved by a build before this, or not measured
     std::optional<StepDown> step_down;           // empty: the profile is the tune the run found
+    bool operator==(const Profile&) const = default;
 };
 
 // Everything that has to survive a reboot. Freeze ceilings are not here:

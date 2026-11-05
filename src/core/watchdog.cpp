@@ -1,4 +1,5 @@
 #include "core/watchdog.hpp"
+#include "core/step_down.hpp"
 #include <algorithm>
 #include <cstdlib>
 
@@ -68,6 +69,8 @@ WatchAction Watchdog::check(const Profile& p, const std::optional<AppliedState>&
         notified_driver_ = true;
         return WatchAction::NotifyDriverChanged;
     }
+    // A tune that failed its test is not applied at logon, and not put back either.
+    if (failed_its_test(p)) return WatchAction::None;
     if (!seen || (p.undervolt && !curve)) return WatchAction::None;
     if (tune_applied(p, *seen, curve)) {
         backed_off_ = false;
