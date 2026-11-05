@@ -250,6 +250,9 @@ struct RetestOutcome {
 RetestOutcome run_retest(const OptimizeHooks& hooks);
 // As result_lines above: the test's own line, then the RESULT line.
 std::vector<std::string> result_lines(const RetestOutcome& o);
+// The boot.log line of a retest that held: "tested on driver X: applied ...",
+// or "tested again on driver X (it was tested on Y): ..." after a driver change.
+std::string retest_boot_line(const RetestOutcome& o);
 
 struct StepOutcome {
     bool ok = false;

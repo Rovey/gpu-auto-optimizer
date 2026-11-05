@@ -80,4 +80,9 @@ StabilityResult run_stability(const std::function<StressBatch()>& batch,
 
 const char* verdict_name(Verdict v);
 
+// One measurement as the logs and result lines show it: "  STABLE score=5870
+// it/s  core=2848 MHz  mem=15551 MHz  peak=67 C  fan=51 %  power=164 W  (300 s)".
+// with_mem: the memory clock too.
+std::string measured_line(const char* name, const StabilityResult& s, bool with_mem);
+
 }
