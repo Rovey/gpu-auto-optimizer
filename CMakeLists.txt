@@ -48,6 +48,8 @@ add_library(core STATIC
   src/core/fan_curve.cpp
   src/core/config.hpp
   src/core/config.cpp
+  src/core/step_down.hpp
+  src/core/step_down.cpp
   src/core/stress_math.hpp
   src/core/stress_math.cpp
   src/core/stability.hpp
@@ -150,6 +152,7 @@ add_executable(core_tests
   tests/test_main.cpp
   tests/test_objectives.cpp
   tests/test_config.cpp
+  tests/test_step_down.cpp
   tests/test_stress_math.cpp
   tests/test_stability.cpp
   tests/test_journal.cpp
