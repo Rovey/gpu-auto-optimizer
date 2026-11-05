@@ -327,7 +327,8 @@ UndervoltOutcome run_undervolt(const OptimizeHooks& hooks, bool on_saved_tune, c
     std::optional<Profile> over;
     if (on_saved_tune) {
         std::string refusal;
-        over = saved_tune_for(hw.DriverVersion(), hw.GpuUuid(), &refusal);
+        // 1: this run refused a second NVIDIA GPU before it began.
+        over = saved_tune_for(hw.DriverVersion(), hw.GpuUuid(), 1, &refusal);
         if (!over) return fail("no saved tune to undervolt: " + refusal);
         base = UndervoltBase{over->power_pct, over->core_mhz, over->mem_mhz, how.measured, how.clock_khz};
         log("on top of the saved tune: power " + std::to_string(base.power_pct) + " %, core +" + std::to_string(base.core_mhz) +

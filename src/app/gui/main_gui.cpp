@@ -702,7 +702,7 @@ void act_apply() {
     if (!g.nvml_ok || !g.nvapi_ok) { note("The NVIDIA driver is not available right now.", true); return; }
     std::string why;
     if (!gao::app::prepare_state(&why)) { note(why, true); return; }
-    const auto tune = gao::app::saved_tune_for(g.nvml->DriverVersion(), g.nvml->GpuUuid(kGpu), &why);
+    const auto tune = gao::app::saved_tune_for(g.nvml->DriverVersion(), g.nvml->GpuUuid(kGpu), g.nvml->DeviceCount(), &why);
     if (!tune) { note("Not applied: " + why, true); return; }
     if (!gao::apply_profile(g.gpu, *tune, &why)) { note("Not applied: " + why, true); return; }
     g.watch = true;
@@ -1065,8 +1065,11 @@ void on_watchdog() {
     const bool driver_reset = g.watch_reset;
     g.watch_reset = false;
     const std::string driver = g.nvml->DriverVersion(), gpu_id = g.nvml->GpuUuid(kGpu);
+    // A second NVIDIA GPU (one plugged in since the tune was applied) counts
+    // as another card: the tune is not put back, and the user is told once.
+    const bool several = gao::several_gpus(g.nvml->DeviceCount());
     const auto action = g.watchdog.check(*cfg.profile, applied, !driver.empty() && driver == cfg.profile->driver,
-                                         !gpu_id.empty() && gpu_id == cfg.profile->gpu, std::chrono::steady_clock::now(),
+                                         !several && !gpu_id.empty() && gpu_id == cfg.profile->gpu, std::chrono::steady_clock::now(),
                                          g.ui.curve, driver_reset);
     switch (action) {
         case gao::WatchAction::None: return;
@@ -1107,7 +1110,10 @@ void on_watchdog() {
         case gao::WatchAction::NotifyDriverChanged:
             // The same words as at logon for a driver update: the tune is
             // tested again in five minutes, not found again in forty.
-            if (!gpu_id.empty() && gpu_id == cfg.profile->gpu)
+            if (several) {
+                gao::app::boot_log(std::string("watchdog: not re-applied: ") + gao::kSeveralGpusRefusal);
+                notify(gao::kSeveralGpusBalloon, false);
+            } else if (!gpu_id.empty() && gpu_id == cfg.profile->gpu)
                 notify("The NVIDIA driver was updated: your tune is no longer applied. Click here and test it (5 minutes).");
             else
                 notify("This is not the card the tune was made on. Optimize again to tune for it.");

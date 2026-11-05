@@ -187,7 +187,7 @@ int apply() {
     if (!nvml.Init()) { std::printf("NVML init failed: %s\n", nvml.Error().c_str()); return 1; }
     gao::Nvapi nvapi;
     if (!nvapi.Init()) { std::printf("NVAPI init failed: %s\n", nvapi.Error().c_str()); return 1; }
-    const auto tune = gao::app::saved_tune_for(nvml.DriverVersion(), nvml.GpuUuid(kGpu), &why);
+    const auto tune = gao::app::saved_tune_for(nvml.DriverVersion(), nvml.GpuUuid(kGpu), nvml.DeviceCount(), &why);
     if (!tune) { std::printf("not applied: %s\n", why.c_str()); return 1; }
     const gao::GpuControl gpu = gao::make_gpu_control(nvml, nvapi, kGpu);
     if (!gao::apply_profile(gpu, *tune, &why)) { std::printf("not applied: %s\n", why.c_str()); return 1; }

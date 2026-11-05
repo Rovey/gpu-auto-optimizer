@@ -15,10 +15,11 @@
 
 namespace gao::app {
 
-std::optional<Profile> saved_tune_for(const std::string& driver, const std::string& gpu_id, std::string* refusal) {
+std::optional<Profile> saved_tune_for(const std::string& driver, const std::string& gpu_id, int nvidia_gpus,
+                                      std::string* refusal) {
     Config cfg = load_config();
     cfg.boot_strikes = 0;
-    const BootDecision d = decide_boot(cfg, driver, gpu_id);
+    const BootDecision d = decide_boot(cfg, driver, gpu_id, nvidia_gpus);
     if (d == BootDecision::Apply) return cfg.profile;
     if (refusal) *refusal = decision_text(d, cfg, driver);
     return std::nullopt;
