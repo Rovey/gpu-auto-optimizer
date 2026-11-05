@@ -35,6 +35,25 @@ struct AgainstStock {
     bool operator==(const AgainstStock&) const = default;
 };
 
+// The tune as the run found it, before any step lowered it.
+struct FoundTune {
+    int core_mhz = 0;
+    int mem_mhz = 0;
+    std::optional<UndervoltTune> undervolt;
+    bool operator==(const FoundTune&) const = default;
+};
+
+inline constexpr int kMaxStep = 10;   // the largest step a profile can be lowered to
+
+// A saved tune that was lowered in 5 % steps from what the run found.
+struct StepDown {
+    int step = 0;                     // 1..kMaxStep (0 is never stored)
+    bool tested = false;              // this step held a 5-minute test
+    std::optional<int> failed_step;   // the largest step that failed a test; steps <= it are never applied
+    FoundTune found;
+    bool operator==(const StepDown&) const = default;
+};
+
 // What --optimize or --undervolt found, as --apply and --boot-apply re-apply it.
 struct Profile {
     Preset preset = Preset::BestOfMyGpu;
@@ -51,6 +70,7 @@ struct Profile {
     std::optional<int> temp_ceiling_c;
     std::optional<UndervoltTune> undervolt;   // set: a flat top on the curve, over core_mhz when that is not 0
     std::optional<AgainstStock> against_stock;   // empty: saved by a build before this, or not measured
+    std::optional<StepDown> step_down;           // empty: the profile is the tune the run found
 };
 
 // Everything that has to survive a reboot. Freeze ceilings are not here:

@@ -192,6 +192,59 @@ TEST_CASE("an undervolt that cannot be read whole is no profile, never a profile
     CHECK_FALSE(from_json(head + "}}").profile);
 }
 
+namespace {
+const char* const kStepHead = R"({"profile":{"preset":"all","power_pct":105,"core_mhz":270,"mem_mhz":1850,"driver":"x","gpu":"g","saved_at":"y","undervolt":{"volt_uv":960000,"freq_khz":2932000,"raise_khz":322000})";
+}
+
+TEST_CASE("profile without step_down loads unchanged") {
+    const Config c = from_json(std::string(kStepHead) + "}}");
+    REQUIRE(c.profile);
+    CHECK(c.profile->step_down == std::nullopt);
+    CHECK(c.profile->core_mhz == 270);
+    CHECK(c.profile->mem_mhz == 1850);
+    REQUIRE(c.profile->undervolt);
+    CHECK(*c.profile->undervolt == UndervoltTune{960000, 2932000, 322000});
+    CHECK(to_json(c).find("step_down") == std::string::npos);
+}
+
+TEST_CASE("step_down round-trips") {
+    Config c;
+    c.profile = sample();
+    c.profile->step_down = StepDown{2, false, 1, FoundTune{270, 1850, UndervoltTune{960000, 2932000, 322000}}};
+    const Config back = from_json(to_json(c));
+    REQUIRE(back.profile);
+    CHECK(back.profile->step_down == c.profile->step_down);
+
+    // failed_step and found.undervolt are omitted when empty, and read back empty.
+    c.profile->step_down = StepDown{3, true, std::nullopt, FoundTune{270, 1850, std::nullopt}};
+    const std::string text = to_json(c);
+    CHECK(text.find("failed_step") == std::string::npos);
+    CHECK(from_json(text).profile->step_down == c.profile->step_down);
+}
+
+TEST_CASE("a broken step_down keeps the applied values") {
+    const std::string found = R"("found":{"core_mhz":270,"mem_mhz":1850})";
+    const std::string bad[] = {
+        R"(,"step_down":{"step":"two","tested":false,)" + found + "}",
+        R"(,"step_down":{"step":2,"tested":false})",   // found missing
+        R"(,"step_down":{"step":0,"tested":false,)" + found + "}",
+        R"(,"step_down":{"step":11,"tested":false,)" + found + "}",
+        R"(,"step_down":{"step":2,"tested":"no",)" + found + "}",
+        R"(,"step_down":{"step":2,"tested":false,"failed_step":"1",)" + found + "}",
+        R"(,"step_down":{"step":2,"tested":false,"found":{"core_mhz":270,"mem_mhz":1850,"undervolt":{"volt_uv":1}}})",
+        R"(,"step_down":17)",
+    };
+    for (const std::string& s : bad) {
+        CAPTURE(s);
+        const Config c = from_json(std::string(kStepHead) + s + "}}");
+        REQUIRE(c.profile);
+        CHECK(c.profile->step_down == std::nullopt);
+        CHECK(c.profile->core_mhz == 270);
+        CHECK(c.profile->mem_mhz == 1850);
+        CHECK(c.profile->undervolt.has_value());
+    }
+}
+
 #include "core/objectives.hpp"
 #include "core/search.hpp"
 #include <regex>
