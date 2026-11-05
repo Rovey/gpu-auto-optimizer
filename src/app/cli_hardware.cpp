@@ -6,6 +6,7 @@
 #include "app/cli_commands.hpp"
 #include "app/common.hpp"
 #include "core/boot.hpp"
+#include "core/step_down.hpp"
 #include "core/version.hpp"
 #include "core/vf_curve.hpp"
 #include "hw/app_files.hpp"
@@ -197,6 +198,24 @@ int apply() {
     return 0;
 }
 
+int step(int delta) {
+    const char* flag = delta < 0 ? "--step-down" : "--step-up";
+    if (!gao::app::is_elevated()) { std::printf("%s needs an elevated (administrator) shell\n", flag); return 1; }
+    std::string why;
+    if (!gao::app::prepare_state(&why)) { std::printf("%s\n", why.c_str()); return 1; }
+    gao::Nvml nvml;
+    if (!nvml.Init()) { std::printf("NVML init failed: %s\n", nvml.Error().c_str()); return 1; }
+    gao::Nvapi nvapi;
+    if (!nvapi.Init()) { std::printf("NVAPI init failed: %s\n", nvapi.Error().c_str()); return 1; }
+    const gao::GpuControl gpu = gao::make_gpu_control(nvml, nvapi, kGpu);
+    const gao::app::StepOutcome out = gao::app::step_tune(gpu, delta, nvml.DriverVersion(), nvml.GpuUuid(kGpu), nvml.DeviceCount());
+    std::printf("%s\n", out.message.c_str());
+    if (!out.ok) return 1;
+    gao::app::tell_tray(gao::app::TrayNotice::TuneApplied);   // a running tray keeps it applied from now on
+    std::printf("OK\n");
+    return 0;
+}
+
 int boot(bool on) {
     std::string message;
     const bool ok = on ? gao::app::enable_boot(&message) : gao::app::disable_boot(&message);
@@ -207,8 +226,12 @@ int boot(bool on) {
 int status() {
     const auto text = gao::read_file(gao::config_path());
     const gao::Config cfg = text ? gao::from_json(*text) : gao::Config{};
-    if (cfg.profile) std::printf("profile:    %s\n", gao::app::profile_text(*cfg.profile).c_str());
-    else if (text) std::printf("profile:    none valid in %s\n", gao::config_path().string().c_str());
+    if (cfg.profile) {
+        std::string line = gao::app::profile_text(*cfg.profile);
+        if (const int st = gao::current_step(*cfg.profile); st > 0)
+            line += ", step " + gao::step_text(st) + (cfg.profile->step_down->tested ? ", tested" : ", not tested on its own");
+        std::printf("profile:    %s\n", line.c_str());
+    } else if (text) std::printf("profile:    none valid in %s\n", gao::config_path().string().c_str());
     else std::printf("profile:    none (run `gao --optimize`)\n");
     gao::Nvml nvml;
     const std::string driver = nvml.Init() ? nvml.DriverVersion() : std::string();
