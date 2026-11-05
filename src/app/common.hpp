@@ -253,6 +253,7 @@ std::vector<std::string> result_lines(const RetestOutcome& o);
 
 struct StepOutcome {
     bool ok = false;
+    bool applied_not_saved = false;   // the step is on the card but gao.json could not be written
     std::string message;   // "stepped down to -10 % (step 2): <profile_text>" or why not
     Profile profile;       // the saved tune now; valid when ok
 };

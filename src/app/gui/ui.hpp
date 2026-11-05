@@ -154,7 +154,7 @@ inline std::string step_down_item(const Profile& p, int grid_khz) {
 }
 inline std::string step_up_item(const Profile& p) {
     const int n = current_step(p);
-    if (n == 0) return "Raise tune 5 %";
+    if (n == 0 || !can_step_up(p)) return "Raise tune 5 %";
     if (n == 1) return "Raise tune 5 % (back to the tune the run found)";
     return "Raise tune 5 % (back to -" + std::to_string((n - 1) * kStepPct) + " %)";
 }

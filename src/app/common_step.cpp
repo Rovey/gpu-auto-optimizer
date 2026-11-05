@@ -42,6 +42,7 @@ StepOutcome step_tune(const GpuControl& gpu, int delta, const std::string& drive
     out.message = what + ": " + profile_text(next);
     if (!save_config(latest)) {
         out.message += " -- but that could not be saved (" + config_path().string() + "); the card keeps the applied step";
+        out.applied_not_saved = true;
         return out;
     }
     out.ok = true;

@@ -148,7 +148,8 @@ void tuning_card(UiState& s, const UiActions& act) {
     // -5 % / +5 % next to Apply saved tune (elevated, as it is), and the test of a
     // step that was not tested on its own while the driver is the one it was saved on.
     const bool steps = s.elevated && s.profile;
-    const bool test_step = steps && s.profile->step_down && !s.profile->step_down->tested && s.profile_gpu_ok &&
+    const bool test_step = steps && s.profile->step_down && s.profile->step_down->step > 0 &&
+                           !s.profile->step_down->tested && s.profile_gpu_ok &&
                            s.profile_driver_ok;
     // Four buttons in the actions column, and the step row and test above,
     // with the spacing between them and the column's padding.
