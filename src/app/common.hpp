@@ -239,6 +239,8 @@ struct RetestOutcome {
     std::string driver_was;   // the driver the tune was tested on before
     std::string driver;       // the driver it was tested on now
     Profile profile;          // the saved tune as it is now; valid when ok
+    int first_step = 0;       // the step the test began at
+    int final_step = 0;       // the step it ended at (the one that held when ok)
 };
 // The fans are as in daily use: on the app's curve when it drives them, with
 // the NVIDIA driver otherwise. A tune that does not pass ends at stock and
@@ -246,6 +248,19 @@ struct RetestOutcome {
 RetestOutcome run_retest(const OptimizeHooks& hooks);
 // As result_lines above: the test's own line, then the RESULT line.
 std::vector<std::string> result_lines(const RetestOutcome& o);
+
+struct StepOutcome {
+    bool ok = false;
+    std::string message;   // "stepped down to -10 % (step 2): <profile_text>" or why not
+    Profile profile;       // the saved tune now; valid when ok
+};
+// delta -1 (down) or +1 (up). Elevated only. Refuses as Apply saved tune does
+// (saved_tune_for: driver, card, several GPUs) and with kAlreadyRunning while the
+// tuning lock is held; refuses when can_step_down/can_step_up says no. Reads the
+// curve for the grid (kDefaultGridKhz when unreadable), applies the new step, and
+// only when that verified saves it with boot_strikes 0 and writes `message` to boot.log.
+StepOutcome step_tune(const GpuControl& gpu, int delta, const std::string& driver, const std::string& gpu_id,
+                      int nvidia_gpus);
 
 struct BootApplyOutcome {
     bool applied = false;

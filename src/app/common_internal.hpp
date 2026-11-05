@@ -37,6 +37,9 @@ struct StockOutcome {
     StabilityResult result;
 };
 
+// The card's clock grid from its V/F curve; kDefaultGridKhz when it cannot be read.
+int grid_khz_of(const GpuControl& gpu);
+
 StockOutcome measure_stock(const OptimizeHooks& hooks);
 Telemetry read_with_fans(const GpuControl& gpu, FanDriver& fans, const OptimizeHooks& hooks);
 

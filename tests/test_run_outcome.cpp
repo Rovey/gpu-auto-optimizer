@@ -121,6 +121,20 @@ TEST_CASE("a retest's result lines carry the test's score") {
     CHECK(lines[1].rfind("RESULT: the tune holds on driver 617.42 (it was tested on 617.14) and is applied: ", 0) == 0);
 }
 
+TEST_CASE("a stepped retest names its step") {
+    gao::app::RetestOutcome retest;
+    retest.ran = true;
+    retest.ok = true;
+    retest.driver = "617.42";
+    retest.driver_was = "617.14";
+    retest.result.test = measured(5742, 190);
+    retest.first_step = 1;
+    retest.final_step = 2;
+    const auto lines = gao::app::result_lines(retest);
+    REQUIRE(lines.size() == 2);
+    CHECK(lines[1].rfind("RESULT: the tune held at -10 % (step 2) after -5 % (step 1) failed", 0) == 0);
+}
+
 TEST_CASE("the logon refusal on a PC with two NVIDIA GPUs says why") {
     const std::string text = gao::app::decision_text(gao::BootDecision::SeveralGpus, gao::Config{}, "617.14");
     CHECK(text == gao::kSeveralGpusRefusal);
