@@ -164,6 +164,32 @@ The applied offset is always at least one step below the confirmed edge. Profile
 
 The hardware layer cannot run in CI (the runner has no GPU). It is checked by hand on the reference RTX 4070 through [hardware-checks.md](hardware-checks.md); record the results there.
 
+### Checking a change on your own card
+
+Anyone with an NVIDIA card can check a change, or report what a run gave on a card that has not been tested.
+
+Before you start:
+
+- Copy `%ProgramData%\GpuAutoOptimizer\gao.json`. A run replaces the saved tune as soon as its overclock step ends; with the copy you can put the old one back.
+- Close programs that use the graphics card: games, videos, editors that draw with the GPU. `gao --busy` should print `none`. Another program on the card lowers every score it measures.
+- Run from the command line with the app's window closed. While the window is open, the NVIDIA app's Instant Replay records on the card and lowers the measurements by about 2 %.
+- Use an elevated shell for anything that writes to the card (a run, `--apply`, `--set-core`); reading (`--status`, `--probe`, `--busy`) needs no elevation.
+
+Test the part that changed, in minutes, before a full run (see the list in [AGENTS.md](../AGENTS.md#hardware-tests-targeted-first)). A full All in one run takes about 40 minutes.
+
+Reading `run.log` (`%ProgramData%\GpuAutoOptimizer\run.log`):
+
+- `other programs on the card: ...` with anything but `none`: the numbers of that run do not compare.
+- `DEVICE LOST` or `STALLED` during the core or memory search, followed by `the driver reset at +N; using +M` and a `health: STABLE` line: a planned reset. The search raises the offset until the card fails, and one reset per run is normal. More than one, a reset at stock clocks, or no `health: STABLE` after it is worth reporting.
+- `undervolt: lowest stable ... mV, confirmed ... mV, applying ... mV` and then a `STABLE` soak: the undervolt step worked.
+- `RESULT:` and the lines after it: the outcome, against stock. These are the lines to report.
+
+In the Windows logs (Event Viewer), a driver reset shows in the System log as `nvlddmkm` event 14 with a burst of `Display` events 153 within a few seconds; match its time to the `DEVICE LOST` line. Crashes and hangs of a program are Application log events 1000 and 1002.
+
+After a driver reset, parts of the desktop (the wallpaper, some windows) can stay black while everything still works. That is a drawing leftover: the run goes on, and a restart redraws it. Do not press Win+Ctrl+Shift+B during a run, because that is another driver reset.
+
+Report a result with the **Result on my card** issue template; a change to the hardware layer gets a row in [hardware-checks.md](hardware-checks.md).
+
 ## Releases
 
 The version lives in `src/core/version.hpp`. Pushing a `v*` tag that matches it builds, tests and packages both executables into a **draft** GitHub release with a SHA-256 file and a build provenance attestation; publishing the draft is a manual step. Running the Release workflow by hand is a dry run that only uploads the zip as an artifact.
