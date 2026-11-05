@@ -206,3 +206,15 @@ TEST_CASE("the resets counted so far go with a process that restarts itself") {
     none.seed(-5, t0);
     CHECK(none.recent(t0) == 0);
 }
+
+TEST_CASE("a driver installed under the running app is seen in its library file") {
+    const LibraryStamp old_driver{133000000000000000ull, 1200000};
+    CHECK(compare_driver_files(old_driver, old_driver) == DriverFiles::Same);
+    CHECK(compare_driver_files(old_driver, LibraryStamp{133100000000000000ull, 1200000}) == DriverFiles::Changed);
+    CHECK(compare_driver_files(old_driver, LibraryStamp{133000000000000000ull, 1250000}) == DriverFiles::Changed);
+    // Mid-install the file can be missing: wait, neither reconnect nor restart yet.
+    CHECK(compare_driver_files(old_driver, std::nullopt) == DriverFiles::Unknown);
+    // No stamp from the start (the file could not be read then): behave as before.
+    CHECK(compare_driver_files(std::nullopt, old_driver) == DriverFiles::Same);
+    CHECK(compare_driver_files(std::nullopt, std::nullopt) == DriverFiles::Same);
+}

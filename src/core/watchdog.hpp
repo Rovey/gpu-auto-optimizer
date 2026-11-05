@@ -72,4 +72,26 @@ private:
     std::chrono::seconds retry_delay_ = kRetryFirstDelay;
 };
 
+// The NVIDIA library file on disk (System32\nvml.dll), as the file system
+// stamps it: a driver install replaces it.
+struct LibraryStamp {
+    unsigned long long write_time = 0;
+    unsigned long long size = 0;
+    bool operator==(const LibraryStamp&) const = default;
+};
+
+// Whether the driver was installed anew since this process loaded its
+// libraries. A driver install replaces the files under a running process,
+// and the libraries it has loaded stay those of the old driver. The tray's
+// crash dump while 617.14 was replaced by 621.14 had NVML's implementation
+// from the old driver's folder still loaded after the libraries were
+// started again, next to NVAPI's from the new one, and a call into that NVML
+// ended in a Control Flow Guard fast fail (code 10): an indirect call into
+// code that was no longer there. Only a new process loads the new driver's
+// libraries.
+// Changed: a new driver is on disk. Unknown: the file is not there now (an
+// install in progress). Same also when the stamp at start is not known.
+enum class DriverFiles { Same, Changed, Unknown };
+DriverFiles compare_driver_files(const std::optional<LibraryStamp>& at_start, const std::optional<LibraryStamp>& now);
+
 }
