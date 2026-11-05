@@ -146,11 +146,10 @@ void tuning_card(UiState& s, const UiActions& act) {
     const float right_w = std::max(em() * 17, ImGui::GetContentRegionAvail().x * 0.36f);
     const float left_w = ImGui::GetContentRegionAvail().x - right_w - gap;
     // -5 % / +5 % next to Apply saved tune (elevated, as it is), and the test of a
-    // step that was not tested on its own while the driver is the one it was saved on.
+    // step that was not tested on its own while the driver is the one it was saved on
+    // (not of one that failed a test: -5 % is the way on from there).
     const bool steps = s.elevated && s.profile;
-    const bool test_step = steps && s.profile->step_down && s.profile->step_down->step > 0 &&
-                           !s.profile->step_down->tested && s.profile_gpu_ok &&
-                           s.profile_driver_ok;
+    const bool test_step = test_step_shown(s);
     // Four buttons in the actions column, and the step row and test above,
     // with the spacing between them and the column's padding.
     const int buttons = 4 + (steps ? 1 : 0) + (test_step ? 1 : 0);

@@ -166,6 +166,9 @@ int retest() {
     const gao::app::OptimizeHooks hooks = cli_hooks();
     const gao::app::RetestOutcome out = gao::app::run_retest(hooks);
     for (const std::string& line : gao::app::result_lines(out)) hooks.log(line);
+    // A tune that did not hold ends at stock: a running tray must not put it back
+    // (a stop puts back what was on the card instead: putting_back).
+    if (gao::app::retest_failed(out)) gao::app::tell_tray(gao::app::TrayNotice::TuneFailedTest);
     return out.ok ? 0 : 1;
 }
 

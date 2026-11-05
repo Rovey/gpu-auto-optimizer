@@ -751,7 +751,8 @@ void act_step(int delta) {
             g.watch = false;
             note(out.message + "; the watchdog is off until you apply the saved tune", true);
         } else {
-            note("Not changed: " + out.message, true);
+            // The message says what the card holds: not changed, at stock, or a reset that failed.
+            note(std::string(delta < 0 ? "Lower tune 5 %: " : "Raise tune 5 %: ") + out.message, true);
         }
         refresh_status(false);   // a failed apply ends at stock
         return;
@@ -1280,6 +1281,9 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             g.watch = true;
             g.watchdog = gao::Watchdog();
             note("Applied from the command line; kept applied from now on.");
+        } else if (wp == static_cast<WPARAM>(gao::app::TrayNotice::TuneFailedTest)) {
+            g.watch = false;
+            note("A test from the command line did not hold; the tune is not re-applied.", true);
         } else {
             g.watch = false;
             note("Set to stock from the command line; not re-applied until you apply it again.", true);

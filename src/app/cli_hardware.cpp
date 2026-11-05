@@ -1,5 +1,5 @@
 // The gao.exe commands that read or set the card directly, one call each:
-// probe, offsets, curve, reset, apply, boot, status, fans and update.
+// probe, offsets, curve, reset, apply, step, boot, status, fans and update.
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
@@ -229,7 +229,9 @@ int status() {
     if (cfg.profile) {
         std::string line = gao::app::profile_text(*cfg.profile);
         if (const int st = gao::current_step(*cfg.profile); st > 0)
-            line += ", step " + gao::step_text(st) + (cfg.profile->step_down->tested ? ", tested" : ", not tested on its own");
+            line += ", step " + gao::step_text(st) + (gao::failed_its_test(*cfg.profile)  ? ", failed a test"
+                                                      : cfg.profile->step_down->tested ? ", tested"
+                                                                                       : ", not tested on its own");
         std::printf("profile:    %s\n", line.c_str());
     } else if (text) std::printf("profile:    none valid in %s\n", gao::config_path().string().c_str());
     else std::printf("profile:    none (run `gao --optimize`)\n");

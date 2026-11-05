@@ -107,8 +107,16 @@ std::string step_name(int step) { return step == 0 ? std::string("the tune the r
 std::vector<std::string> result_lines(const RetestOutcome& o) {
     std::vector<std::string> lines;
     if (o.result.test.seconds > 0) lines.push_back(measured_line(verdict_name(o.result.test.verdict), o.result.test, true));
-    if (!o.ok) lines.push_back("RESULT: not applied -- " + o.error);
-    else if (o.final_step != o.first_step) {
+    if (!o.ok) {
+        // Every step from the first to the last one tested failed; a stopped test failed nothing.
+        const bool named = o.result.test.seconds > 0 && o.result.test.verdict != Verdict::Aborted &&
+                           (o.final_step != o.first_step || o.first_step > 0);
+        const std::string failed =
+            !named ? std::string()
+                   : step_name(o.first_step) + (o.final_step != o.first_step ? " to " + step_name(o.final_step) : std::string()) +
+                         " failed: ";
+        lines.push_back("RESULT: not applied -- " + failed + o.error);
+    } else if (o.final_step != o.first_step) {
         // Every step from the first to the one below the step that held failed.
         const int last_failed = o.final_step - 1;
         const std::string failed =
@@ -118,6 +126,11 @@ std::vector<std::string> result_lines(const RetestOutcome& o) {
     } else
         lines.push_back("RESULT: the tune holds on " + retest_driver(o) + " and is applied: " + profile_text(o.profile));
     return lines;
+}
+
+bool retest_failed(const RetestOutcome& o) {
+    const Verdict v = o.result.test.verdict;
+    return o.ran && !o.ok && o.result.test.seconds > 0 && v != Verdict::Stable && v != Verdict::Aborted;
 }
 
 std::string retest_boot_line(const RetestOutcome& o) {

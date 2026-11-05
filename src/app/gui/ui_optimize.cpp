@@ -280,7 +280,7 @@ void run_screen(UiState& s, const OptimizeWorker::Snapshot& run, const UiActions
         }
     }
     wrapped(kDim, run.is_retest ? "Five minutes of full load with the tune applied. Abort stops the test and puts the card back to "
-                                  "stock, or to your saved tune if it was on before."
+                                  "stock, or to your saved tune if it was on before; once the test has stepped down, to the step under test."
                                 : "The screen can go black for a moment while the run looks for the card's limit; do not switch "
                                   "the PC off, the run recovers by itself. Abort stops the run and puts the card back to stock, "
                                   "or to your saved tune if it was on before.");

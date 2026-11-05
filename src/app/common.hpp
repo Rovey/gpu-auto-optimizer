@@ -86,8 +86,8 @@ bool tuning_in_progress();
 
 // What the command line tells a running tray app, so its watchdog follows:
 // stock on purpose (gao --reset) stops it; the tune applied (gao --apply)
-// starts it again.
-enum class TrayNotice : unsigned { StockByChoice = 0, TuneApplied = 1 };
+// starts it again; a test of it that did not hold (gao --retest) stops it.
+enum class TrayNotice : unsigned { StockByChoice = 0, TuneApplied = 1, TuneFailedTest = 2 };
 // The window class of the tray app's window, by which gao finds it.
 inline constexpr wchar_t kTrayWindowClass[] = L"GpuAutoOptimizerWindow";
 void tell_tray(TrayNotice notice);
@@ -120,8 +120,12 @@ std::vector<BusyProgram> busy_now();
 // another tool's settings, or nothing saved). put_back_after_stop, after a run
 // that was stopped and kept nothing: that tune on the card again, unless it
 // still is, so Stop leaves the card as the run found it and the tray's
-// watchdog does not take the stock the run left for a driver reset. True when
-// the card holds `before` on return; false when there was none or it failed.
+// watchdog does not take the stock the run left for a driver reset. Except
+// when the saved tune changed under the run (put_back_target): a stepped test
+// that was stopped saved and put back the step under test, and the step it
+// found on the card failed, so the saved tune is what goes back (when it may
+// be applied), never `before`. True when the card holds what was put back on
+// return; false when there was none or it failed.
 std::optional<Profile> tune_before_run();
 bool put_back_after_stop(const std::optional<Profile>& before, const OptimizeHooks& hooks);
 
@@ -253,6 +257,9 @@ std::vector<std::string> result_lines(const RetestOutcome& o);
 // The boot.log line of a retest that held: "tested on driver X: applied ...",
 // or "tested again on driver X (it was tested on Y): ..." after a driver change.
 std::string retest_boot_line(const RetestOutcome& o);
+// The test ran and the tune did not hold (not stopped, not refused before it):
+// a running tray must stop keeping it applied.
+bool retest_failed(const RetestOutcome& o);
 
 struct StepOutcome {
     bool ok = false;
@@ -261,12 +268,21 @@ struct StepOutcome {
     Profile profile;       // the saved tune now; valid when ok
 };
 // delta -1 (down) or +1 (up). Elevated only. Refuses as Apply saved tune does
-// (saved_tune_for: driver, card, several GPUs) and with kAlreadyRunning while the
+// (step_base: driver, card, several GPUs; a tune that failed its test only
+// steps down) and with kAlreadyRunning while the
 // tuning lock is held; refuses when can_step_down/can_step_up says no. Reads the
 // curve for the grid (kDefaultGridKhz when unreadable), applies the new step, and
 // only when that verified saves it with boot_strikes 0 and writes `message` to boot.log.
 StepOutcome step_tune(const GpuControl& gpu, int delta, const std::string& driver, const std::string& gpu_id,
                       int nvidia_gpus);
+// The saved tune step_tune starts from: as saved_tune_for, and a tune that
+// failed its test may still be lowered (delta -1): the step below is a new
+// tune that has not failed. Nullopt and *refusal otherwise.
+std::optional<Profile> step_base(const Config& c, int delta, const std::string& driver, const std::string& gpu_id,
+                                 int nvidia_gpus, std::string* refusal);
+// step_tune's message when apply_profile failed: `why` and `left_clean` as it
+// returned them. Refused before anything was written: the card was not changed.
+std::string step_not_applied(const std::string& why, bool left_clean);
 
 struct BootApplyOutcome {
     bool applied = false;
