@@ -18,6 +18,7 @@ int curve_flatten(int mv, int mhz, int tail_drop_mhz, int core_mhz);
 int reset();
 int update();
 int apply();
+int step(int delta);   // --step-down (-1) and --step-up (+1)
 int boot(bool on);
 int status();
 int fan_auto();
