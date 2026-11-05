@@ -13,6 +13,7 @@ namespace {
 struct Card {
     int power = 100, core = 0, mem = 0;
     Verdict verdict = Verdict::Stable;   // how the five minutes end
+    std::vector<Verdict> script;         // verdicts of the first probes; `verdict` after that
     bool reset_ok = true;
     int recovers = 0;
     std::vector<std::string> events;     // "recover" and "stock", in the order they happen
@@ -53,7 +54,7 @@ struct Card {
             probes.emplace_back(seconds, max_temp);
             power_at_probe = power; core_at_probe = core; mem_at_probe = mem;
             StabilityResult s;
-            s.verdict = verdict;
+            s.verdict = probes.size() <= script.size() ? script[probes.size() - 1] : verdict;
             s.seconds = seconds;
             s.score = 5900;
             return s;
@@ -160,4 +161,113 @@ TEST_CASE("nothing is tested on another card, without a tune, or on a driver nob
     CHECK(card.events.empty());   // not even a reset: nothing was written
     CHECK(card.stock());
     CHECK(c.profile->driver == "617.14");
+}
+
+TEST_CASE("a failing tune steps down until one holds") {
+    Card card;
+    card.script = {Verdict::WrongResult, Verdict::WrongResult};
+    Config c = card.saved();
+    const SteppedRetestResult r = retest_stepping(c, "617.42", "GPU-1", card.gpu(), card.io(), 7500);
+    REQUIRE(r.ok);
+    CHECK(r.stepped);
+    CHECK(r.first_step == 0);
+    CHECK(r.final_step == 2);
+    CHECK(card.probes.size() == 3);
+    REQUIRE(c.profile->step_down);
+    CHECK(c.profile->step_down->step == 2);
+    CHECK(c.profile->step_down->failed_step == 1);
+    CHECK(c.profile->step_down->tested);
+    CHECK(c.profile->driver == "617.42");
+    CHECK(c.boot_strikes == 0);
+    CHECK(card.core == c.profile->core_mhz);   // the held step is on the card
+}
+
+TEST_CASE("the found tune that fails becomes step 1") {
+    Card card;
+    card.script = {Verdict::WrongResult};
+    Config c = card.saved();
+    const SteppedRetestResult r = retest_stepping(c, "617.42", "GPU-1", card.gpu(), card.io(), 7500);
+    REQUIRE(r.ok);
+    CHECK(r.final_step == 1);
+    REQUIRE(c.profile->step_down);
+    CHECK(c.profile->step_down->failed_step == 0);
+}
+
+TEST_CASE("no step left") {
+    Card card;
+    card.verdict = Verdict::WrongResult;
+    Config c = card.saved();
+    c.profile->core_mhz = 15;   // step 1 drops it to 0, step 2 changes nothing more
+    c.profile->mem_mhz = 0;
+    const SteppedRetestResult r = retest_stepping(c, "617.42", "GPU-1", card.gpu(), card.io(), 7500);
+    CHECK_FALSE(r.ok);
+    CHECK(r.stepped);
+    CHECK(r.final_step == 1);
+    CHECK(card.probes.size() == 2);
+    CHECK(r.last.reason.ends_with("; optimize again"));
+    REQUIRE(c.profile->step_down);
+    CHECK(c.profile->step_down->step == 1);
+    CHECK(c.profile->step_down->failed_step == 1);
+    CHECK(c.profile->driver == "617.14");
+    CHECK(decide_boot(c, "617.14", "GPU-1") == BootDecision::FailedTest);
+}
+
+TEST_CASE("a tune that cannot step down at all is left untouched when it fails") {
+    Card card;
+    card.verdict = Verdict::WrongResult;
+    Config c = card.saved();
+    c.profile->core_mhz = 0;
+    c.profile->mem_mhz = 0;
+    const SteppedRetestResult r = retest_stepping(c, "617.42", "GPU-1", card.gpu(), card.io(), 7500);
+    CHECK_FALSE(r.ok);
+    CHECK_FALSE(r.stepped);
+    CHECK(r.last.reason.ends_with("; optimize again"));
+    CHECK_FALSE(c.profile->step_down);
+}
+
+TEST_CASE("an abort does not step") {
+    Card card;
+    card.verdict = Verdict::Aborted;
+    Config c = card.saved();
+    const Profile before = *c.profile;
+    const SteppedRetestResult r = retest_stepping(c, "617.42", "GPU-1", card.gpu(), card.io(), 7500);
+    CHECK_FALSE(r.ok);
+    CHECK_FALSE(r.stepped);
+    CHECK(r.last.reason == "aborted");
+    CHECK(c.profile->core_mhz == before.core_mhz);
+    CHECK_FALSE(c.profile->step_down);
+}
+
+TEST_CASE("an abort at a lower step leaves that step, not a failed one") {
+    Card card;
+    card.script = {Verdict::WrongResult};
+    card.verdict = Verdict::Aborted;
+    Config c = card.saved();
+    const SteppedRetestResult r = retest_stepping(c, "617.42", "GPU-1", card.gpu(), card.io(), 7500);
+    CHECK_FALSE(r.ok);
+    CHECK(r.stepped);
+    CHECK(r.final_step == 1);
+    REQUIRE(c.profile->step_down);
+    CHECK(c.profile->step_down->step == 1);
+    CHECK(c.profile->step_down->failed_step == 0);
+}
+
+TEST_CASE("a refusal before the test does not step") {
+    Card card;
+    Config c = card.saved();
+    const SteppedRetestResult r = retest_stepping(c, "617.42", "GPU-2", card.gpu(), card.io(), 7500);
+    CHECK_FALSE(r.ok);
+    CHECK_FALSE(r.stepped);
+    CHECK(card.probes.empty());
+    CHECK_FALSE(c.profile->step_down);
+}
+
+TEST_CASE("the run screen names the step") {
+    Card card;
+    card.script = {Verdict::WrongResult};
+    Config c = card.saved();
+    retest_stepping(c, "617.42", "GPU-1", card.gpu(), card.io(), 7500);
+    bool found = false;
+    for (const auto& a : card.announced) found = found || a.first == "Testing -5 % (step 1)";
+    CHECK(found);
 }

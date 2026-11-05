@@ -9,7 +9,7 @@ namespace gao {
 // Logons that crashed within 2 minutes of applying before boot-apply gives up.
 inline constexpr int kMaxBootStrikes = 3;
 
-enum class BootDecision { Apply, NoProfile, SeveralGpus, TooManyStrikes, DriverChanged, GpuChanged };
+enum class BootDecision { Apply, NoProfile, SeveralGpus, TooManyStrikes, DriverChanged, GpuChanged, FailedTest };
 
 // One NVIDIA GPU per PC is supported. NVML, NVAPI and DXGI each list the cards
 // in their own order and the app takes the first of each, so with two NVIDIA

@@ -15,6 +15,8 @@ BootDecision decide_boot(const Config& c, const std::string& driver, const std::
     if (c.boot_strikes >= kMaxBootStrikes) return BootDecision::TooManyStrikes;
     if (driver.empty() || driver != c.profile->driver) return BootDecision::DriverChanged;
     if (gpu.empty() || gpu != c.profile->gpu) return BootDecision::GpuChanged;
+    const auto& sd = c.profile->step_down;
+    if (sd && sd->failed_step && *sd->failed_step >= sd->step) return BootDecision::FailedTest;
     return BootDecision::Apply;
 }
 
