@@ -149,6 +149,49 @@ TEST_CASE("a retest that stepped from the tune the run found names it") {
     CHECK(lines[1].rfind("RESULT: the tune held at -5 % (step 1) after the tune the run found failed, on driver ", 0) == 0);
 }
 
+TEST_CASE("a retest that stepped more than once names the range that failed") {
+    gao::app::RetestOutcome retest;
+    retest.ran = true;
+    retest.ok = true;
+    retest.driver = "617.42";
+    retest.driver_was = "617.14";
+    retest.result.test = measured(5742, 190);
+    retest.first_step = 1;
+    retest.final_step = 3;
+    auto lines = gao::app::result_lines(retest);
+    REQUIRE(lines.size() == 2);
+    CHECK(lines[1].rfind("RESULT: the tune held at -15 % (step 3) after -5 % (step 1) to -10 % (step 2) failed, on driver 617.42 "
+                         "(it was tested on 617.14), and is applied: ",
+                         0) == 0);
+    retest.first_step = 0;
+    lines = gao::app::result_lines(retest);
+    REQUIRE(lines.size() == 2);
+    CHECK(lines[1].rfind("RESULT: the tune held at -15 % (step 3) after the tune the run found to -10 % (step 2) failed, ", 0) == 0);
+}
+
+TEST_CASE("a retest on the driver the tune was tested on does not name it twice") {
+    gao::app::RetestOutcome retest;
+    retest.ran = true;
+    retest.ok = true;
+    retest.driver = "621.14";
+    retest.driver_was = "621.14";
+    retest.result.test = measured(5870, 164);
+    auto lines = gao::app::result_lines(retest);
+    REQUIRE(lines.size() == 2);
+    CHECK(lines[1].rfind("RESULT: the tune holds on driver 621.14 and is applied: ", 0) == 0);
+    CHECK(gao::app::retest_boot_line(retest).rfind("tested on driver 621.14: applied ", 0) == 0);
+    retest.first_step = 1;
+    retest.final_step = 3;
+    lines = gao::app::result_lines(retest);
+    REQUIRE(lines.size() == 2);
+    CHECK(lines[1].rfind("RESULT: the tune held at -15 % (step 3) after -5 % (step 1) to -10 % (step 2) failed, on driver 621.14, and is "
+                         "applied: ",
+                         0) == 0);
+    // After a driver update both are named.
+    retest.driver = "621.30";
+    CHECK(gao::app::retest_boot_line(retest).rfind("tested again on driver 621.30 (it was tested on 621.14): applied ", 0) == 0);
+}
+
 TEST_CASE("the logon refusal on a PC with two NVIDIA GPUs says why") {
     const std::string text = gao::app::decision_text(gao::BootDecision::SeveralGpus, gao::Config{}, "617.14");
     CHECK(text == gao::kSeveralGpusRefusal);

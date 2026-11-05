@@ -53,6 +53,14 @@ RetestOutcome run_retest(const OptimizeHooks& hooks) {
     };
     io.log = hooks.log;
     io.measuring = hooks.measuring;
+    // After a driver reset, as in run_optimize: the card is left alone, then
+    // gets a fresh stress load before anything is measured on it.
+    io.rest = [&hooks](double seconds) { return rest_without_load(hooks, seconds); };
+    io.prepare_load = [&] {
+        if (load->Recreate()) return true;
+        if (hooks.log) hooks.log("the stress load could not be rebuilt: " + load->Error());
+        return false;
+    };
     if (hooks.active_gpu) hooks.active_gpu(&gpu);
     out.ran = true;
     SteppedRetestResult stepped;
@@ -106,7 +114,7 @@ RetestOutcome run_retest(const OptimizeHooks& hooks) {
                     (reapplied ? std::string(" -- the tune under test is applied again")
                                : (back_at_stock ? " -- card at stock" : " -- reset to stock FAILED, run `gao --reset`")));
     out.ok = true;
-    boot_log("tested again on driver " + out.driver + " (it was tested on " + out.driver_was + "): applied " + profile_text(out.profile));
+    boot_log(retest_boot_line(out));
     return out;
 }
 

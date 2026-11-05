@@ -85,6 +85,15 @@ const char* verdict_name(Verdict v) {
     return "UNKNOWN";
 }
 
+std::string measured_line(const char* name, const StabilityResult& s, bool with_mem) {
+    char mem[32] = "";
+    if (with_mem) std::snprintf(mem, sizeof(mem), "  mem=%d MHz", s.avg_mem_mhz);
+    char line[256];
+    std::snprintf(line, sizeof(line), "  %s score=%.0f it/s  core=%d MHz%s  peak=%d C  fan=%s  power=%d W  (%.0f s)", name, s.score,
+                  s.avg_core_mhz, mem, s.peak_temp_c, reading(s.end_fan_pct, " %").c_str(), s.avg_power_w, s.seconds);
+    return line;
+}
+
 std::string trace_line(const double t_s, const Telemetry& tel) {
     const int t = static_cast<int>(t_s);
     char when[24];

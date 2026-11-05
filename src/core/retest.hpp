@@ -21,6 +21,12 @@ struct RetestIo {
     std::function<void(const std::string&)> log;    // optional
     // The test starts (what, its length) and has ended ("", 0). Optional.
     std::function<void(const std::string& what, double seconds)> measuring;
+    // After a driver reset, as in OptimizeIo: waits without load (false: cut
+    // short by a stop request), and makes the stress load ready on a fresh
+    // device (false: not ready yet). Optional: empty, nothing waits or is
+    // prepared.
+    std::function<bool(double seconds)> rest;
+    std::function<bool()> prepare_load;
 };
 
 struct RetestResult {
@@ -56,6 +62,14 @@ struct SteppedRetestResult {
 // Aborted: c.profile is the step being tested (never a failed one), not applied
 // by this function; the caller re-applies it. A refusal before the test
 // (another card, nothing written) does not step.
+// A failed step's verdict is logged before the next step is tested. After a
+// test that ended DEVICE LOST, STALLED or NO TELEMETRY the card is not loaded
+// with the next step until it is back, as in the tuning run: rest
+// kRestAfterResetS, io.prepare_load, a kHealthProbeS probe at stock (up to
+// kHealthTries). A second driver reset (in a test or in that health probe),
+// or a card that does not come back, ends it at stock like "no step left"
+// (failed_step == the step that failed) with "; optimize again". A stop
+// request during the rest or the health probe is an abort of the next step.
 SteppedRetestResult retest_stepping(Config& c, const std::string& driver, const std::string& gpu_id, const GpuControl& gpu,
                                     const RetestIo& io, int grid_khz);
 
