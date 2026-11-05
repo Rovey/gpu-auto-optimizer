@@ -56,13 +56,17 @@ struct SteppedRetestResult {
 // retest_saved_tune, then while it fails (not Aborted, and the test ran) and
 // can_step_down: failed_step = the failed step, c.profile = at_step(next,
 // grid_khz), test again. Logs "testing -15 % (step 3)" and passes
-// "Testing -15 % (step 3)" to io.measuring. On ok: step_down->tested = true.
+// "Testing -15 % (step 3)" to io.measuring, for the first test too when the
+// saved tune is at a step already. On ok: step_down->tested = true, and a
+// failed_step at or above the step that held becomes the step below it.
 // When no step is left: c.profile stays at the last failed step (failed_step ==
 // step; at step 0 it is untouched) and the reason ends with "; optimize again".
 // Aborted: c.profile is the step being tested (never a failed one), not applied
 // by this function; the caller re-applies it. A refusal before the test
 // (another card, nothing written) does not step.
-// A failed step's verdict is logged before the next step is tested. After a
+// A failed step's verdict is logged when the next step is tested, or when a
+// stop request ends it before that (the result then shows the abort); when the
+// failed step's test is the last one, only the result shows it. After a
 // test that ended DEVICE LOST, STALLED or NO TELEMETRY the card is not loaded
 // with the next step until it is back, as in the tuning run: rest
 // kRestAfterResetS, io.prepare_load, a kHealthProbeS probe at stock (up to

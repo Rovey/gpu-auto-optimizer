@@ -44,7 +44,8 @@ public:
     // driver_reset: the driver was reset since the last call. A reset that
     // undid the tune and one that left it applied count the same, once:
     // more than kMaxReappliesPerHour of them within an hour and the tune
-    // is given up.
+    // is given up. A tune that failed its test (failed_its_test) is never
+    // re-applied: None.
     WatchAction check(const Profile& p, const std::optional<AppliedState>& seen, bool driver_matches,
                       bool gpu_matches, Clock::time_point now, const std::optional<CurveState>& curve = std::nullopt,
                       bool driver_reset = false);

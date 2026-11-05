@@ -434,6 +434,75 @@ TEST_CASE("a stop request during the rest after a reset leaves the next step, no
     CHECK(c.profile->step_down->failed_step == 1);
 }
 
+TEST_CASE("a step that holds its test is no longer a failed step") {
+    Card card;
+    Config c = card.saved_at(2);
+    c.profile->step_down->tested = false;
+    c.profile->step_down->failed_step = 2;   // failed before, holds now
+    const SteppedRetestResult r = retest_stepping(c, "617.42", "GPU-1", card.gpu(), card.io(), 7500);
+    REQUIRE(r.ok);
+    CHECK(r.final_step == 2);
+    REQUIRE(c.profile->step_down);
+    CHECK(c.profile->step_down->failed_step == 1);
+    CHECK(decide_boot(c, "617.42", "GPU-1") == BootDecision::Apply);
+    Config d = card.saved_at(2);
+    d.profile->step_down->failed_step = 1;   // below the step that holds: kept
+    REQUIRE(retest_stepping(d, "617.42", "GPU-1", card.gpu(), card.io(), 7500).ok);
+    CHECK(d.profile->step_down->failed_step == 1);
+}
+
+TEST_CASE("the first test names its step when the saved tune is lowered already") {
+    Card card;
+    Config c = card.saved_at(1);
+    retest_stepping(c, "617.42", "GPU-1", card.gpu(), card.io(), 7500);
+    bool named = false;
+    for (const auto& a : card.announced) named = named || a.first == "Testing -5 % (step 1)";
+    CHECK(named);
+    CHECK(card.logged_line("testing -5 % (step 1)", "(step 1)"));
+    // At step 0 it is the saved tune.
+    Card found;
+    Config f = found.saved();
+    retest_stepping(f, "617.42", "GPU-1", found.gpu(), found.io(), 7500);
+    REQUIRE_FALSE(found.announced.empty());
+    CHECK(found.announced[0].first == "Testing the saved tune");
+}
+
+TEST_CASE("a failed step's verdict is logged once when the card does not come back") {
+    for (const std::vector<double>& scores : {std::vector<double>{5900}, std::vector<double>{5900, 3000, 3000, 3000}}) {
+        Card card;
+        card.script = {Verdict::DeviceLost, scores.size() == 1 ? Verdict::DeviceLost : Verdict::Stable};
+        card.scores = scores;
+        card.failed_after_s = 93;
+        Config c = card.saved_at(1);
+        c.profile->against_stock = AgainstStock{MeasuredRun{.score = 5786}, MeasuredRun{.score = 5970}};
+        const SteppedRetestResult r = retest_stepping(c, "617.42", "GPU-1", card.gpu(), card.io(), 7500);
+        CHECK_FALSE(r.ok);
+        // The RESULT lines show the last test; the log does not show it before them as well.
+        CHECK_FALSE(card.logged_line("  DEVICE LOST score=", "(93 s)"));
+        CHECK(r.last.test.verdict == Verdict::DeviceLost);
+    }
+}
+
+TEST_CASE("a stop request during the health probe leaves the next step, not the failed one") {
+    Card card;
+    card.script = {Verdict::DeviceLost, Verdict::Aborted};   // step 1, the health probe
+    card.failed_after_s = 93;
+    Config c = card.saved_at(1);
+    const SteppedRetestResult r = retest_stepping(c, "617.42", "GPU-1", card.gpu(), card.io(), 7500);
+    CHECK_FALSE(r.ok);
+    CHECK(r.stepped);
+    CHECK(r.last.reason == "aborted");
+    CHECK(r.last.test.verdict == Verdict::Aborted);
+    CHECK(card.probes.size() == 2);
+    CHECK(r.final_step == 2);
+    REQUIRE(c.profile->step_down);
+    CHECK(c.profile->step_down->step == 2);
+    CHECK(c.profile->step_down->failed_step == 1);
+    CHECK(card.stock());
+    // Step 1's verdict is not in the result: it is in the log.
+    CHECK(card.logged_line("  DEVICE LOST score=5900 it/s", "(93 s)"));
+}
+
 TEST_CASE("a health probe that computes almost nothing counts as the second reset") {
     Card card;
     card.script = {Verdict::DeviceLost};

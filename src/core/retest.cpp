@@ -114,12 +114,31 @@ SteppedRetestResult retest_stepping(Config& c, const std::string& driver, const 
     SteppedRetestResult s;
     s.first_step = s.final_step = c.profile ? current_step(*c.profile) : 0;
     RetestIo step_io = io;
+    // A step's test is named by its step, the first one too when the saved tune is lowered already.
+    auto name_step = [&](int step) {
+        const std::string what = step_text(step);
+        if (io.log) io.log("testing " + what);
+        if (io.measuring) {
+            step_io.measuring = [&io, what](const std::string& text, double seconds) {
+                io.measuring(text.empty() ? text : "Testing " + what, seconds);
+            };
+        }
+    };
+    if (s.first_step > 0) name_step(s.first_step);
     int resets = 0;   // driver resets in this stepped retest: the second ends it, as it ends a tuning run
     for (;;) {
         s.last = retest_saved_tune(c, driver, gpu_id, gpu, step_io);
         if (s.last.ok) {
             s.ok = true;
-            if (c.profile->step_down) c.profile->step_down->tested = true;
+            if (auto& sd = c.profile->step_down) {
+                sd->tested = true;
+                // It held: it is no longer a step that failed, whatever failed at it before.
+                if (sd->failed_step && *sd->failed_step >= sd->step) {
+                    if (sd->step - 1 < 0) sd->failed_step.reset();
+                    else sd->failed_step = sd->step - 1;
+                    s.stepped = true;
+                }
+            }
             return s;
         }
         const Verdict v = s.last.test.verdict;
@@ -137,9 +156,10 @@ SteppedRetestResult retest_stepping(Config& c, const std::string& driver, const 
             s.last.reason += "; optimize again";
             return s;
         }
-        // Why this step failed, before the next one is tested: the RESULT
-        // line shows only the last test.
-        if (io.log) io.log(measured_line(verdict_name(v), s.last.test, true));
+        // Why this step failed, when the next one is tested: the RESULT lines
+        // show only the last test, and they show this one when it is the last.
+        const std::string verdict_line = measured_line(verdict_name(v), s.last.test, true);
+        auto log_verdict = [&] { if (io.log) io.log(verdict_line); };
         Profile next = at_step(*c.profile, step + 1, grid_khz);
         auto& failed = next.step_down->failed_step;
         if (!failed || *failed < step) failed = step;
@@ -151,6 +171,7 @@ SteppedRetestResult retest_stepping(Config& c, const std::string& driver, const 
                 case Health::Back: break;
                 case Health::Aborted:
                     // As an abort of the next step's test: that step, never the failed one, and the caller puts it back.
+                    log_verdict();   // the result is the abort: the failed step is only in the log
                     c.profile = next;
                     s.stepped = true;
                     s.final_step = step + 1;
@@ -168,16 +189,11 @@ SteppedRetestResult retest_stepping(Config& c, const std::string& driver, const 
                     return s;
             }
         }
+        log_verdict();
         c.profile = next;
         s.stepped = true;
         s.final_step = step + 1;
-        const std::string what = step_text(s.final_step);
-        if (io.log) io.log("testing " + what);
-        if (io.measuring) {
-            step_io.measuring = [&io, what](const std::string& text, double seconds) {
-                io.measuring(text.empty() ? text : "Testing " + what, seconds);
-            };
-        }
+        name_step(s.final_step);
     }
 }
 
