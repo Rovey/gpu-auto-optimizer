@@ -18,6 +18,12 @@ BootDecision decide_boot(const Config& c, const std::string& driver, const std::
     return BootDecision::Apply;
 }
 
+std::string driver_status(const std::string& tested_on, const std::string& now) {
+    if (now.empty()) return "NVML did not report it; the tune is not applied at logon";
+    if (now == tested_on) return "matches";
+    return "CHANGED from " + tested_on + " -- " + kDriverChangedAdvice;
+}
+
 namespace {
 // Whether the profile's flat top fits this card's curve, judged on the
 // built-in curve: every offset goes first. `raise_khz` in the profile is how
