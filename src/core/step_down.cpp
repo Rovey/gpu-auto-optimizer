@@ -16,6 +16,7 @@ int lowered_offset(int orig, int step, int grid) {
 UndervoltTune lowered_undervolt(const UndervoltTune& orig, int step, int grid_khz) {
     const int grid = std::max(grid_khz, 1);
     const int drop = static_cast<int>(static_cast<long long>(orig.raise_khz) * kStepPct * step / 100);
+    if (drop == 0) return orig;   // nothing to give back: no snap to the grid either
     const int target = orig.freq_khz - drop;
     int units = target / grid;
     if (target % grid != 0 && target < 0) --units;   // floor

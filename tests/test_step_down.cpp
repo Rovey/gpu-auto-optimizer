@@ -85,8 +85,9 @@ TEST_CASE("a step that changes nothing is not offered") {
     p.preset = Preset::Undervolt;
     p.core_mhz = 0;
     p.mem_mhz = 0;
-    p.undervolt = UndervoltTune{960000, 2925000, 0};   // on the grid: the floor moves nothing
+    p.undervolt = UndervoltTune{960000, 2932000, 0};   // off the grid, but without a drop it stays
     CHECK_FALSE(can_step_down(p, 7500));
+    CHECK(at_step(p, 1, 7500).undervolt->freq_khz == 2932000);
     CHECK(can_step_down(owners(), 7500));
 }
 
