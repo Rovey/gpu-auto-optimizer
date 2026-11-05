@@ -52,6 +52,18 @@ TEST_CASE("decide_boot: each outcome") {
     CHECK(decide_boot(with_profile("610.74", 2), "610.74", "GPU-1") == BootDecision::Apply);
 }
 
+TEST_CASE("decide_boot: a tune that failed every step is not applied") {
+    Config c = with_profile("610.74");
+    StepDown sd;
+    sd.step = 10;
+    sd.failed_step = 10;
+    c.profile->step_down = sd;
+    CHECK(decide_boot(c, "610.74", "GPU-1") == BootDecision::FailedTest);
+    c.profile->step_down->step = 4;
+    c.profile->step_down->failed_step = 3;
+    CHECK(decide_boot(c, "610.74", "GPU-1") == BootDecision::Apply);
+}
+
 TEST_CASE("several_gpus: more than one NVIDIA GPU refuses; one, none or an unknown count does not") {
     // NVML counts NVIDIA devices only, so a PC with one NVIDIA card and an
     // Intel or AMD integrated GPU counts 1.

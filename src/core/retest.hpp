@@ -40,4 +40,23 @@ struct RetestResult {
 RetestResult retest_saved_tune(Config& c, const std::string& driver, const std::string& gpu_id, const GpuControl& gpu,
                                const RetestIo& io);
 
+struct SteppedRetestResult {
+    RetestResult last;          // the last 5-minute test
+    bool ok = false;            // a step held: c.profile is that step, tested, stamped with `driver`
+    bool stepped = false;       // c.profile changed (its step or its failed_step): save c in every case where this is true
+    int first_step = 0, final_step = 0;
+};
+
+// retest_saved_tune, then while it fails (not Aborted, and the test ran) and
+// can_step_down: failed_step = the failed step, c.profile = at_step(next,
+// grid_khz), test again. Logs "testing -15 % (step 3)" and passes
+// "Testing -15 % (step 3)" to io.measuring. On ok: step_down->tested = true.
+// When no step is left: c.profile stays at the last failed step (failed_step ==
+// step; at step 0 it is untouched) and the reason ends with "; optimize again".
+// Aborted: c.profile is the step being tested (never a failed one), not applied
+// by this function; the caller re-applies it. A refusal before the test
+// (another card, nothing written) does not step.
+SteppedRetestResult retest_stepping(Config& c, const std::string& driver, const std::string& gpu_id, const GpuControl& gpu,
+                                    const RetestIo& io, int grid_khz);
+
 }

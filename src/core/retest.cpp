@@ -1,6 +1,7 @@
 #include "core/retest.hpp"
 #include "core/boot.hpp"
 #include "core/objectives.hpp"
+#include "core/step_down.hpp"
 
 namespace gao {
 
@@ -44,6 +45,47 @@ RetestResult retest_saved_tune(Config& c, const std::string& driver, const std::
     if (lost && gpu.recover) gpu.recover();
     r.at_stock = gpu.reset_to_stock && gpu.reset_to_stock();
     return r;
+}
+
+SteppedRetestResult retest_stepping(Config& c, const std::string& driver, const std::string& gpu_id, const GpuControl& gpu,
+                                    const RetestIo& io, int grid_khz) {
+    SteppedRetestResult s;
+    s.first_step = s.final_step = c.profile ? current_step(*c.profile) : 0;
+    RetestIo step_io = io;
+    for (;;) {
+        s.last = retest_saved_tune(c, driver, gpu_id, gpu, step_io);
+        if (s.last.ok) {
+            s.ok = true;
+            if (c.profile->step_down) c.profile->step_down->tested = true;
+            return s;
+        }
+        const Verdict v = s.last.test.verdict;
+        const bool failed_test = s.last.test.seconds > 0 && v != Verdict::Stable && v != Verdict::Aborted;
+        if (!failed_test) return s;   // refused before the test, or aborted: nothing to step down from
+        const int step = current_step(*c.profile);
+        if (!can_step_down(*c.profile, grid_khz)) {
+            if (c.profile->step_down) {
+                auto& failed = c.profile->step_down->failed_step;
+                if (!failed || *failed < step) failed = step;
+                s.stepped = true;
+            }
+            s.last.reason += "; optimize again";
+            return s;
+        }
+        Profile next = at_step(*c.profile, step + 1, grid_khz);
+        auto& failed = next.step_down->failed_step;
+        if (!failed || *failed < step) failed = step;
+        c.profile = next;
+        s.stepped = true;
+        s.final_step = step + 1;
+        const std::string what = step_text(s.final_step);
+        if (io.log) io.log("testing " + what);
+        if (io.measuring) {
+            step_io.measuring = [&io, what](const std::string& text, double seconds) {
+                io.measuring(text.empty() ? text : "Testing " + what, seconds);
+            };
+        }
+    }
 }
 
 }
