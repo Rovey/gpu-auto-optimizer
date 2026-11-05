@@ -36,6 +36,16 @@ inline constexpr const char* kSeveralGpusBalloon =
 // counts (Nvml::DeviceCount).
 BootDecision decide_boot(const Config& c, const std::string& driver, const std::string& gpu, int nvidia_gpus = 1);
 
+// What to do after a driver update: the retest checks the saved tune on the
+// new driver in five minutes; a new optimize is the long way. The logon apply
+// and `gao --status` give the same advice.
+inline constexpr const char* kDriverChangedAdvice =
+    "test the tune again in the app (5 minutes, or `gao --retest`), or optimize again";
+// The `gao --status` verdict on the driver against the one the profile was
+// tested on: "matches", or why not and what to do. now empty: NVML did not
+// report a version.
+std::string driver_status(const std::string& tested_on, const std::string& now);
+
 // Sets power, core and memory from the profile; each GpuControl setter
 // verifies by read-back. A setter the card lacks is fine only when the
 // profile asks for stock on that dimension. Values outside the search

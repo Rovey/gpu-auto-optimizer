@@ -127,8 +127,7 @@ std::string decision_text(BootDecision d, const Config& c, const std::string& dr
             return "disabled after " + std::to_string(kMaxBootStrikes) + " crashes; turn boot-apply on again to retry";
         case BootDecision::DriverChanged:
             if (driver.empty()) return "driver version unknown (NVML did not report it); not applied";
-            return "the driver was updated (" + c.profile->driver + " -> " + driver +
-                   "); test the tune again in the app (5 minutes, or `gao --retest`), or optimize again";
+            return "the driver was updated (" + c.profile->driver + " -> " + driver + "); " + kDriverChangedAdvice;
         case BootDecision::GpuChanged: return "this is not the card the profile was tested on; optimize again";
         case BootDecision::Apply: return "apply";
     }

@@ -5,6 +5,7 @@
 #include <windows.h>
 #include "app/cli_commands.hpp"
 #include "app/common.hpp"
+#include "core/boot.hpp"
 #include "core/version.hpp"
 #include "core/vf_curve.hpp"
 #include "hw/app_files.hpp"
@@ -213,7 +214,7 @@ int status() {
     const std::string driver = nvml.Init() ? nvml.DriverVersion() : std::string();
     if (cfg.profile) {
         std::printf("driver:     %s (%s)\n", driver.empty() ? "unknown" : driver.c_str(),
-                    !driver.empty() && driver == cfg.profile->driver ? "matches" : "CHANGED -- run `gao --optimize` again");
+                    gao::driver_status(cfg.profile->driver, driver).c_str());
         const std::string gpu_id = nvml.GpuUuid(kGpu);
         std::printf("gpu:        %s\n", !gpu_id.empty() && gpu_id == cfg.profile->gpu
                                          ? "matches the profile" : "DIFFERENT card or unknown -- run `gao --optimize` again");

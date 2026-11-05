@@ -89,6 +89,19 @@ TEST_CASE("an unknown driver never matches") {
     CHECK(decide_boot(with_profile(""), "", "GPU-1") == BootDecision::DriverChanged);
 }
 
+TEST_CASE("gao --status advises the retest after a driver update, as the logon apply does") {
+    CHECK(driver_status("617.14", "617.14") == "matches");
+    const std::string changed = driver_status("617.14", "621.14");
+    CHECK(changed.find("CHANGED from 617.14") == 0);
+    CHECK(changed.find("`gao --retest`") != std::string::npos);
+    CHECK(changed.find(kDriverChangedAdvice) != std::string::npos);
+    // The 40-minute optimize is no longer the first thing it names.
+    CHECK(changed.find("`gao --optimize`") == std::string::npos);
+    const std::string unknown = driver_status("617.14", "");
+    CHECK(unknown.find("did not report") != std::string::npos);
+    CHECK(unknown.find("CHANGED") == std::string::npos);
+}
+
 TEST_CASE("apply_profile sets power, core and memory") {
     Card card;
     std::string why;
