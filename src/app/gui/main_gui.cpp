@@ -534,6 +534,7 @@ void fan_sync() {
 // reads it; only a flat top is rounded to it, so without an undervolt the
 // default does).
 std::optional<gao::CurveState> read_curve_state(const gao::Config& cfg) {
+    g.ui.grid_khz = gao::kDefaultGridKhz;
     if (!cfg.profile || !cfg.profile->undervolt || !g.gpu.read_vf_curve) return std::nullopt;
     const auto points = g.gpu.read_vf_curve();
     if (!points) return std::nullopt;
@@ -745,7 +746,13 @@ void act_step(int delta) {
     const gao::app::StepOutcome out =
         gao::app::step_tune(g.gpu, delta, g.nvml->DriverVersion(), g.nvml->GpuUuid(kGpu), g.nvml->DeviceCount());
     if (!out.ok) {
-        note("Not changed: " + out.message, true);
+        if (out.applied_not_saved) {
+            // On the card but not in gao.json: the watchdog would fight it against the old saved tune.
+            g.watch = false;
+            note(out.message + "; the watchdog is off until you apply the saved tune", true);
+        } else {
+            note("Not changed: " + out.message, true);
+        }
         refresh_status(false);   // a failed apply ends at stock
         return;
     }

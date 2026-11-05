@@ -66,6 +66,9 @@ TEST_CASE("the tray's step items name the step they go to") {
     CHECK(gao::gui::step_up_item(gao::at_step(p, 2, gao::kDefaultGridKhz)) == "Raise tune 5 % (back to -5 %)");
     CHECK(gao::gui::step_up_item(gao::at_step(p, 1, gao::kDefaultGridKhz)) == "Raise tune 5 % (back to the tune the run found)");
     CHECK(gao::gui::step_up_item(p) == "Raise tune 5 %");
+    gao::Profile failed = gao::at_step(p, 2, gao::kDefaultGridKhz);
+    failed.step_down->failed_step = 1;
+    CHECK(gao::gui::step_up_item(failed) == "Raise tune 5 %");
     CHECK(gao::gui::step_down_item(gao::at_step(p, gao::kMaxStep, gao::kDefaultGridKhz), gao::kDefaultGridKhz) == "Lower tune 5 %");
 }
 
