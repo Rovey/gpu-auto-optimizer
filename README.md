@@ -386,9 +386,11 @@ example `−10 % (step 2)`, and says that it was not tested on its own, because 
 **Test this step (5 min)** loads the card for five minutes at the current step. If it holds, the Dashboard says
 `tested`. If it fails, the app lowers the step by itself until one holds, with one five-minute test per step, and keeps
 that one. A step that failed cannot be raised back to without a new run. At −50 % (step 10), or at a step that would change
-nothing, the card goes to stock and the tune is no longer applied at logon: optimize again. Abort puts back the step under
-test only when the test had already stepped down; otherwise the card ends at stock. On the command line: `gao --step-down`
-and `gao --step-up`. A new run starts over at the tune it finds.
+nothing, the card goes to stock and the tune is no longer applied at logon or put back after a driver reset: optimize
+again. When a step fails and a lower one is still possible, the Dashboard says `failed a test`, and **−5 %** still lowers
+it: the lower step is a new tune and is applied. Abort puts back what was on the card before the test started (your saved
+tune, or stock); when the test had already stepped down, it puts back the step under test instead, never the step that
+failed. On the command line: `gao --step-down` and `gao --step-up`. A new run starts over at the tune it finds.
 </details>
 
 <details>
