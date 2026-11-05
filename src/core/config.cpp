@@ -52,6 +52,58 @@ std::optional<MeasuredRun> run_from(const nlohmann::json& j) {
     }
     return r;
 }
+
+nlohmann::json undervolt_json(const UndervoltTune& u) {
+    return {{"volt_uv", u.volt_uv}, {"freq_khz", u.freq_khz}, {"raise_khz", u.raise_khz}};
+}
+
+std::optional<int> int_in(const nlohmann::json& obj, const char* key) {
+    const auto it = obj.find(key);
+    if (it == obj.end() || !it->is_number_integer()) return std::nullopt;
+    return it->get<int>();
+}
+
+// nullopt for anything that cannot be read whole: a half-read step never shows.
+std::optional<UndervoltTune> undervolt_from(const nlohmann::json& j) {
+    if (!j.is_object()) return std::nullopt;
+    const auto volt = int_in(j, "volt_uv"), freq = int_in(j, "freq_khz"), raise = int_in(j, "raise_khz");
+    if (!volt || !freq || !raise) return std::nullopt;
+    return UndervoltTune{*volt, *freq, *raise};
+}
+
+nlohmann::json step_down_json(const StepDown& s) {
+    nlohmann::json found = {{"core_mhz", s.found.core_mhz}, {"mem_mhz", s.found.mem_mhz}};
+    if (s.found.undervolt) found["undervolt"] = undervolt_json(*s.found.undervolt);
+    nlohmann::json j = {{"step", s.step}, {"tested", s.tested}, {"found", found}};
+    if (s.failed_step) j["failed_step"] = *s.failed_step;
+    return j;
+}
+
+std::optional<StepDown> step_down_from(const nlohmann::json& j) {
+    if (!j.is_object()) return std::nullopt;
+    const auto step = int_in(j, "step");
+    const auto tested = j.find("tested");
+    const auto found = j.find("found");
+    if (!step || *step < 1 || *step > kMaxStep) return std::nullopt;
+    if (tested == j.end() || !tested->is_boolean()) return std::nullopt;
+    if (found == j.end() || !found->is_object()) return std::nullopt;
+    StepDown s;
+    s.step = *step;
+    s.tested = tested->get<bool>();
+    if (j.contains("failed_step")) {
+        s.failed_step = int_in(j, "failed_step");
+        if (!s.failed_step) return std::nullopt;
+    }
+    const auto core = int_in(*found, "core_mhz"), mem = int_in(*found, "mem_mhz");
+    if (!core || !mem) return std::nullopt;
+    s.found.core_mhz = *core;
+    s.found.mem_mhz = *mem;
+    if (const auto it = found->find("undervolt"); it != found->end()) {
+        s.found.undervolt = undervolt_from(*it);
+        if (!s.found.undervolt) return std::nullopt;
+    }
+    return s;
+}
 }
 
 std::string to_json(const Config& c) {
@@ -73,6 +125,7 @@ std::string to_json(const Config& c) {
             j["profile"]["undervolt"] = {{"volt_uv", p.undervolt->volt_uv},
                                          {"freq_khz", p.undervolt->freq_khz},
                                          {"raise_khz", p.undervolt->raise_khz}};
+        if (p.step_down) j["profile"]["step_down"] = step_down_json(*p.step_down);
         if (p.against_stock)
             j["profile"]["against_stock"] = {{"stock", run_json(p.against_stock->stock)}, {"tuned", run_json(p.against_stock->tuned)}};
     }
@@ -141,6 +194,7 @@ Config from_json(const std::string& text) {
     c.profile->undervolt = undervolt;
     if (const auto it = pj->find("fan_curve"); it != pj->end()) c.profile->fan_curve = curve_from(*it);
     c.profile->temp_ceiling_c = num("temp_ceiling_c");   // one that cannot be read: the preset's own limit, the lower one
+    if (const auto it = pj->find("step_down"); it != pj->end()) c.profile->step_down = step_down_from(*it);   // unreadable: absent, the applied values stay
     if (const auto it = pj->find("against_stock"); it != pj->end() && it->is_object()) {
         const auto stock = it->find("stock"), tuned = it->find("tuned");
         if (stock != it->end() && tuned != it->end())
