@@ -124,7 +124,8 @@ std::string decision_text(BootDecision d, const Config& c, const std::string& dr
         case BootDecision::NoProfile: return "no saved profile; run an optimize first";
         case BootDecision::SeveralGpus: return kSeveralGpusRefusal;
         case BootDecision::TooManyStrikes:
-            return "disabled after " + std::to_string(kMaxBootStrikes) + " crashes; turn boot-apply on again to retry";
+            return "disabled after " + std::to_string(kMaxBootStrikes) + " crashes; turn boot-apply on again to retry"
+                   "; or lower the tune 5 % and turn boot-apply on again";
         case BootDecision::DriverChanged:
             if (driver.empty()) return "driver version unknown (NVML did not report it); not applied";
             return "the driver was updated (" + c.profile->driver + " -> " + driver + "); " + kDriverChangedAdvice;

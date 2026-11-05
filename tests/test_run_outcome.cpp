@@ -160,3 +160,11 @@ TEST_CASE("the logon refusal on a PC with two NVIDIA GPUs says why") {
     CHECK(text.size() >= ask.size());
     CHECK(text.compare(text.size() - ask.size(), ask.size(), ask) == 0);
 }
+
+TEST_CASE("the logon refusal after too many crashes offers the step down first") {
+    gao::Config c;
+    c.boot_strikes = gao::kMaxBootStrikes;
+    CHECK(gao::app::decision_text(gao::BootDecision::TooManyStrikes, c, "617.14") ==
+          "disabled after " + std::to_string(gao::kMaxBootStrikes) +
+              " crashes; turn boot-apply on again to retry; or lower the tune 5 % and turn boot-apply on again");
+}

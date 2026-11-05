@@ -3,10 +3,100 @@
 #include "app/gui/ui.hpp"
 #include "core/boot.hpp"
 #include "core/search.hpp"
+#include "core/step_down.hpp"
 #include <string>
 
 using gao::app::is_refusal;
 using gao::gui::split_link;
+
+namespace {
+// A tune without an undervolt: the clock grid does not matter for it.
+gao::Profile clocks_tune() {
+    gao::Profile p;
+    p.preset = gao::Preset::BestOfMyGpu;
+    p.power_pct = 110;
+    p.core_mhz = 150;
+    p.mem_mhz = 1000;
+    p.driver = "617.14";
+    p.gpu = "GPU-1";
+    p.saved_at = "2026-11-05 20:00";
+    return p;
+}
+
+// The minus sign (U+2212) of the -5 % button and its tip.
+const std::string kMinus = "\xE2\x88\x92";
+}
+
+TEST_CASE("the step-down tip names the step and the tune it sets") {
+    const gao::Profile p = clocks_tune();
+    CHECK(gao::gui::step_down_tip(p, gao::kDefaultGridKhz) ==
+          kMinus + "5 %: to -5 % (step 1) (" + gao::app::profile_text(gao::at_step(p, 1, gao::kDefaultGridKhz)) + ")");
+    const gao::Profile s = gao::at_step(p, 2, gao::kDefaultGridKhz);
+    CHECK(gao::gui::step_down_tip(s, gao::kDefaultGridKhz) ==
+          kMinus + "5 %: to -15 % (step 3) (" + gao::app::profile_text(gao::at_step(p, 3, gao::kDefaultGridKhz)) + ")");
+}
+
+TEST_CASE("the step-down tip at the limit and for a step that changes nothing") {
+    CHECK(gao::gui::step_down_tip(gao::at_step(clocks_tune(), gao::kMaxStep, gao::kDefaultGridKhz), gao::kDefaultGridKhz) ==
+          "Lower than this: optimize again");
+    gao::Profile flat;
+    flat.preset = gao::Preset::Undervolt;
+    flat.undervolt = gao::UndervoltTune{960000, 2932000, 0};
+    CHECK(gao::gui::step_down_tip(flat, gao::kDefaultGridKhz) ==
+          "This tune cannot be lowered further in 5 % steps; optimize again");
+}
+
+TEST_CASE("the step-up tip names where it goes back to") {
+    const gao::Profile p = clocks_tune();
+    const gao::Profile two = gao::at_step(p, 2, gao::kDefaultGridKhz);
+    CHECK(gao::gui::step_up_tip(two, gao::kDefaultGridKhz) ==
+          "+5 %: back to -5 % (step 1) (" + gao::app::profile_text(gao::at_step(p, 1, gao::kDefaultGridKhz)) + ")");
+    const gao::Profile one = gao::at_step(p, 1, gao::kDefaultGridKhz);
+    CHECK(gao::gui::step_up_tip(one, gao::kDefaultGridKhz) ==
+          "+5 %: back to the tune the run found (" + gao::app::profile_text(p) + ")");
+    gao::Profile failed = two;
+    failed.step_down->failed_step = 1;
+    CHECK(gao::gui::step_up_tip(failed, gao::kDefaultGridKhz) == "+5 %: -5 % (step 1) failed a test");
+    CHECK(gao::gui::step_up_tip(p, gao::kDefaultGridKhz) == "This is the tune the run found");
+}
+
+TEST_CASE("the tray's step items name the step they go to") {
+    const gao::Profile p = clocks_tune();
+    CHECK(gao::gui::step_down_item(gao::at_step(p, 1, gao::kDefaultGridKhz), gao::kDefaultGridKhz) == "Lower tune 5 % (to -10 %)");
+    CHECK(gao::gui::step_up_item(gao::at_step(p, 2, gao::kDefaultGridKhz)) == "Raise tune 5 % (back to -5 %)");
+    CHECK(gao::gui::step_up_item(gao::at_step(p, 1, gao::kDefaultGridKhz)) == "Raise tune 5 % (back to the tune the run found)");
+    CHECK(gao::gui::step_up_item(p) == "Raise tune 5 %");
+    CHECK(gao::gui::step_down_item(gao::at_step(p, gao::kMaxStep, gao::kDefaultGridKhz), gao::kDefaultGridKhz) == "Lower tune 5 %");
+}
+
+TEST_CASE("the saved tune's step says whether it was tested") {
+    const gao::Profile p = clocks_tune();
+    CHECK(gao::gui::step_status(p).empty());
+    gao::Profile s = gao::at_step(p, 2, gao::kDefaultGridKhz);
+    CHECK(gao::gui::step_status(s) == "-10 % (step 2), not tested on its own; from a tested tune");
+    s.step_down->tested = true;
+    CHECK(gao::gui::step_status(s) == "-10 % (step 2), tested");
+}
+
+TEST_CASE("the step buttons are off during a run and when the saved tune does not apply here") {
+    gao::gui::UiState s;
+    s.elevated = true;
+    CHECK_FALSE(gao::gui::step_usable(s));
+    s.profile = clocks_tune();
+    s.profile_driver_ok = s.profile_gpu_ok = true;
+    CHECK(gao::gui::step_usable(s));
+    s.run_active = true;
+    CHECK_FALSE(gao::gui::step_usable(s));
+    s.run_active = false;
+    s.profile_driver_ok = false;
+    CHECK_FALSE(gao::gui::step_usable(s));
+    s.profile_driver_ok = true;
+    s.profile_gpu_ok = false;
+    CHECK_FALSE(gao::gui::step_usable(s));
+    s.profile_gpu_ok = true;
+    s.elevated = false;
+    CHECK_FALSE(gao::gui::step_usable(s));
+}
 
 TEST_CASE("a reason's link is split off for a line of its own") {
     const auto [text, link] = split_link(std::string("Not applied. Open an issue at https://github.com/Rovey/gpu-auto-optimizer/issues"));
