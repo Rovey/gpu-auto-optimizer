@@ -76,10 +76,16 @@ RetestOutcome run_retest(const OptimizeHooks& hooks) {
     // An abort leaves the card at stock with the step under test in cfg: put it back.
     std::string back;
     bool reapplied = false;
-    if (!stepped.ok && out.result.test.verdict == Verdict::Aborted && cfg.profile) {
+    // Only after a step down: an abort of the very first test ends at stock, the profile as it was saved.
+    bool back_at_stock = out.result.at_stock;
+    if (!stepped.ok && out.result.test.verdict == Verdict::Aborted && cfg.profile && out.final_step != out.first_step) {
         std::string apply_why;
-        reapplied = apply_profile(gpu, *cfg.profile, &apply_why);
-        if (!reapplied) back = " (and it could not be applied again: " + apply_why + ")";
+        bool left_clean = false;
+        reapplied = apply_profile(gpu, *cfg.profile, &apply_why, &left_clean);
+        if (!reapplied) {
+            back = " (and it could not be applied again: " + apply_why + ")";
+            back_at_stock = left_clean;
+        }
     }
     if (!stepped.ok && out.result.test.seconds > 0 && !reapplied)
         boot_log("the saved tune was tested on driver " + out.driver + " and is not applied: " + out.result.reason);
@@ -98,7 +104,7 @@ RetestOutcome run_retest(const OptimizeHooks& hooks) {
     if (!stepped.ok)
         return fail(out.result.reason + back +
                     (reapplied ? std::string(" -- the tune under test is applied again")
-                               : (out.result.at_stock ? " -- card at stock" : " -- reset to stock FAILED, run `gao --reset`")));
+                               : (back_at_stock ? " -- card at stock" : " -- reset to stock FAILED, run `gao --reset`")));
     out.ok = true;
     boot_log("tested again on driver " + out.driver + " (it was tested on " + out.driver_was + "): applied " + profile_text(out.profile));
     return out;

@@ -243,8 +243,10 @@ struct RetestOutcome {
     int final_step = 0;       // the step it ended at (the one that held when ok)
 };
 // The fans are as in daily use: on the app's curve when it drives them, with
-// the NVIDIA driver otherwise. A tune that does not pass ends at stock and
-// stays as it was saved, so it stays refused. Needs elevation.
+// the NVIDIA driver otherwise. A tune that does not pass steps down and is
+// tested again; an abort after a step puts the step under test back; in every
+// other case (an abort of the first test, no step possible) the card ends at
+// stock and the profile stays as it was saved. Needs elevation.
 RetestOutcome run_retest(const OptimizeHooks& hooks);
 // As result_lines above: the test's own line, then the RESULT line.
 std::vector<std::string> result_lines(const RetestOutcome& o);
