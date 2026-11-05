@@ -208,7 +208,7 @@ bool put_back_after_stop(const std::optional<Profile>& before_run, const Optimiz
         return false;
     }
     log(std::string(same ? "stopped: the tune that was on the card before the run is back: "
-                         : "stopped: the saved tune (the step under test) is back: ") +
+                         : "stopped: the tune saved now is back: ") +
         profile_text(*before));
     return true;
 }
