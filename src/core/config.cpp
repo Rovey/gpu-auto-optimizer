@@ -208,6 +208,18 @@ int profile_ceiling(const Profile& p) {
     return p.temp_ceiling_c ? std::clamp(*p.temp_ceiling_c, limit, std::max(limit, kStockTempC)) : limit;
 }
 
+std::optional<Config> undo_unfinished_run(const Config& before, const Config& now) {
+    if (now.profile == before.profile && now.fan_curve == before.fan_curve && now.fan_control == before.fan_control &&
+        now.boot_strikes == before.boot_strikes)
+        return std::nullopt;
+    Config back = now;
+    back.profile = before.profile;
+    back.fan_curve = before.fan_curve;
+    back.fan_control = before.fan_control;
+    back.boot_strikes = before.boot_strikes;
+    return back;
+}
+
 std::optional<FanCurve> active_fan_curve(const Config& c) {
     if (!c.profile) return std::nullopt;
     if (c.fan_curve) return c.fan_curve;

@@ -46,7 +46,7 @@ service.
 > - **Save your work and close games first.** A driver reset also reaches other programs. Rarely, one of them crashes, or
 >   Windows needs a sign-out or a restart afterwards.
 > - **If the PC freezes,** the app remembers the setting it was testing and never tries it again.
-> - **Abort run** stops a run at any time. The card goes back to stock, or to your saved tune if that was on before.
+> - **Abort run** stops a run at any time. The card goes back to stock, or to your saved tune if that was on before. Nothing the run found is kept: your saved tune stays as it was.
 >
 > Every value the app writes is read back and checked, and anything that fails ends at stock. Even so, every card has its
 > own limits, and a stress test is not a game. Use it at your own risk (see the [MIT License](LICENSE)).

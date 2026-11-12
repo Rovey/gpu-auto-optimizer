@@ -403,3 +403,46 @@ TEST_CASE("a gao.json written by 0.4.2 keeps its tune and applies at logon") {
     CHECK(again.profile->undervolt->volt_uv == 1025000);
     CHECK(again.profile->mem_mhz == 1400);
 }
+
+TEST_CASE("a run that did not finish leaves gao.json as it was before the run") {
+    Config before;
+    before.profile = sample();
+    before.boot_strikes = 1;
+    before.fan_control = false;
+    before.fan_curve = FanCurve{std::nullopt, {{50, 30}, {75, 100}}};
+    before.update_check = true;
+
+    // Nothing saved during the run: nothing to undo.
+    CHECK_FALSE(undo_unfinished_run(before, before).has_value());
+
+    // An All in one stopped in step 3: step 2 saved its overclock (strikes reset, the
+    // fan curve cleared and switched on), and the fans' minimum was learned meanwhile.
+    Config now = before;
+    now.profile->preset = Preset::AllInOne;
+    now.profile->core_mhz = 255;
+    now.profile->mem_mhz = 1850;
+    now.boot_strikes = 0;
+    now.fan_curve.reset();
+    now.fan_control = true;
+    now.fan_min_pct = 30;
+    now.fan_min_gpu = "GPU-8a1b";
+    now.update_check = false;
+    const auto back = undo_unfinished_run(before, now);
+    REQUIRE(back.has_value());
+    CHECK(back->profile == before.profile);
+    CHECK(back->boot_strikes == 1);
+    CHECK(back->fan_curve == before.fan_curve);
+    CHECK(back->fan_control == false);
+    CHECK(back->fan_min_pct == 30);          // learned during the run: kept
+    CHECK(back->fan_min_gpu == "GPU-8a1b");
+    CHECK(back->update_check == false);      // the user's setting, changed meanwhile: kept
+    CHECK_FALSE(undo_unfinished_run(before, *back).has_value());
+
+    // No tune before the run: the one the stopped run saved is removed.
+    Config empty;
+    Config saved = empty;
+    saved.profile = now.profile;
+    const auto none = undo_unfinished_run(empty, saved);
+    REQUIRE(none.has_value());
+    CHECK_FALSE(none->profile.has_value());
+}

@@ -172,7 +172,7 @@ Anyone with an NVIDIA card can check a change, or report what a run gave on a ca
 
 Before you start:
 
-- Copy `%ProgramData%\GpuAutoOptimizer\gao.json`. A run replaces the saved tune as soon as its overclock step ends; with the copy you can put the old one back.
+- Copy `%ProgramData%\GpuAutoOptimizer\gao.json`. A run replaces the saved tune as soon as its overclock step ends. A run that is stopped or fails writes the old one back (`undo_unfinished_run`), but a crash or a power loss in the middle of it does not; with the copy you can put the old one back.
 - Close programs that use the graphics card: games, videos, editors that draw with the GPU. `gao --busy` should print `none`. Another program on the card lowers every score it measures.
 - Run from the command line with the app's window closed. While the window is open, the NVIDIA app's Instant Replay records on the card and lowers the measurements by about 2 %.
 - Use an elevated shell for anything that writes to the card (a run, `--apply`, `--set-core`); reading (`--status`, `--probe`, `--busy`) needs no elevation.
