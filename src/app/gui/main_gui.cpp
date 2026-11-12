@@ -372,6 +372,24 @@ void recover_device() {
 
 // ---------------------------------------------------------------- tray
 
+// The app's icon at the size the taskbar shows it (16 px at 100 %, 24 px at 150 %).
+// LoadIcon gives the large one (32 px at 100 %): scaled down in the tray it
+// looked off, its drawing made for a larger size.
+HICON tray_hicon() {
+    static HICON icon = nullptr;
+    static int size = 0;
+    const int want = GetSystemMetrics(SM_CXSMICON);
+    if (!icon || size != want) {
+        if (const auto fresh = static_cast<HICON>(
+                LoadImageW(GetModuleHandleW(nullptr), MAKEINTRESOURCEW(1), IMAGE_ICON, want, want, LR_DEFAULTCOLOR))) {
+            if (icon) DestroyIcon(icon);   // the taskbar keeps its own copy
+            icon = fresh;
+            size = want;
+        }
+    }
+    return icon ? icon : LoadIconW(nullptr, MAKEINTRESOURCEW(32512));   // IDI_APPLICATION
+}
+
 // warning: the balloon has the warning icon, for news that something failed.
 void tray_icon(DWORD message, const wchar_t* tip = nullptr, const wchar_t* balloon = nullptr, bool warning = false) {
     if (g.demo) return;
@@ -381,8 +399,7 @@ void tray_icon(DWORD message, const wchar_t* tip = nullptr, const wchar_t* ballo
     nid.uID = 1;   // hWnd + uID, not a GUID: an unsigned exe that may move
     nid.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP | NIF_SHOWTIP;
     nid.uCallbackMessage = WM_APP_TRAY;
-    nid.hIcon = LoadIconW(GetModuleHandleW(nullptr), MAKEINTRESOURCEW(1));
-    if (!nid.hIcon) nid.hIcon = LoadIconW(nullptr, MAKEINTRESOURCEW(32512));   // IDI_APPLICATION
+    nid.hIcon = tray_hicon();
     wcsncpy_s(nid.szTip, tip ? tip : L"GPU Auto Optimizer", _TRUNCATE);
     if (balloon) {
         nid.uFlags |= NIF_INFO;
