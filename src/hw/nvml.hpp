@@ -1,5 +1,6 @@
 #pragma once
 #include "core/types.hpp"
+#include "core/watchdog.hpp"
 #include <optional>
 #include <string>
 #include <utility>
@@ -71,5 +72,9 @@ private:
     bool inited_ = false;
     std::string error_;
 };
+
+// System32\nvml.dll as the file system stamps it, read without loading it
+// (see compare_driver_files). Empty when the file is not there.
+std::optional<LibraryStamp> nvml_library_stamp();
 
 }

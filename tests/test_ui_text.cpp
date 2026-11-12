@@ -45,3 +45,14 @@ TEST_CASE("a refusal is told apart from a fault") {
     CHECK_FALSE(is_refusal("could not set the card to stock"));
     CHECK_FALSE(is_refusal(""));
 }
+
+TEST_CASE("after a restart for the driver the tune was tested on, the tune goes back on when it is wanted") {
+    using gao::gui::put_back_after_driver_restart;
+    // elevated, has_profile, gpu_ok, wanted, on_card
+    CHECK(put_back_after_driver_restart(true, true, true, true, false));
+    CHECK_FALSE(put_back_after_driver_restart(true, true, true, true, true));    // already on the card
+    CHECK_FALSE(put_back_after_driver_restart(true, true, true, false, false));  // Apply at logon off, nothing watched
+    CHECK_FALSE(put_back_after_driver_restart(false, true, true, true, false));  // cannot write to the card
+    CHECK_FALSE(put_back_after_driver_restart(true, false, true, true, false));  // no saved tune
+    CHECK_FALSE(put_back_after_driver_restart(true, true, false, true, false));  // another card
+}

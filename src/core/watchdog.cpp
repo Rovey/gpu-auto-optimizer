@@ -100,4 +100,10 @@ WatchAction Watchdog::check(const Profile& p, const std::optional<AppliedState>&
     return WatchAction::BackOffForeign;
 }
 
+DriverFiles compare_driver_files(const std::optional<LibraryStamp>& at_start, const std::optional<LibraryStamp>& now) {
+    if (!at_start) return DriverFiles::Same;   // nothing to compare with: as before this check
+    if (!now) return DriverFiles::Unknown;
+    return *now == *at_start ? DriverFiles::Same : DriverFiles::Changed;
+}
+
 }

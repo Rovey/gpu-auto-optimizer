@@ -60,6 +60,8 @@ constexpr UINT WM_APP_UPDATE = WM_APP + 4; // an update thread left news in g_up
 // The running version, as a window property a second launch can read
 // without opening this (elevated) process. Builds before 0.3.1 have none.
 constexpr wchar_t kVersionProp[] = L"GpuAutoOptimizer.Version";
+constexpr const char* kDriverUpdatedBalloon =
+    "The NVIDIA driver was updated: your tune is not applied. Click here and test it (5 minutes).";
 constexpr UINT_PTR kTimerTelemetry = 1;    // 1 s
 constexpr UINT_PTR kTimerWatchdog = 2;     // 30 s
 constexpr UINT_PTR kTimerStrike = 3;       // one-shot, 2 min after a logon apply
@@ -124,6 +126,13 @@ struct App {
     bool hw_lost = false;            // re-create them at hw_retry_at
     ULONGLONG hw_retry_at = 0;
     gao::GpuControl gpu;
+    // System32\nvml.dll as it was when this process first loaded the libraries:
+    // a new stamp means a driver install, which only a new process survives
+    // (gao::compare_driver_files).
+    std::optional<gao::LibraryStamp> driver_files;
+    bool driver_updated_noted = false;   // the boot.log line for a restart that must wait, once
+    bool driver_update_news = false;     // --driver-updated: tell the user once the driver answers
+    bool driver_restart_watched = false; // --driver-updated with --watch=: the copy before kept the tune applied
 
     gao::gui::UiState ui;
     std::unique_ptr<gao::gui::OptimizeWorker> worker;
@@ -875,14 +884,91 @@ void hw_lost() {
     guarded_driver([nvapi] { delete nvapi; });
 }
 
+// A new NVIDIA driver was installed while this copy runs. Its libraries are
+// the old driver's and cannot be loaded afresh in this process, so they are
+// never called again: the app makes way for a new copy, as after a fault. That
+// copy finds the tune tied to the old driver and asks for the retest. Not
+// under a run or while a run's result is on the screen; until then nothing
+// here touches the card.
+void restart_for_new_driver() {
+    if (g.exit_requested) return;
+    const bool busy = g.worker->running() || gao::app::tuning_in_progress() || g.ui.update_busy ||
+                      (g.visible && g.worker->snapshot().ended());
+    if (busy) {
+        if (!g.driver_updated_noted)
+            gao::app::boot_log("the NVIDIA driver was installed anew; the app restarts when the run has ended");
+        g.driver_updated_noted = true;
+        return;
+    }
+    if (!may_restart_itself()) {
+        gao::app::boot_log("the NVIDIA driver was installed anew; the app closed itself. Start it again");
+        g.exit_requested = true;
+        return;
+    }
+    gao::app::boot_log("the NVIDIA driver was installed anew; restarting the app to load its libraries");
+    g.restart_args = L" --resume --driver-updated";
+    if (!g.visible) g.restart_args += L" --hidden";
+    if (g.watch) g.restart_args += L" --watch=" + std::to_wstring(g.watchdog.recent(std::chrono::steady_clock::now()));
+    g.restart = true;
+    g.exit_requested = true;
+}
+
+// The saved tune applied as at logon (apply_at_logon: strikes, driver, GPU,
+// one boot.log line), then watched; a refusal gives the logon's balloon.
+void apply_as_at_logon() {
+    std::string why;
+    if (!gao::app::prepare_state(&why)) return;
+    const auto logon = gao::app::apply_at_logon();
+    if (logon.applied) {
+        g.watch = true;
+        g.strike_pending = true;
+        SetTimer(g.hwnd, kTimerStrike, 2 * 60 * 1000, nullptr);
+    } else if (logon.decision == gao::BootDecision::DriverChanged && !g.ui.driver.empty()) {
+        // apply_at_logon wrote boot.log. The balloon opens the window, where the one button is.
+        notify(kDriverUpdatedBalloon, false);
+    } else if (logon.decision == gao::BootDecision::SeveralGpus) {
+        // apply_at_logon wrote the whole refusal, link included, to boot.log, which the
+        // window's log shows; a balloon holds only the short one.
+        notify(gao::kSeveralGpusBalloon, false);
+    } else if (logon.decision != gao::BootDecision::NoProfile) {
+        notify(logon.message, false);   // apply_at_logon wrote boot.log
+    }
+    refresh_status(false);
+}
+
+// The copy started by restart_for_new_driver(): once the new driver answers,
+// the balloon that the logon apply gives after an update, if the saved tune
+// is the old driver's. A driver install leaves the card at stock: when the
+// driver now is the one the tune was tested on (the same version installed
+// again, or a step back to it), the tune goes back on as at logon, if
+// Apply at logon is on or the copy before kept the tune applied.
+void driver_update_news() {
+    if (!g.driver_update_news || !g.nvml_ok || g.ui.driver.empty()) return;
+    g.driver_update_news = false;
+    if (g.ui.profile && !g.ui.profile_driver_ok) {
+        notify(kDriverUpdatedBalloon, false);
+        return;
+    }
+    const bool on_card = g.ui.profile && g.ui.applied && gao::tune_applied(*g.ui.profile, *g.ui.applied, g.ui.curve);
+    if (gao::gui::put_back_after_driver_restart(g.ui.elevated, g.ui.profile.has_value(), g.ui.profile_gpu_ok,
+                                                g.ui.boot_on || g.driver_restart_watched, on_card))
+        apply_as_at_logon();
+}
+
 void retry_hw() {
     if (!g.hw_lost || GetTickCount64() < g.hw_retry_at) return;
+    switch (gao::compare_driver_files(g.driver_files, gao::nvml_library_stamp())) {
+        case gao::DriverFiles::Changed: restart_for_new_driver(); return;   // stays lost: never reconnect to the old library
+        case gao::DriverFiles::Unknown: g.hw_retry_at = GetTickCount64() + 5000; return;   // the install is under way
+        case gao::DriverFiles::Same: break;
+    }
     if (!guarded_driver([] { init_hw(); }) || !g.nvml_ok || !g.nvapi_ok) {
         hw_lost();   // not back yet
         return;
     }
     g.hw_lost = false;
     refresh_status(false);
+    driver_update_news();
 }
 
 // A call into NVML or NVAPI faulted in this process (Nvml::Abandoned). NVML is
@@ -947,6 +1033,10 @@ void on_telemetry() {
     // in that gap is not seen here and hw_lost() is not called for it; stale
     // NVML/NVAPI state is then left to the guards around the timers and to the
     // watchdog.)
+    // A driver install replaces the library files first: from then on the
+    // loaded libraries are not called again (gao::compare_driver_files).
+    if (!g.hw_lost && gao::compare_driver_files(g.driver_files, gao::nvml_library_stamp()) != gao::DriverFiles::Same)
+        hw_lost();
     check_removed();
     const bool reset = g.driver_reset;
     g.driver_reset = false;
@@ -1410,32 +1500,19 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdline, int) {
     if (!guarded([] { ImGui_ImplDX11_Init(g.device.Get(), g.ctx.Get()); })) return 1;
 
     g.worker = std::make_unique<gao::gui::OptimizeWorker>([] { PostMessageW(g.hwnd, WM_APP_WAKE, 0, 0); });
+    g.driver_files = gao::nvml_library_stamp();   // before the libraries are loaded
     init_hw();
+    // Started for a new driver (restart_for_new_driver): it may not answer
+    // yet, and then the libraries are tried again until it does.
+    g.driver_update_news = cmdline && std::wcsstr(cmdline, L"--driver-updated");
+    g.driver_restart_watched = g.driver_update_news && std::wcsstr(cmdline, L"--watch=");
+    if (g.driver_update_news && (!g.nvml_ok || !g.nvapi_ok)) hw_lost();
     g.ui.gpu_name = gao::nvidia_adapter_name();
 
     tray_icon(NIM_ADD);
     refresh_status(true);
-    if (tray_mode && g.ui.elevated) {
-        std::string why;
-        if (gao::app::prepare_state(&why)) {
-            const auto logon = gao::app::apply_at_logon();
-            if (logon.applied) {
-                g.watch = true;
-                g.strike_pending = true;
-                SetTimer(g.hwnd, kTimerStrike, 2 * 60 * 1000, nullptr);
-            } else if (logon.decision == gao::BootDecision::DriverChanged && !g.ui.driver.empty()) {
-                // apply_at_logon wrote boot.log. The balloon opens the window, where the one button is.
-                notify("The NVIDIA driver was updated: your tune is not applied. Click here and test it (5 minutes).", false);
-            } else if (logon.decision == gao::BootDecision::SeveralGpus) {
-                // apply_at_logon wrote the whole refusal, link included, to boot.log, which the
-                // window's log shows; a balloon holds only the short one.
-                notify(gao::kSeveralGpusBalloon, false);
-            } else if (logon.decision != gao::BootDecision::NoProfile) {
-                notify(logon.message, false);   // apply_at_logon wrote boot.log
-            }
-        }
-        refresh_status(false);
-    }
+    if (tray_mode && g.ui.elevated) apply_as_at_logon();
+    driver_update_news();
     // The copy before this one kept the tune applied; so does this one.
     if (resume && g.ui.elevated && g.ui.profile && g.ui.profile_driver_ok && g.ui.profile_gpu_ok && g.ui.applied &&
         gao::tune_applied(*g.ui.profile, *g.ui.applied, g.ui.curve))
