@@ -115,6 +115,15 @@ inline std::pair<std::string, std::string> split_link(const std::string& text) {
     return {rest, text.substr(from, to - from)};
 }
 
+// After a restart for a new driver whose version the saved tune was tested on
+// (called only then): a driver install leaves the card at stock, so the tune
+// goes back on as at logon, when the app can write to the card, the tune is
+// this card's, it is not on the card already, and the user wants it kept
+// applied (Apply at logon on, or the copy before kept it applied).
+inline bool put_back_after_driver_restart(bool elevated, bool has_profile, bool gpu_ok, bool wanted, bool on_card) {
+    return elevated && has_profile && gpu_ok && wanted && !on_card;
+}
+
 struct UiActions {
     std::function<void(Preset)> optimize;
     std::function<void()> abort;
