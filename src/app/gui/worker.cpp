@@ -38,6 +38,7 @@ bool OptimizeWorker::launch(bool retest, bool puts_back, std::function<void(cons
         busy_question_.clear();
         busy_answer_.reset();
         put_back_ = false;
+        put_back_as_before_ = false;
         ++run_id_;
         started_ = std::chrono::steady_clock::now();
     }
@@ -81,9 +82,11 @@ bool OptimizeWorker::launch(bool retest, bool puts_back, std::function<void(cons
         // looks again.
         const std::optional<Profile> before = puts_back ? app::tune_before_run() : std::nullopt;
         job(hooks);
-        if (abort_.load() && !snapshot().kept() && app::put_back_after_stop(before, hooks)) {
+        bool as_before = false;
+        if (abort_.load() && !snapshot().kept() && app::put_back_after_stop(before, hooks, &as_before)) {
             std::lock_guard lock(mu_);
             put_back_ = true;
+            put_back_as_before_ = as_before;
         }
         {
             std::lock_guard lock(mu_);
@@ -236,6 +239,7 @@ OptimizeWorker::Snapshot OptimizeWorker::snapshot() const {
     Snapshot s{running_.load(), log_, run_id_, outcome_, undervolt_, all_in_one_, retest_, is_retest_};
     s.busy_question = busy_question_;
     s.put_back = put_back_;
+    s.put_back_as_before = put_back_as_before_;
     if (s.running) s.run_spent = std::chrono::duration<double>(std::chrono::steady_clock::now() - started_).count();
     if (!measuring_.empty()) {
         s.measuring = measuring_;

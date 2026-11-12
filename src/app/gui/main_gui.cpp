@@ -66,7 +66,8 @@ constexpr UINT_PTR kTimerTelemetry = 1;    // 1 s
 constexpr UINT_PTR kTimerWatchdog = 2;     // 30 s
 constexpr UINT_PTR kTimerStrike = 3;       // one-shot, 2 min after a logon apply
 constexpr UINT_PTR kTimerUpdate = 4;       // 24 h: look for a new release again
-enum MenuId : UINT { kMenuOpen = 1, kMenuReapply, kMenuRevert, kMenuExit };
+// New ids go after kMenuExit: a newer copy posts kMenuExit to an older one (end_other_instance).
+enum MenuId : UINT { kMenuOpen = 1, kMenuReapply, kMenuRevert, kMenuExit, kMenuStepDown, kMenuStepUp };
 
 struct App {
     HWND hwnd = nullptr;
@@ -435,6 +436,7 @@ void show_window() {
 }
 
 void act_apply();
+void act_step(int delta);
 void act_revert();
 
 // What a tray command did, as a balloon while the window is hidden: its
@@ -453,6 +455,14 @@ void tray_menu(int x, int y) {
     if (g.ui.elevated) {
         // Writing the GPU under a running search would corrupt its probes.
         AppendMenuW(menu, MF_STRING | (g.ui.profile && !busy ? 0 : MF_GRAYED), kMenuReapply, L"Re-apply saved tune");
+        if (g.ui.profile) {   // greyed as the Dashboard's -5 % / +5 % are
+            const bool usable = gao::gui::step_usable(g.ui) && !busy;
+            const UINT down = usable && gao::can_step_down(*g.ui.profile, g.ui.grid_khz) ? 0 : MF_GRAYED;
+            const UINT up = usable && gao::can_step_up(*g.ui.profile) ? 0 : MF_GRAYED;
+            AppendMenuW(menu, MF_STRING | down, kMenuStepDown,
+                        gao::widen(gao::gui::step_down_item(*g.ui.profile, g.ui.grid_khz)).c_str());
+            AppendMenuW(menu, MF_STRING | up, kMenuStepUp, gao::widen(gao::gui::step_up_item(*g.ui.profile)).c_str());
+        }
         AppendMenuW(menu, MF_STRING | (busy ? MF_GRAYED : 0), kMenuRevert, L"Revert to stock");
     }
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
@@ -466,6 +476,8 @@ void tray_menu(int x, int y) {
     switch (cmd) {
         case kMenuOpen: show_window(); break;
         case kMenuReapply: from_tray(act_apply); break;
+        case kMenuStepDown: from_tray([] { act_step(-1); }); break;
+        case kMenuStepUp: from_tray([] { act_step(1); }); break;
         case kMenuRevert: from_tray(act_revert); break;
         case kMenuExit:
             if (g.worker->running() &&
@@ -517,11 +529,16 @@ void fan_sync() {
 }
 
 // The curve as the saved undervolt sees it; empty without one, or when it
-// cannot be read. Reading needs no administrator rights.
+// cannot be read. Reading needs no administrator rights. The card's clock
+// grid is taken from the same read, for the -5 % / +5 % previews (as step_tune
+// reads it; only a flat top is rounded to it, so without an undervolt the
+// default does).
 std::optional<gao::CurveState> read_curve_state(const gao::Config& cfg) {
+    g.ui.grid_khz = gao::kDefaultGridKhz;
     if (!cfg.profile || !cfg.profile->undervolt || !g.gpu.read_vf_curve) return std::nullopt;
     const auto points = g.gpu.read_vf_curve();
     if (!points) return std::nullopt;
+    if (const int grid = gao::clock_grid_khz(*points); grid > 0) g.ui.grid_khz = grid;
     return gao::curve_state(*points, cfg.profile->undervolt->volt_uv, cfg.profile->core_mhz * 1000);
 }
 
@@ -720,6 +737,34 @@ void act_apply() {
     refresh_status(false);
 }
 
+// -1: the saved tune 5 % lower, +1: 5 % back up; applied, verified and saved by step_tune.
+void act_step(int delta) {
+    if (refuse_while_tuning()) return;
+    if (!g.nvml_ok || !g.nvapi_ok) { note("The NVIDIA driver is not available right now.", true); return; }
+    std::string why;
+    if (!gao::app::prepare_state(&why)) { note(why, true); return; }
+    const gao::app::StepOutcome out =
+        gao::app::step_tune(g.gpu, delta, g.nvml->DriverVersion(), g.nvml->GpuUuid(kGpu), g.nvml->DeviceCount());
+    if (!out.ok) {
+        if (out.applied_not_saved) {
+            // On the card but not in gao.json: the watchdog would fight it against the old saved tune.
+            g.watch = false;
+            note(out.message + "; the watchdog is off until you apply the saved tune", true);
+        } else {
+            // The message says what the card holds: not changed, at stock, or a reset that failed.
+            note(std::string(delta < 0 ? "Lower tune 5 %: " : "Raise tune 5 %: ") + out.message, true);
+        }
+        refresh_status(false);   // a failed apply ends at stock
+        return;
+    }
+    g.watch = true;   // also after the watchdog gave up: the lower step is the one to keep
+    g.watchdog = gao::Watchdog();
+    // boot.log has the line (step_tune), and the window's log shows boot.log: no note of its own.
+    // From the tray with the window hidden, the balloon says it instead.
+    if (!g.visible) tray_icon(NIM_MODIFY, nullptr, gao::widen(out.message).c_str(), false);
+    refresh_status(false);
+}
+
 void act_revert() {
     if (refuse_while_tuning()) return;
     if (!g.nvml_ok || !g.nvapi_ok) { note("The NVIDIA driver is not available right now.", true); return; }
@@ -776,6 +821,7 @@ void render() {
     act.answer_busy = act_answer_busy;
     act.restart_elevated = act_restart_elevated;
     act.apply_profile = act_apply;
+    act.step = act_step;
     act.revert_to_stock = act_revert;
     act.set_boot = act_boot;
     act.set_fan_curve = [](const gao::FanCurve& curve) {
@@ -1188,7 +1234,10 @@ void on_watchdog() {
                                (stock ? "card at stock" : "reset to stock FAILED, run `gao --reset`"));
             notify(std::string("The tune was reset, or the driver reset with it applied, 4 times within an hour, which usually "
                                "means it is not stable. ") +
+                       // The step only where the balloon has room for it: szInfo holds 255 characters,
+                       // and the FAILED text with it would lose its end.
                        (stock ? "The card is back at stock and the tune is not re-applied; optimize again."
+                                " Or lower it 5 % (Dashboard or the tray menu)."
                               : "Setting the card to stock FAILED: restart the PC. The tune is not re-applied; optimize again."),
                    false, true);
             break;
@@ -1234,6 +1283,9 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             g.watch = true;
             g.watchdog = gao::Watchdog();
             note("Applied from the command line; kept applied from now on.");
+        } else if (wp == static_cast<WPARAM>(gao::app::TrayNotice::TuneFailedTest)) {
+            g.watch = false;
+            note("A test from the command line did not hold; the tune is not re-applied.", true);
         } else {
             g.watch = false;
             note("Set to stock from the command line; not re-applied until you apply it again.", true);

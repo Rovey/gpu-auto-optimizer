@@ -2,6 +2,7 @@
 #include "app/gui/worker.hpp"
 #include "core/fan_curve.hpp"
 #include "core/config.hpp"
+#include "core/step_down.hpp"
 #include "core/types.hpp"
 #include "core/vf_curve.hpp"
 #include <algorithm>
@@ -45,6 +46,9 @@ struct UiState {
     // The voltage/frequency curve seen from the saved undervolt. Empty: no
     // undervolt is saved, or the curve could not be read.
     std::optional<CurveState> curve;
+    // The card's clock grid, for the -5 % / +5 % previews: read from the curve
+    // with the saved undervolt's, kDefaultGridKhz when it could not be read.
+    int grid_khz = kDefaultGridKhz;
     bool boot_on = false;
     int strikes = 0;
     std::vector<std::string> boot_log;   // the last lines of boot.log, oldest first
@@ -124,6 +128,61 @@ inline bool put_back_after_driver_restart(bool elevated, bool has_profile, bool 
     return elevated && has_profile && gpu_ok && wanted && !on_card;
 }
 
+// ------------------------------------------------- -5 % / +5 % (tune steps)
+
+// The Dashboard's step buttons and the tray's step items: as Apply saved
+// tune, only elevated, with a saved tune for this driver and card, and not
+// while a run or a test is under way.
+inline bool step_usable(const UiState& s) {
+    return s.elevated && s.profile && s.profile_gpu_ok && s.profile_driver_ok && !s.run_active;
+}
+
+// "-10 % (step 2)", or "the tune the run found" at step 0.
+inline std::string step_name(int step) { return step == 0 ? std::string("the tune the run found") : step_text(step); }
+
+// The -5 % button's tooltip: where it goes and the tune that sets, or why not.
+inline std::string step_down_tip(const Profile& p, int grid_khz) {
+    const int n = current_step(p);
+    if (n >= kMaxStep) return "Lower than this: optimize again";
+    if (!can_step_down(p, grid_khz)) return "This tune cannot be lowered further in 5 % steps; optimize again";
+    return "\xE2\x88\x92" "5 %: to " + step_text(n + 1) + " (" + app::profile_text(at_step(p, n + 1, grid_khz)) + ")";
+}
+
+// The +5 % button's tooltip, likewise.
+inline std::string step_up_tip(const Profile& p, int grid_khz) {
+    const int n = current_step(p);
+    if (n == 0) return "This is the tune the run found";
+    if (!can_step_up(p)) return "+5 %: " + step_name(n - 1) + " failed a test";
+    return "+5 %: back to " + step_name(n - 1) + " (" + app::profile_text(at_step(p, n - 1, grid_khz)) + ")";
+}
+
+// The tray menu's items: "Lower tune 5 % (to -10 %)", "Raise tune 5 % (back to -5 %)".
+inline std::string step_down_item(const Profile& p, int grid_khz) {
+    if (!can_step_down(p, grid_khz)) return "Lower tune 5 %";
+    return "Lower tune 5 % (to -" + std::to_string((current_step(p) + 1) * kStepPct) + " %)";
+}
+inline std::string step_up_item(const Profile& p) {
+    const int n = current_step(p);
+    if (n == 0 || !can_step_up(p)) return "Raise tune 5 %";
+    if (n == 1) return "Raise tune 5 % (back to the tune the run found)";
+    return "Raise tune 5 % (back to -" + std::to_string((n - 1) * kStepPct) + " %)";
+}
+
+// "Test this step (5 min)": a step that was not tested on its own and has not
+// failed a test, while the driver and card are the ones it was saved on.
+inline bool test_step_shown(const UiState& s) {
+    return s.elevated && s.profile && s.profile->step_down && s.profile->step_down->step > 0 && !s.profile->step_down->tested &&
+           !failed_its_test(*s.profile) && s.profile_gpu_ok && s.profile_driver_ok;
+}
+
+// The saved tune's step for the Dashboard: "-10 % (step 2), tested"; "" at step 0.
+inline std::string step_status(const Profile& p) {
+    if (!p.step_down || p.step_down->step == 0) return {};
+    return step_text(p.step_down->step) + (failed_its_test(p)    ? ", failed a test"
+                                           : p.step_down->tested ? ", tested"
+                                                                 : ", not tested on its own; from a tested tune");
+}
+
 struct UiActions {
     std::function<void(Preset)> optimize;
     std::function<void()> abort;
@@ -133,6 +192,7 @@ struct UiActions {
     std::function<void(std::optional<Preset>)> restart_elevated;
     std::function<void()> apply_profile;
     std::function<void()> retest;                         // the saved tune, five minutes, on the driver that is installed now
+    std::function<void(int)> step;                        // -1: lower the saved tune 5 %, +1: raise it 5 %
     std::function<void()> revert_to_stock;
     std::function<void(bool)> set_boot;
     std::function<void()> detect_gpu;

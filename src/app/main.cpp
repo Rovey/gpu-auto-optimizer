@@ -97,6 +97,8 @@ int main(int argc, char** argv) {
     }
     if (argc > 1 && std::strcmp(argv[1], "--stress-recreate") == 0) return stress_recreate();
     if (argc > 1 && std::strcmp(argv[1], "--apply") == 0) return apply();
+    if (argc > 1 && std::strcmp(argv[1], "--step-down") == 0) return step(-1);
+    if (argc > 1 && std::strcmp(argv[1], "--step-up") == 0) return step(+1);
     if (argc > 1 && std::strcmp(argv[1], "--retest") == 0) return putting_back(retest);
     if (argc > 2 && std::strcmp(argv[1], "--boot") == 0) {
         if (std::strcmp(argv[2], "on") == 0) return boot(true);
@@ -160,6 +162,8 @@ int main(int argc, char** argv) {
                 "            | --optimize all (all in one: stock measured, overclock, an undervolt on top of it at a clock\n"
                 "              between the two, the quietest fan curve, and a final test; about 40 minutes)\n"
                 "            | --apply | --boot on|off | --fan auto | --status\n"
+                "            | --step-down | --step-up (the saved tune 5 %% of its gain over stock closer to stock, or one step\n"
+                "              back; applied and saved when that verifies; at most 10 steps)\n"
                 "            | --retest (after a driver update: the saved tune under full load for five minutes; applied and\n"
                 "              saved for the new driver when that is stable, stock when it is not)\n"
                 "            | --curve (prints the voltage/frequency curve; changes nothing)\n"

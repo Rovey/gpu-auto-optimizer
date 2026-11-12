@@ -1,5 +1,6 @@
 #include "app/common_internal.hpp"
 #include "hw/app_files.hpp"
+#include "core/step_down.hpp"
 #include "hw/stress.hpp"
 #include <chrono>
 #include <memory>
@@ -52,10 +53,20 @@ RetestOutcome run_retest(const OptimizeHooks& hooks) {
     };
     io.log = hooks.log;
     io.measuring = hooks.measuring;
+    // After a driver reset, as in run_optimize: the card is left alone, then
+    // gets a fresh stress load before anything is measured on it.
+    io.rest = [&hooks](double seconds) { return rest_without_load(hooks, seconds); };
+    io.prepare_load = [&] {
+        if (load->Recreate()) return true;
+        if (hooks.log) hooks.log("the stress load could not be rebuilt: " + load->Error());
+        return false;
+    };
     if (hooks.active_gpu) hooks.active_gpu(&gpu);
     out.ran = true;
+    SteppedRetestResult stepped;
     const bool crashed = !guarded([&] {
-        out.result = retest_saved_tune(cfg, out.driver, gpu_id, gpu, io);
+        stepped = retest_stepping(cfg, out.driver, gpu_id, gpu, io, grid_khz_of(gpu));
+        out.result = stepped.last;
         if (fans) fans->release();
     });
     if (hooks.active_gpu) hooks.active_gpu(nullptr);
@@ -68,20 +79,47 @@ RetestOutcome run_retest(const OptimizeHooks& hooks) {
         (void)load.release();   // as in run_optimize: a load that faulted is left alone
         return to_stock("access violation while the tune was tested");
     }
-    if (!out.result.ok) {
-        if (out.result.test.seconds > 0)
-            boot_log("the saved tune was tested on driver " + out.driver + " and is not applied: " + out.result.reason);
-        return fail(out.result.reason + (out.result.at_stock ? " -- card at stock" : " -- reset to stock FAILED, run `gao --reset`"));
+    out.first_step = stepped.first_step;
+    out.final_step = stepped.final_step;
+    // An abort leaves the card at stock with the step under test in cfg: put it back.
+    std::string back;
+    bool reapplied = false;
+    // Only after a step down: an abort of the very first test ends at stock, the profile as it was saved.
+    bool back_at_stock = out.result.at_stock;
+    if (!stepped.ok && out.result.test.verdict == Verdict::Aborted && cfg.profile && out.final_step != out.first_step) {
+        std::string apply_why;
+        bool left_clean = false;
+        reapplied = apply_profile(gpu, *cfg.profile, &apply_why, &left_clean);
+        if (!reapplied) {
+            back = " (and it could not be applied again: " + apply_why + ")";
+            back_at_stock = left_clean;
+        }
     }
-    // Only the driver the tune belongs to, and the strikes, are this test's to change.
-    Config latest = load_config();
-    if (!latest.profile) return to_stock("the saved tune was removed while it was tested");
-    latest.profile->driver = out.driver;
-    latest.boot_strikes = 0;
-    if (!save_config(latest)) return to_stock("the tune held, but that could not be saved (" + config_path().string() + ")");
+    out.reapplied = reapplied;
+    // A stop is not a verdict on the tune: the caller puts back what was on the card (put_back_after_stop),
+    // so only a test that failed says "not applied". A stop after a step down saved a lower step: that is logged.
+    const bool stopped = out.result.test.verdict == Verdict::Aborted;
+    if (!stepped.ok && out.result.test.seconds > 0 && !stopped)
+        boot_log("the saved tune was tested on driver " + out.driver + " and is not applied: " + out.result.reason);
+    // A step that held, or a tune that was lowered on the way: the whole retested profile is saved,
+    // with the strikes cleared when it held.
+    if (stepped.ok || stepped.stepped) {
+        Config latest = load_config();
+        if (!latest.profile) return to_stock("the saved tune was removed while it was tested");
+        latest.profile = cfg.profile;
+        if (stepped.ok) latest.boot_strikes = 0;
+        if (!save_config(latest))
+            return to_stock(std::string(stepped.ok ? "the tune held" : "the tune was lowered") + ", but that could not be saved (" +
+                            config_path().string() + ")");
+        out.profile = *latest.profile;
+    }
+    if (reapplied) boot_log(retest_stopped_line(out));
+    if (!stepped.ok)
+        return fail(out.result.reason + back +
+                    (reapplied ? " -- " + step_text(out.final_step) + " is on the card again"
+                               : (back_at_stock ? " -- card at stock" : " -- reset to stock FAILED, run `gao --reset`")));
     out.ok = true;
-    out.profile = *latest.profile;
-    boot_log("tested again on driver " + out.driver + " (it was tested on " + out.driver_was + "): applied " + profile_text(out.profile));
+    boot_log(retest_boot_line(out));
     return out;
 }
 

@@ -37,7 +37,16 @@ struct StockOutcome {
     StabilityResult result;
 };
 
+// The card's clock grid from its V/F curve; kDefaultGridKhz when it cannot be read.
+int grid_khz_of(const GpuControl& gpu);
+
 StockOutcome measure_stock(const OptimizeHooks& hooks);
+
+// The wait between a driver reset and the next load (io.rest of the runs).
+// The card is left alone: no load, no driver call, no fan tick, and no log
+// line (the caller says that it rests). Short slices, so a stop request ends
+// the wait within a quarter of a second. False: cut short by one.
+bool rest_without_load(const OptimizeHooks& hooks, double seconds);
 Telemetry read_with_fans(const GpuControl& gpu, FanDriver& fans, const OptimizeHooks& hooks);
 
 // The fans of a run back to the driver, on every exit: done, aborted, failed

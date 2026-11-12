@@ -23,6 +23,16 @@ TEST_CASE("an applied tune needs nothing") {
     CHECK(w.check(tuned(), AppliedState{135, 1050, 106}, true, true, t0) == WatchAction::None);   // power within 1 %
 }
 
+TEST_CASE("a tune that failed its test is never put back") {
+    Watchdog w;
+    Profile p = tuned();
+    p.step_down = StepDown{.step = 2, .tested = false, .failed_step = 2, .found = FoundTune{150, 1150, std::nullopt}};
+    CHECK(w.check(p, kStock, true, true, t0) == WatchAction::None);
+    CHECK(w.check(p, kStock, true, true, t0 + 30s, std::nullopt, true) == WatchAction::None);
+    p.step_down->failed_step = 1;   // a step below it held: that one is kept applied
+    CHECK(w.check(p, kStock, true, true, t0 + 60s) == WatchAction::Reapply);
+}
+
 TEST_CASE("a tune reset to stock is re-applied") {
     Watchdog w;
     CHECK(w.check(tuned(), kStock, true, true, t0) == WatchAction::Reapply);

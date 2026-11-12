@@ -1,6 +1,8 @@
 #include "doctest/doctest.h"
 
 #include "app/common.hpp"
+#include "core/boot.hpp"
+#include "core/step_down.hpp"
 #include <string>
 #include <vector>
 
@@ -121,6 +123,77 @@ TEST_CASE("a retest's result lines carry the test's score") {
     CHECK(lines[1].rfind("RESULT: the tune holds on driver 617.42 (it was tested on 617.14) and is applied: ", 0) == 0);
 }
 
+TEST_CASE("a stepped retest names its step") {
+    gao::app::RetestOutcome retest;
+    retest.ran = true;
+    retest.ok = true;
+    retest.driver = "617.42";
+    retest.driver_was = "617.14";
+    retest.result.test = measured(5742, 190);
+    retest.first_step = 1;
+    retest.final_step = 2;
+    const auto lines = gao::app::result_lines(retest);
+    REQUIRE(lines.size() == 2);
+    CHECK(lines[1].rfind("RESULT: the tune held at -10 % (step 2) after -5 % (step 1) failed", 0) == 0);
+}
+
+TEST_CASE("a retest that stepped from the tune the run found names it") {
+    gao::app::RetestOutcome retest;
+    retest.ran = true;
+    retest.ok = true;
+    retest.driver = "617.42";
+    retest.driver_was = "617.14";
+    retest.result.test = measured(5742, 190);
+    retest.first_step = 0;
+    retest.final_step = 1;
+    const auto lines = gao::app::result_lines(retest);
+    REQUIRE(lines.size() == 2);
+    CHECK(lines[1].rfind("RESULT: the tune held at -5 % (step 1) after the tune the run found failed, on driver ", 0) == 0);
+}
+
+TEST_CASE("a retest that stepped more than once names the range that failed") {
+    gao::app::RetestOutcome retest;
+    retest.ran = true;
+    retest.ok = true;
+    retest.driver = "617.42";
+    retest.driver_was = "617.14";
+    retest.result.test = measured(5742, 190);
+    retest.first_step = 1;
+    retest.final_step = 3;
+    auto lines = gao::app::result_lines(retest);
+    REQUIRE(lines.size() == 2);
+    CHECK(lines[1].rfind("RESULT: the tune held at -15 % (step 3) after -5 % (step 1) to -10 % (step 2) failed, on driver 617.42 "
+                         "(it was tested on 617.14), and is applied: ",
+                         0) == 0);
+    retest.first_step = 0;
+    lines = gao::app::result_lines(retest);
+    REQUIRE(lines.size() == 2);
+    CHECK(lines[1].rfind("RESULT: the tune held at -15 % (step 3) after the tune the run found to -10 % (step 2) failed, ", 0) == 0);
+}
+
+TEST_CASE("a retest on the driver the tune was tested on does not name it twice") {
+    gao::app::RetestOutcome retest;
+    retest.ran = true;
+    retest.ok = true;
+    retest.driver = "621.14";
+    retest.driver_was = "621.14";
+    retest.result.test = measured(5870, 164);
+    auto lines = gao::app::result_lines(retest);
+    REQUIRE(lines.size() == 2);
+    CHECK(lines[1].rfind("RESULT: the tune holds on driver 621.14 and is applied: ", 0) == 0);
+    CHECK(gao::app::retest_boot_line(retest).rfind("tested on driver 621.14: applied ", 0) == 0);
+    retest.first_step = 1;
+    retest.final_step = 3;
+    lines = gao::app::result_lines(retest);
+    REQUIRE(lines.size() == 2);
+    CHECK(lines[1].rfind("RESULT: the tune held at -15 % (step 3) after -5 % (step 1) to -10 % (step 2) failed, on driver 621.14, and is "
+                         "applied: ",
+                         0) == 0);
+    // After a driver update both are named.
+    retest.driver = "621.30";
+    CHECK(gao::app::retest_boot_line(retest).rfind("tested again on driver 621.30 (it was tested on 621.14): applied ", 0) == 0);
+}
+
 TEST_CASE("the logon refusal on a PC with two NVIDIA GPUs says why") {
     const std::string text = gao::app::decision_text(gao::BootDecision::SeveralGpus, gao::Config{}, "617.14");
     CHECK(text == gao::kSeveralGpusRefusal);
@@ -131,4 +204,119 @@ TEST_CASE("the logon refusal on a PC with two NVIDIA GPUs says why") {
                             "https://github.com/Rovey/gpu-auto-optimizer/issues";
     CHECK(text.size() >= ask.size());
     CHECK(text.compare(text.size() - ask.size(), ask.size(), ask) == 0);
+}
+
+TEST_CASE("the logon refusal after too many crashes offers the step down first") {
+    gao::Config c;
+    c.boot_strikes = gao::kMaxBootStrikes;
+    CHECK(gao::app::decision_text(gao::BootDecision::TooManyStrikes, c, "617.14") ==
+          "disabled after " + std::to_string(gao::kMaxBootStrikes) +
+              " crashes; turn boot-apply on again to retry; or lower the tune 5 % and turn boot-apply on again");
+}
+
+namespace {
+// The found tune of a saved profile that was lowered to `step`, with `failed` on record.
+gao::Config stepped_config(int step, int failed) {
+    gao::Config c;
+    gao::Profile p;
+    p.power_pct = 110;
+    p.core_mhz = 150;
+    p.mem_mhz = 1000;
+    p.driver = "617.14";
+    p.gpu = "GPU-1";
+    c.profile = gao::at_step(p, step, gao::kDefaultGridKhz);
+    c.profile->step_down->failed_step = failed;
+    return c;
+}
+}
+
+TEST_CASE("the logon refusal of a tune that failed its test names the step") {
+    gao::Config c = stepped_config(2, 2);
+    CHECK(gao::app::decision_text(gao::BootDecision::FailedTest, c, "617.14") ==
+          "the saved tune failed its test at -10 % (step 2); optimize again or lower it 5 %");
+    c = stepped_config(gao::kMaxStep, gao::kMaxStep);
+    CHECK(gao::app::decision_text(gao::BootDecision::FailedTest, c, "617.14") ==
+          "the saved tune failed its test at -50 % (step 10); optimize again");
+}
+
+TEST_CASE("a stepped retest that found no step that holds names the steps that failed") {
+    gao::app::RetestOutcome retest;
+    retest.ran = true;
+    retest.driver = retest.driver_was = "617.14";
+    retest.result.test = measured(5742, 190);
+    retest.result.test.verdict = gao::Verdict::WrongResult;
+    retest.error = "the tune did not hold on driver 617.14 (WRONG RESULT); optimize again -- card at stock";
+    retest.first_step = 1;
+    retest.final_step = 10;
+    auto lines = gao::app::result_lines(retest);
+    REQUIRE(lines.size() == 2);
+    CHECK(lines[1] == "RESULT: not applied -- -5 % (step 1) to -50 % (step 10) failed: " + retest.error);
+    retest.first_step = 0;
+    retest.final_step = 1;
+    lines = gao::app::result_lines(retest);
+    CHECK(lines[1] == "RESULT: not applied -- the tune the run found to -5 % (step 1) failed: " + retest.error);
+    // One step that failed on its own is named too, at step 0 not.
+    retest.first_step = retest.final_step = 2;
+    CHECK(gao::app::result_lines(retest)[1] == "RESULT: not applied -- -10 % (step 2) failed: " + retest.error);
+    retest.first_step = retest.final_step = 0;
+    CHECK(gao::app::result_lines(retest)[1] == "RESULT: not applied -- " + retest.error);
+    // Stopped: the step under test did not fail.
+    retest.first_step = 1;
+    retest.final_step = 2;
+    retest.result.test.verdict = gao::Verdict::Aborted;
+    retest.error = "aborted -- card at stock";
+    CHECK(gao::app::result_lines(retest)[1] == "RESULT: not applied -- " + retest.error);
+    // Stopped after a step down: the step under test is on the card and saved, and the line says so.
+    retest.reapplied = true;
+    retest.driver = retest.driver_was = "621.14";
+    retest.error = "aborted -- -10 % (step 2) is on the card again";
+    const std::string stopped = gao::app::result_lines(retest)[1];
+    CHECK(stopped.rfind("RESULT: stopped while testing -10 % (step 2) on driver 621.14, after -5 % (step 1) failed; "
+                        "-10 % (step 2) is applied and saved, not tested on its own: ", 0) == 0);
+    CHECK(stopped.find("not applied") == std::string::npos);
+    retest.first_step = 0;
+    retest.final_step = 3;
+    CHECK(gao::app::retest_stopped_line(retest).find(", after the tune the run found to -10 % (step 2) failed; ") != std::string::npos);
+}
+
+TEST_CASE("a retest that ran and failed tells a running tray to stop keeping the tune") {
+    gao::app::RetestOutcome retest;
+    retest.ran = true;
+    retest.result.test = measured(5742, 190);
+    CHECK_FALSE(gao::app::retest_failed(retest));   // it held, and only the save went wrong
+    retest.result.test.verdict = gao::Verdict::WrongResult;
+    CHECK(gao::app::retest_failed(retest));
+    retest.ok = true;
+    CHECK_FALSE(gao::app::retest_failed(retest));
+    retest.ok = false;
+    retest.result.test.verdict = gao::Verdict::Aborted;
+    CHECK_FALSE(gao::app::retest_failed(retest));   // stopped: the tune it found is put back
+    retest.result.test = gao::StabilityResult{};       // refused before the test: nothing changed
+    CHECK_FALSE(gao::app::retest_failed(retest));
+}
+
+TEST_CASE("a tune that failed its test can be lowered, not raised") {
+    std::string why;
+    const gao::Config failed = stepped_config(2, 2);
+    const auto down = gao::app::step_base(failed, -1, "617.14", "GPU-1", 1, &why);
+    REQUIRE(down);
+    CHECK(down->step_down->step == 2);
+    CHECK_FALSE(gao::app::step_base(failed, 1, "617.14", "GPU-1", 1, &why));
+    CHECK(why == gao::app::decision_text(gao::BootDecision::FailedTest, failed, "617.14"));
+    // Every other refusal holds both ways.
+    CHECK_FALSE(gao::app::step_base(failed, -1, "617.42", "GPU-1", 1, &why));
+    CHECK_FALSE(gao::app::step_base(failed, -1, "617.14", "GPU-2", 1, &why));
+    // Strikes only gate the logon apply.
+    gao::Config struck = stepped_config(2, 1);
+    struck.boot_strikes = gao::kMaxBootStrikes;
+    CHECK(gao::app::step_base(struck, 1, "617.14", "GPU-1", 1, &why));
+}
+
+TEST_CASE("a step that was refused before anything was written says the card was not changed") {
+    CHECK(gao::app::step_not_applied("profile values out of range; nothing applied", true) ==
+          "not applied, the card was not changed: profile values out of range; nothing applied");
+    CHECK(gao::app::step_not_applied("setting core +150 MHz failed -- card at stock", true) ==
+          "not applied: setting core +150 MHz failed -- card at stock");
+    CHECK(gao::app::step_not_applied("setting core +150 MHz failed -- reset to stock FAILED, run `gao --reset`", false) ==
+          "not applied: setting core +150 MHz failed -- reset to stock FAILED, run `gao --reset`");
 }

@@ -3,6 +3,7 @@
 #define NOMINMAX
 #include <windows.h>
 #include "hw/app_files.hpp"
+#include "core/step_down.hpp"
 #include "core/version.hpp"
 #include <cstdio>
 #include <ctime>
@@ -124,11 +125,19 @@ std::string decision_text(BootDecision d, const Config& c, const std::string& dr
         case BootDecision::NoProfile: return "no saved profile; run an optimize first";
         case BootDecision::SeveralGpus: return kSeveralGpusRefusal;
         case BootDecision::TooManyStrikes:
-            return "disabled after " + std::to_string(kMaxBootStrikes) + " crashes; turn boot-apply on again to retry";
+            return "disabled after " + std::to_string(kMaxBootStrikes) + " crashes; turn boot-apply on again to retry"
+                   "; or lower the tune 5 % and turn boot-apply on again";
         case BootDecision::DriverChanged:
             if (driver.empty()) return "driver version unknown (NVML did not report it); not applied";
             return "the driver was updated (" + c.profile->driver + " -> " + driver + "); " + kDriverChangedAdvice;
         case BootDecision::GpuChanged: return "this is not the card the profile was tested on; optimize again";
+        case BootDecision::FailedTest: {
+            // decide_boot says FailedTest only for a profile with step_down. The grid only rounds a flat
+            // top; the default is near enough to say whether a step remains.
+            const int step = c.profile ? current_step(*c.profile) : 0;
+            const bool lower = c.profile && can_step_down(*c.profile, kDefaultGridKhz);
+            return "the saved tune failed its test at " + step_text(step) + (lower ? "; optimize again or lower it 5 %" : "; optimize again");
+        }
         case BootDecision::Apply: return "apply";
     }
     return "unknown";

@@ -9,6 +9,20 @@
 
 namespace gao::app {
 
+bool rest_without_load(const OptimizeHooks& hooks, double seconds) {
+    const auto stop_requested = [&hooks] { return hooks.aborted && hooks.aborted(); };
+    if (stop_requested()) return false;
+    if (!(seconds > 0)) return true;   // nothing to wait for
+    using namespace std::chrono;
+    const auto end = steady_clock::now() + duration_cast<steady_clock::duration>(duration<double>(std::min(seconds, 3600.0)));
+    for (;;) {
+        const auto left_ms = duration_cast<milliseconds>(end - steady_clock::now()).count();
+        if (left_ms <= 0) return true;
+        Sleep(static_cast<DWORD>(left_ms < 250 ? left_ms : 250));
+        if (stop_requested()) return false;
+    }
+}
+
 OptimizeOutcome run_optimize(Preset preset, const OptimizeHooks& hooks, const std::optional<FanCurve>& fan_curve,
                              const std::optional<StabilityResult>& known_stock) {
     OptimizeOutcome out;
@@ -88,23 +102,7 @@ OptimizeOutcome run_optimize(Preset preset, const OptimizeHooks& hooks, const st
         return gbps;
     };
     io.bandwidth_unsettled = [&] { return load->BandwidthUnsettled(); };
-    // The wait between a driver reset and the next load. The card is left
-    // alone: no load, no driver call, no fan tick, and no log line (the search
-    // says that it rests). Short slices, so a stop request ends the wait
-    // within a quarter of a second.
-    io.rest = [&hooks](double seconds) {
-        const auto stop_requested = [&hooks] { return hooks.aborted && hooks.aborted(); };
-        if (stop_requested()) return false;
-        if (!(seconds > 0)) return true;   // nothing to wait for
-        using namespace std::chrono;
-        const auto end = steady_clock::now() + duration_cast<steady_clock::duration>(duration<double>(std::min(seconds, 3600.0)));
-        for (;;) {
-            const auto left_ms = duration_cast<milliseconds>(end - steady_clock::now()).count();
-            if (left_ms <= 0) return true;
-            Sleep(static_cast<DWORD>(left_ms < 250 ? left_ms : 250));
-            if (stop_requested()) return false;
-        }
-    };
+    io.rest = [&hooks](double seconds) { return rest_without_load(hooks, seconds); };
     // After a driver reset the load may hold a removed device without having
     // noticed. A fresh one is built here, outside any probe, so the health
     // probe times the card and not the load's start-up.
@@ -303,16 +301,7 @@ UndervoltOutcome run_undervolt(const OptimizeHooks& hooks, bool on_saved_tune, c
     io.aborted = hooks.aborted;
     io.log = hooks.log;
     io.measuring = hooks.measuring;
-    io.rest = [&hooks](double seconds) {   // no load, no driver call; a stop request ends it within a quarter of a second
-        using namespace std::chrono;
-        const auto end = steady_clock::now() + duration_cast<steady_clock::duration>(duration<double>(std::min(seconds, 3600.0)));
-        for (;;) {
-            if (hooks.aborted && hooks.aborted()) return false;
-            const auto left_ms = duration_cast<milliseconds>(end - steady_clock::now()).count();
-            if (left_ms <= 0) return true;
-            Sleep(static_cast<DWORD>(left_ms < 250 ? left_ms : 250));
-        }
-    };
+    io.rest = [&hooks](double seconds) { return rest_without_load(hooks, seconds); };
     io.prepare_load = [&] {
         if (load->Recreate()) return true;
         log("the stress load could not be rebuilt: " + load->Error());

@@ -113,12 +113,15 @@ void tuning_card(UiState& s, const UiActions& act) {
                 if (p.mem_mhz != 0) tune += ", memory " + offset(p.mem_mhz);
             }
             row("Saved tune", std::string(title_of(p.preset)) + ": " + tune + " (" + p.saved_at + ")");
+            const std::string step = step_status(p);   // lowered with -5 %, or by a test that failed
+            if (!step.empty()) row("Step", step);
             // What the run that saved it measured under full load, five minutes each.
             if (const auto& m = p.against_stock; m && s.profile_gpu_ok) {
                 row("Speed vs stock", stock_to_tune(m->stock.score, m->tuned.score, " it/s", true));
                 row("Power vs stock", stock_to_tune(m->stock.power_w, m->tuned.power_w, " W", true));
                 row("Fans under load", stock_to_tune(m->stock.fan_pct, m->tuned.fan_pct, " %", false));
                 row("Peak temperature", stock_to_tune(m->stock.peak_temp_c, m->tuned.peak_temp_c, " \xC2\xB0""C", false));
+                if (!step.empty()) row("", "(measured for the tune the run found, not for this step)", kDim);
             } else if (s.profile_gpu_ok) {
                 row("Against stock", "Not measured for this tune (it was made by an older version).", kDim);
             }
@@ -142,8 +145,15 @@ void tuning_card(UiState& s, const UiActions& act) {
     const ImGuiStyle& style = ImGui::GetStyle();
     const float right_w = std::max(em() * 17, ImGui::GetContentRegionAvail().x * 0.36f);
     const float left_w = ImGui::GetContentRegionAvail().x - right_w - gap;
-    // Four buttons in the actions column, with the spacing between them and the column's padding.
-    const float buttons_h = em() * 2.3f * 4 + style.ItemSpacing.y * 3 + style.WindowPadding.y * 2;
+    // -5 % / +5 % next to Apply saved tune (elevated, as it is), and the test of a
+    // step that was not tested on its own while the driver is the one it was saved on
+    // (not of one that failed a test: -5 % is the way on from there).
+    const bool steps = s.elevated && s.profile;
+    const bool test_step = test_step_shown(s);
+    // Four buttons in the actions column, and the step row and test above,
+    // with the spacing between them and the column's padding.
+    const int buttons = 4 + (steps ? 1 : 0) + (test_step ? 1 : 0);
+    const float buttons_h = em() * 2.3f * buttons + style.ItemSpacing.y * (buttons - 1) + style.WindowPadding.y * 2;
     // As tall as the rows were in the last frame: how a value wraps is only
     // known once the table has laid it out, and an estimate cut the last row
     // off in a narrow window.
@@ -180,6 +190,26 @@ void tuning_card(UiState& s, const UiActions& act) {
         if (ImGui::Button("Restart as administrator", ImVec2(bw, bh))) act.restart_elevated(std::nullopt);
     } else {
         if (primary_button("Restart as administrator", ImVec2(bw, bh))) act.restart_elevated(std::nullopt);
+    }
+    if (steps) {
+        // The tips also show on a greyed button: they say why it is.
+        const Profile& p = *s.profile;
+        const bool usable = step_usable(s);
+        const float half = (bw - style.ItemSpacing.x) / 2;
+        ImGui::BeginDisabled(!usable || !can_step_down(p, s.grid_khz));
+        if (ImGui::Button("\xE2\x88\x92" "5 %", ImVec2(half, bh))) act.step(-1);
+        ImGui::EndDisabled();
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("%s", step_down_tip(p, s.grid_khz).c_str());
+        ImGui::SameLine();
+        ImGui::BeginDisabled(!usable || !can_step_up(p));
+        if (ImGui::Button("+5 %", ImVec2(half, bh))) act.step(1);
+        ImGui::EndDisabled();
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("%s", step_up_tip(p, s.grid_khz).c_str());
+    }
+    if (test_step) {
+        ImGui::BeginDisabled(s.run_active);
+        if (ImGui::Button("Test this step (5 min)", ImVec2(bw, bh))) act.retest();
+        ImGui::EndDisabled();
     }
     // Apply at logon: a framed row with a switch.
     ImGui::PushStyleColor(ImGuiCol_ChildBg, kCard);
