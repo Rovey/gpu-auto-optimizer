@@ -105,4 +105,13 @@ std::optional<FanCurve> active_fan_curve(const Config& c);
 // learned on this card, never below what NVML reports.
 int fan_min_for(const Config& c, const std::string& gpu, int nvml_min);
 
+// A run that did not finish (stopped, failed, or ended at stock) keeps nothing:
+// gao.json goes back to what it held before the run. An All in one run saves
+// its overclock and undervolt as its steps end; this takes them back. The
+// run's own fields (the profile, the fan curve and whether it drives the
+// fans, the strikes that belong to the profile) come from `before`; what was
+// learned or set meanwhile (the fans' minimum, the update check) stays as in
+// `now`. nullopt: `now` already holds the tune from before the run.
+std::optional<Config> undo_unfinished_run(const Config& before, const Config& now);
+
 }

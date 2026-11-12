@@ -36,7 +36,7 @@ test the part that changed, directly; it usually takes minutes:
 - What a run logs: an aborted or refused run already writes its `RESULT:` line to `run.log`.
 
 Before anything that can save a profile, copy `%ProgramData%\GpuAutoOptimizer\gao.json`: a run replaces the
-saved tune as soon as its overclock step ends. Keep full runs for release checks, when nobody needs the
+saved tune as soon as its overclock step ends (a run that is stopped or fails writes the old one back, a crash or power loss does not). Keep full runs for release checks, when nobody needs the
 machine; run them from the command line with the window closed, because the NVIDIA app's Instant Replay
 records while the app's window is open and lowers the measurements by about 2 %. `tools\hwchecks.ps1`
 drives the checks of `docs/hardware-checks.md` that run `gao`.

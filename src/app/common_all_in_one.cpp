@@ -117,9 +117,9 @@ FanStepOutcome fan_step(const OptimizeHooks& hooks, int start_pct) {
     return out;
 }
 
-}
-
-AllInOneOutcome run_all_in_one(const OptimizeHooks& outer) {
+// The steps of run_all_in_one. Steps 2 and 3 save what they found as they end;
+// a run that does not get to the end has that taken back by run_all_in_one.
+AllInOneOutcome all_in_one_steps(const OptimizeHooks& outer) {
     AllInOneOutcome out;
     auto log = [&](const std::string& m) { if (outer.log) outer.log(m); };
     auto stop = [&](const std::string& why) { out.error = why; return out; };
@@ -211,6 +211,31 @@ AllInOneOutcome run_all_in_one(const OptimizeHooks& outer) {
     }
     out.profile = *cfg.profile;
     out.ok = true;
+    return out;
+}
+
+}
+
+AllInOneOutcome run_all_in_one(const OptimizeHooks& outer) {
+    // Taken here as well (it is taken again on this thread by the steps), so that the
+    // watchdog stays out until gao.json holds the tune from before the run again.
+    const TuningLock lock;
+    const std::optional<Config> before = lock.owned() ? std::optional<Config>(load_config()) : std::nullopt;
+    AllInOneOutcome out = all_in_one_steps(outer);
+    if (out.ok || !before) return out;
+    // Stopped, failed, or ended at stock: nothing of this run is kept. The caller
+    // puts the tune that was on the card back (put_back_after_stop) after a stop.
+    const auto back = undo_unfinished_run(*before, load_config());
+    if (!back) return out;
+    auto log = [&](const std::string& m) { if (outer.log) outer.log(m); };
+    if (save_config(*back)) {
+        log("  nothing of this run is kept: the saved tune is the one from before the run" +
+            (before->profile ? ": " + profile_text(*before->profile) : std::string(" (none)")));
+    } else {
+        out.error += " (and the tune from before the run could not be saved back to " + config_path().string() +
+                     ": the saved tune is the one this run found)";
+        log("  the tune from before the run could not be saved back to " + config_path().string());
+    }
     return out;
 }
 
