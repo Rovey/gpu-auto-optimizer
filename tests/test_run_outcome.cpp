@@ -264,8 +264,19 @@ TEST_CASE("a stepped retest that found no step that holds names the steps that f
     retest.first_step = 1;
     retest.final_step = 2;
     retest.result.test.verdict = gao::Verdict::Aborted;
-    retest.error = "aborted -- the tune under test is applied again";
+    retest.error = "aborted -- card at stock";
     CHECK(gao::app::result_lines(retest)[1] == "RESULT: not applied -- " + retest.error);
+    // Stopped after a step down: the step under test is on the card and saved, and the line says so.
+    retest.reapplied = true;
+    retest.driver = retest.driver_was = "621.14";
+    retest.error = "aborted -- -10 % (step 2) is on the card again";
+    const std::string stopped = gao::app::result_lines(retest)[1];
+    CHECK(stopped.rfind("RESULT: stopped while testing -10 % (step 2) on driver 621.14, after -5 % (step 1) failed; "
+                        "-10 % (step 2) is applied and saved, not tested on its own: ", 0) == 0);
+    CHECK(stopped.find("not applied") == std::string::npos);
+    retest.first_step = 0;
+    retest.final_step = 3;
+    CHECK(gao::app::retest_stopped_line(retest).find(", after the tune the run found to -10 % (step 2) failed; ") != std::string::npos);
 }
 
 TEST_CASE("a retest that ran and failed tells a running tray to stop keeping the tune") {

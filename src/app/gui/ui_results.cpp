@@ -175,6 +175,10 @@ bool retest_result(const app::RetestOutcome& o, bool put_back) {
             if (!put_back && o.error.find("FAILED") != std::string::npos)
                 wrapped(kBad, std::string("You stopped the test. ") + kStockFailed);
             else wrapped(kText, "You stopped the test.");
+            // After a step down the step under test is on the card and saved, not the tune from before the test.
+            if (o.reapplied)
+                wrapped(kText, "The saved tune is now " + step_text(o.final_step) + ", the step under test, and it is on the card. " +
+                                   "It is not tested on its own: the step above it failed.");
             return false;
         }
         heading("Not applied");
@@ -218,7 +222,7 @@ void results(UiState& s, const OptimizeWorker::Snapshot& run, const UiActions& a
                          : run.undervolt  ? undervolt_result(*run.undervolt, run.put_back)
                                           : optimize_result(*run.outcome, run.put_back);
     // Stopped, and the saved tune that was on the card before the run is on it again (worker.cpp).
-    if (!applied && run.put_back) wrapped(kText, "Your saved tune is on the card again, as it was before the run.");
+    if (!applied && run.put_back && run.put_back_as_before) wrapped(kText, "Your saved tune is on the card again, as it was before the run.");
     const int resets = run.all_in_one ? app::driver_resets(*run.all_in_one)
                        : run.undervolt ? app::driver_resets(*run.undervolt)
                        : run.outcome   ? app::driver_resets(*run.outcome)

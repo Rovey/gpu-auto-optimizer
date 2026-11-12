@@ -181,7 +181,7 @@ std::optional<Profile> tune_before_run() {
     return cfg.profile;
 }
 
-bool put_back_after_stop(const std::optional<Profile>& before_run, const OptimizeHooks& hooks) {
+bool put_back_after_stop(const std::optional<Profile>& before_run, const OptimizeHooks& hooks, bool* as_before) {
     if (!before_run) return false;
     auto log = [&](const std::string& m) { if (hooks.log) hooks.log(m); };
     // A stepped test that was stopped saved the step under test and put it back
@@ -192,6 +192,7 @@ bool put_back_after_stop(const std::optional<Profile>& before_run, const Optimiz
         return false;
     }
     const bool same = *before == *before_run;
+    if (as_before) *as_before = same;
     const TuningLock lock;   // the watchdog keeps out of it meanwhile
     GuardedGpu hw(kGpu);
     std::string why;

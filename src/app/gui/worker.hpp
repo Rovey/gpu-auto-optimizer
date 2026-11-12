@@ -40,6 +40,7 @@ public:
         std::vector<BusyProgram> busy_question;
         // The run was stopped and put back the tune that was on the card before it.
         bool put_back = false;
+        bool put_back_as_before = false;   // and it is the tune from before the run, not a step saved since
         bool ended() const { return outcome || undervolt || all_in_one || retest; }
         // The run got as far as the search: it ended at its result or at stock.
         bool ran() const {
@@ -87,6 +88,7 @@ private:
     std::vector<BusyProgram> busy_question_;
     std::optional<BusyAnswer> busy_answer_;
     bool put_back_ = false;
+    bool put_back_as_before_ = false;
     unsigned run_id_ = 0;
     std::condition_variable busy_cv_;
     std::atomic<bool> running_{false};

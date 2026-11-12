@@ -759,7 +759,9 @@ void act_step(int delta) {
     }
     g.watch = true;   // also after the watchdog gave up: the lower step is the one to keep
     g.watchdog = gao::Watchdog();
-    note(out.message);
+    // boot.log has the line (step_tune), and the window's log shows boot.log: no note of its own.
+    // From the tray with the window hidden, the balloon says it instead.
+    if (!g.visible) tray_icon(NIM_MODIFY, nullptr, gao::widen(out.message).c_str(), false);
     refresh_status(false);
 }
 

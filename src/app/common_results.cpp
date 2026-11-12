@@ -107,7 +107,9 @@ std::string step_name(int step) { return step == 0 ? std::string("the tune the r
 std::vector<std::string> result_lines(const RetestOutcome& o) {
     std::vector<std::string> lines;
     if (o.result.test.seconds > 0) lines.push_back(measured_line(verdict_name(o.result.test.verdict), o.result.test, true));
-    if (!o.ok) {
+    if (!o.ok && o.reapplied) {
+        lines.push_back("RESULT: " + retest_stopped_line(o));
+    } else if (!o.ok) {
         // Every step from the first to the last one tested failed; a stopped test failed nothing.
         const bool named = o.result.test.seconds > 0 && o.result.test.verdict != Verdict::Aborted &&
                            (o.final_step != o.first_step || o.first_step > 0);
@@ -126,6 +128,15 @@ std::vector<std::string> result_lines(const RetestOutcome& o) {
     } else
         lines.push_back("RESULT: the tune holds on " + retest_driver(o) + " and is applied: " + profile_text(o.profile));
     return lines;
+}
+
+std::string retest_stopped_line(const RetestOutcome& o) {
+    // Every step from the first to the one below the step under test failed.
+    const int last_failed = o.final_step - 1;
+    const std::string failed =
+        step_name(o.first_step) + (last_failed > o.first_step ? " to " + step_name(last_failed) : std::string());
+    return "stopped while testing " + step_text(o.final_step) + " on " + retest_driver(o) + ", after " + failed + " failed; " +
+           step_text(o.final_step) + " is applied and saved, not tested on its own: " + profile_text(o.profile);
 }
 
 bool retest_failed(const RetestOutcome& o) {

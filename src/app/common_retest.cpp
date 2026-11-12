@@ -95,7 +95,11 @@ RetestOutcome run_retest(const OptimizeHooks& hooks) {
             back_at_stock = left_clean;
         }
     }
-    if (!stepped.ok && out.result.test.seconds > 0 && !reapplied)
+    out.reapplied = reapplied;
+    // A stop is not a verdict on the tune: the caller puts back what was on the card (put_back_after_stop),
+    // so only a test that failed says "not applied". A stop after a step down saved a lower step: that is logged.
+    const bool stopped = out.result.test.verdict == Verdict::Aborted;
+    if (!stepped.ok && out.result.test.seconds > 0 && !stopped)
         boot_log("the saved tune was tested on driver " + out.driver + " and is not applied: " + out.result.reason);
     // A step that held, or a tune that was lowered on the way: the whole retested profile is saved,
     // with the strikes cleared when it held.
@@ -109,9 +113,10 @@ RetestOutcome run_retest(const OptimizeHooks& hooks) {
                             config_path().string() + ")");
         out.profile = *latest.profile;
     }
+    if (reapplied) boot_log(retest_stopped_line(out));
     if (!stepped.ok)
         return fail(out.result.reason + back +
-                    (reapplied ? std::string(" -- the tune under test is applied again")
+                    (reapplied ? " -- " + step_text(out.final_step) + " is on the card again"
                                : (back_at_stock ? " -- card at stock" : " -- reset to stock FAILED, run `gao --reset`")));
     out.ok = true;
     boot_log(retest_boot_line(out));

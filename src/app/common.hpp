@@ -127,7 +127,8 @@ std::vector<BusyProgram> busy_now();
 // be applied), never `before`. True when the card holds what was put back on
 // return; false when there was none or it failed.
 std::optional<Profile> tune_before_run();
-bool put_back_after_stop(const std::optional<Profile>& before, const OptimizeHooks& hooks);
+// *as_before: what is on the card is the tune from before the run (not a step saved since).
+bool put_back_after_stop(const std::optional<Profile>& before, const OptimizeHooks& hooks, bool* as_before = nullptr);
 
 struct OptimizeOutcome {
     bool ran = false;          // false: stopped before tuning; `error` says why
@@ -245,6 +246,9 @@ struct RetestOutcome {
     Profile profile;          // the saved tune as it is now; valid when ok
     int first_step = 0;       // the step the test began at
     int final_step = 0;       // the step it ended at (the one that held when ok)
+    // Stopped after a step down: the step under test (final_step) is on the
+    // card again and saved; `profile` is valid.
+    bool reapplied = false;
 };
 // The fans are as in daily use: on the app's curve when it drives them, with
 // the NVIDIA driver otherwise. A tune that does not pass steps down and is
@@ -257,6 +261,10 @@ std::vector<std::string> result_lines(const RetestOutcome& o);
 // The boot.log line of a retest that held: "tested on driver X: applied ...",
 // or "tested again on driver X (it was tested on Y): ..." after a driver change.
 std::string retest_boot_line(const RetestOutcome& o);
+// The RESULT and boot.log text of a test stopped after a step down (reapplied):
+// "stopped while testing -10 % (step 2) on driver X, after -5 % (step 1) failed;
+// -10 % (step 2) is applied and saved, not tested on its own: ...".
+std::string retest_stopped_line(const RetestOutcome& o);
 // The test ran and the tune did not hold (not stopped, not refused before it):
 // a running tray must stop keeping it applied.
 bool retest_failed(const RetestOutcome& o);
