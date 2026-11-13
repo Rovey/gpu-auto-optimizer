@@ -34,7 +34,10 @@ bool at_stock(const std::vector<VfPoint>& curve) {
 
 }
 
-std::vector<VfPoint> parse_vf_curve(const unsigned char* mask, const unsigned char* status, const unsigned char* control) {
+int vf_units_per_khz(unsigned architecture) { return architecture == kVfArchPascal ? 2 : 1; }
+
+std::vector<VfPoint> parse_vf_curve(const unsigned char* mask, const unsigned char* status, const unsigned char* control,
+                                    int units_per_khz) {
     std::vector<VfPoint> points;
     for (int i = 0; i < kVfSlots; ++i) {
         const std::size_t slot = static_cast<std::size_t>(i);
@@ -45,9 +48,9 @@ std::vector<VfPoint> parse_vf_curve(const unsigned char* mask, const unsigned ch
         if (get_u32(mask, m) != kVfDomainGraphics || mask[m + 4] == 0) continue;
         VfPoint p;
         p.index = i;
-        p.freq_khz = static_cast<int>(get_u32(status, s + 4));
+        p.freq_khz = static_cast<int>(get_u32(status, s + 4) / static_cast<unsigned>(units_per_khz));
         p.volt_uv = static_cast<int>(get_u32(status, s + 8));
-        p.raw_offset = get_i32(control, c + kVfControlOffset);
+        p.raw_offset = get_i32(control, c + kVfControlOffset) / units_per_khz;
         if (p.freq_khz <= 0 || p.volt_uv <= 0) continue;   // an enabled slot the card does not use
         points.push_back(p);
     }
@@ -55,7 +58,8 @@ std::vector<VfPoint> parse_vf_curve(const unsigned char* mask, const unsigned ch
     return points;
 }
 
-void put_vf_raw_offset(unsigned char* control, int index, int raw) {
+void put_vf_raw_offset(unsigned char* control, int index, int raw, int units_per_khz) {
+    raw *= units_per_khz;
     std::memcpy(control + kVfEntries + static_cast<std::size_t>(index) * kVfControlEntry + kVfControlOffset, &raw, sizeof(raw));
 }
 

@@ -132,6 +132,55 @@ TEST_CASE("put_vf_raw_offset writes where parse_vf_curve reads") {
     CHECK(points[0].raw_offset == -123456);
 }
 
+TEST_CASE("only a GTX 10 card (Pascal) counts its curve in half kHz") {
+    CHECK(vf_units_per_khz(kVfArchPascal) == 2);
+    CHECK(kVfArchPascal == 0x130);   // NV_GPU_ARCHITECTURE_GP100 of nvapi.h
+    // Volta, Turing, Ampere, Ada, Blackwell: kHz, as the reference RTX 4070 stores them (hardware check 61).
+    for (const unsigned later : {0x140u, 0x160u, 0x170u, 0x190u, 0x1B0u}) CHECK(vf_units_per_khz(later) == 1);
+    CHECK(vf_units_per_khz(0x120) == 1);   // Maxwell: no curve to read, nothing known about it
+    CHECK(vf_units_per_khz(0) == 1);       // the architecture could not be read: as it always was
+}
+
+TEST_CASE("a curve in half kHz is read in kHz: the points of a GTX 1080 are where its clock is") {
+    std::vector<unsigned char> mask(kVfMaskSize), status(kVfStatusSize), control(kVfControlSize);
+    // What a GTX 1080 answered on driver 582.78: 1556.5 MHz at 850 mV as 3113000, 1873 MHz at 1050 mV as 3746000.
+    const unsigned freq[] = {3113000, 3746000};
+    const unsigned volt[] = {850000, 1050000};
+    const int offset[] = {0, 30000};   // +15 MHz on the upper point
+    for (std::size_t i = 0; i < 2; ++i) {
+        mask[kVfEntries + i * kVfMaskEntry + 4] = 1;
+        put_u32(status, kVfEntries + i * kVfStatusEntry + 4, freq[i]);
+        put_u32(status, kVfEntries + i * kVfStatusEntry + 8, volt[i]);
+        put_i32(control, kVfEntries + i * kVfControlEntry + kVfControlOffset, offset[i]);
+    }
+    const auto points = parse_vf_curve(mask.data(), status.data(), control.data(), vf_units_per_khz(kVfArchPascal));
+    REQUIRE(points.size() == 2);
+    CHECK(points[0].freq_khz == 1556500);
+    CHECK(points[0].volt_uv == 850000);   // voltages are microvolts on every card
+    CHECK(points[0].raw_offset == 0);
+    CHECK(points[1].freq_khz == 1873000);
+    CHECK(points[1].raw_offset == 15000);
+}
+
+TEST_CASE("an offset for a curve in half kHz is stored at twice its kHz, and reads back as what was written") {
+    std::vector<unsigned char> mask(kVfMaskSize), status(kVfStatusSize), control(kVfControlSize);
+    mask[kVfEntries + 5 * kVfMaskEntry + 4] = 1;
+    put_u32(status, kVfEntries + 5 * kVfStatusEntry + 4, 3746000);
+    put_u32(status, kVfEntries + 5 * kVfStatusEntry + 8, 1050000);
+    auto stored = [&] {
+        int raw = 0;
+        std::memcpy(&raw, control.data() + kVfEntries + 5 * kVfControlEntry + kVfControlOffset, sizeof(raw));
+        return raw;
+    };
+    for (const int khz : {15000, -45000, 0}) {
+        put_vf_raw_offset(control.data(), 5, khz, 2);
+        CHECK(stored() == 2 * khz);
+        const auto points = parse_vf_curve(mask.data(), status.data(), control.data(), 2);
+        REQUIRE(points.size() == 1);
+        CHECK(points[0].raw_offset == khz);
+    }
+}
+
 TEST_CASE("a flat top: the anchor runs the target and reads as the top, the points below stay stock") {
     FakeCurve card;
     // Anchor: slot 8 (900 mV, 2300 MHz built in). Target: 2700 MHz, which the card reaches at 1000 mV by itself.

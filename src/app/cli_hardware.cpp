@@ -96,6 +96,8 @@ int curve() {
                     gao::app::is_elevated() ? "" : "; reading it may need an administrator shell");
         return 1;
     }
+    // Worth a line only where it differs: a GTX 10 card, see core/vf_curve.hpp.
+    if (nvapi.VfUnitsPerKhz(kGpu) != 1) std::printf("the card counts its curve in half kHz: converted, the numbers below are MHz and kHz\n");
     print_curve(*points);
     return 0;
 }
