@@ -237,17 +237,41 @@ UndervoltOutcome run_undervolt(const OptimizeHooks& hooks, bool on_saved_tune, c
     std::string why;
     if (!prepare_state(&why)) return fail(why);
     if (const BusyGate busy = busy_before_run(hooks); !busy.refusal.empty()) return fail(busy.refusal);
-    // The card at stock first, as every run measures it: the "before" of the
-    // result, with the fans left to the driver, stopped at kStockTempC and
-    // kept when it was, and followed by a cool-down (measure_stock). With
-    // drivers of its own, before this run makes its own, as in run_optimize.
-    // Not on top of the saved tune: the reference there is that overclock.
-    std::optional<StabilityResult> stock_run;
+    const Objectives obj = objectives_for(Preset::Undervolt);
+    const Config at_start = load_config();
+    const int drawn_against = at_start.profile ? profile_ceiling(*at_start.profile) : obj.max_temp_c;
+    const FanCurve own_curve = active_fan_curve(at_start).value_or(default_curve(Preset::Undervolt));
+    // The card at stock first, as every run measures it, stopped at
+    // kStockTempC and kept when it was, and followed by a cool-down
+    // (measure_stock). With drivers of its own, before this run makes its
+    // own, as in run_optimize. The fans follow the curve this run uses on a
+    // card that stays under the profile's limit, so that the result is
+    // compared with stock under the same fan control (#84). Its peak sets the
+    // run's ceiling (temp_ceiling). When that ceiling moves the curve up, the
+    // card is measured at stock once more on the moved curve, which the
+    // search and the soak then use: that second measurement is what the
+    // result is compared with. Not on top of the saved tune: the reference
+    // there is that overclock, and the result is not judged against stock.
+    std::optional<StabilityResult> stock_run;   // the ceiling and the clock to keep come from this one
+    std::optional<StockOutcome> before;         // and the result is compared with this one
+    int stock_ceiling = obj.max_temp_c;         // the ceiling stock gave, which the second measurement ran with
     if (!on_saved_tune) {
-        log("the card at stock, five minutes");
-        const StockOutcome measured = measure_stock(hooks);
+        log("the card at stock, five minutes, with the fans on the run's curve");
+        StockOutcome measured = measure_stock(hooks, shifted_curve(own_curve, obj.max_temp_c - drawn_against), obj.max_temp_c);
         if (!measured.error.empty()) return fail(measured.error);
         stock_run = measured.result;
+        stock_ceiling = temp_ceiling(obj.max_temp_c, measured.result.peak_temp_c, measured.temp_target_c);
+        if (stock_ceiling > obj.max_temp_c) {
+            log("the card at stock again, five minutes: on this card the fan curve moves up to " + std::to_string(stock_ceiling) +
+                " C, and the result is compared with stock on that same curve");
+            measured = measure_stock(hooks, shifted_curve(own_curve, stock_ceiling - drawn_against), stock_ceiling);
+            if (!measured.error.empty()) return fail(measured.error);
+        }
+        if (measured.result.verdict != Verdict::Stable)
+            return fail("not compared: the measurement at stock stopped at " + std::to_string(measured.result.peak_temp_c) + " C after " +
+                        std::to_string(static_cast<int>(measured.result.seconds)) +
+                        " s, so there is nothing to judge an undervolt against. Nothing was changed");
+        before = measured;
     }
     GuardedGpu hw(kGpu);   // guarded driver calls and a reconnect, as in run_optimize
     if (!hw.Init(&why)) return fail(why);
@@ -259,8 +283,6 @@ UndervoltOutcome run_undervolt(const OptimizeHooks& hooks, bool on_saved_tune, c
     // Left to the driver, some cards get hotter under this load than the
     // search allows (a 3080 Ti reached 85 C at stock with its fans at 65 %),
     // and every probe would end TOO HOT.
-    const Objectives obj = objectives_for(Preset::Undervolt);
-    const Config at_start = load_config();
     // On a card that reached more than the profile's limit in the reference
     // the search runs with a higher one (temp_ceiling), and so do the fans:
     // with "100 % from 75 C" they would hold a card that reaches 86 C by
@@ -268,11 +290,10 @@ UndervoltOutcome run_undervolt(const OptimizeHooks& hooks, bool on_saved_tune, c
     // the tester's RTX 3080 Ti). The curve moves up with the limit, by as
     // much as the limit is above the one the curve was drawn against: a curve
     // saved by a run on this card was drawn against that run's ceiling.
-    const std::optional<StabilityResult>& reference = on_saved_tune ? how.measured : stock_run;
-    const int ceiling = reference ? temp_ceiling(obj.max_temp_c, reference->peak_temp_c, gpu.temp_target_c) : obj.max_temp_c;
-    const int drawn_against = at_start.profile ? profile_ceiling(*at_start.profile) : obj.max_temp_c;
-    const FanCurve fan_curve =
-        shifted_curve(active_fan_curve(at_start).value_or(default_curve(Preset::Undervolt)), ceiling - drawn_against);
+    const int ceiling = !on_saved_tune ? stock_ceiling
+                        : how.measured ? temp_ceiling(obj.max_temp_c, how.measured->peak_temp_c, gpu.temp_target_c)
+                                       : obj.max_temp_c;
+    const FanCurve fan_curve = shifted_curve(own_curve, ceiling - drawn_against);
     if (ceiling > obj.max_temp_c)
         log("fans: on this card the limit is " + std::to_string(ceiling) + " C, not the profile's " + std::to_string(obj.max_temp_c) +
             " C" + (ceiling > drawn_against ? "; the fan curve moves up with it by " + std::to_string(ceiling - drawn_against) + " C"
@@ -349,6 +370,27 @@ UndervoltOutcome run_undervolt(const OptimizeHooks& hooks, bool on_saved_tune, c
     if (hooks.active_gpu) hooks.active_gpu(nullptr);
     out.ran = true;
     if (!out.result.ok) return out;
+    // Only a curve that actually drove the fans counts as tested.
+    const bool curve_drove = gpu.set_fan_pct && fans.state().mode != FanMode::Failed && fans.state().mode != FanMode::Foreign;
+
+    // The Undervolt profile keeps its result only when it shows a benefit
+    // against stock, measured fairly (core/undervolt.hpp: judge_against_stock).
+    // One that does not is neither saved nor left on the card.
+    if (before) {
+        const StockJudgement judged = judge_against_stock(before->result, out.result.after, before->on_curve == curve_drove);
+        if (!judged.keep) {
+            log("against stock: " + judged.why);
+            const bool stock = gpu.reset_to_stock && gpu.reset_to_stock();
+            out.result.ok = false;
+            out.result.reason = judged.why;
+            out.result.stock_restored = stock;
+            return out;
+        }
+        log("against stock: " + judged.why + ", over the last " + std::to_string(static_cast<int>(out.result.after.counted.seconds + 0.5)) +
+            " s of each");
+        out.before = counted_view(before->result);
+        out.after = counted_view(out.result.after);
+    }
 
     const std::string driver = hw.DriverVersion(), gpu_id = hw.GpuUuid();
     if (driver.empty() || gpu_id.empty()) {
@@ -369,8 +411,7 @@ UndervoltOutcome run_undervolt(const OptimizeHooks& hooks, bool on_saved_tune, c
     // and a later test of the tune use it (profile_ceiling).
     if (ceiling > objectives_for(p.preset).max_temp_c) p.temp_ceiling_c = ceiling;
     else p.temp_ceiling_c.reset();
-    // Only a curve that actually drove the fans counts as tested.
-    if (gpu.set_fan_pct && fans.state().mode != FanMode::Failed && fans.state().mode != FanMode::Foreign) {
+    if (curve_drove) {
         if (ceiling > drawn_against) {
             // The curve moved for this run: it is the one that was tested, and
             // the one drawn against the limit that is saved with it. An edited
@@ -383,7 +424,7 @@ UndervoltOutcome run_undervolt(const OptimizeHooks& hooks, bool on_saved_tune, c
     }
     p.undervolt = UndervoltTune{out.result.applied_uv, out.result.freq_khz, out.result.raise_khz};
     // On a saved tune the baseline is that tune, not stock: the stock run it was saved with stays.
-    if (!over) p.against_stock = against_stock(out.result.baseline, out.result.after);
+    if (!over) p.against_stock = out.before && out.after ? against_stock(*out.before, *out.after) : against_stock(out.result.baseline, out.result.after);
     else if (p.against_stock && out.result.after.score > 0) p.against_stock->tuned = measured_run(out.result.after);
     cfg.profile = p;
     cfg.boot_strikes = 0;   // strikes belong to the profile they were earned by

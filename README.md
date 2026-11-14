@@ -79,7 +79,7 @@ service.
 |---|---|
 | All in one (default) | About 40 minutes (31 on the reference card) |
 | Best of my GPU, Cool & efficient, Quiet, Max performance | About 15 minutes |
-| Undervolt | About 13 minutes |
+| Undervolt | About 13 minutes, 5 more on a card that runs hot at stock |
 | Test the tune after a driver update | 5 minutes |
 
 The card is under full load all that time, and the fans get loud.
@@ -268,9 +268,16 @@ five-minute soak before it was saved. The whole run took 12 minutes. The log of 
   has to have its power limit lowered to meet the temperature, and that can cost more than the clocks win back. The run then
   says so, saves nothing, and leaves the card at stock. **Undervolt** is the profile for such a card. Quiet and Cool &
   efficient give a little speed away on purpose and are not judged this way.
+- **Undervolt keeps a result only when it gains something.** The card is measured at stock with the fans on the same
+  curve as the result, five minutes each, and the last half of each is compared. The result has to be as fast as stock
+  (within 1 %), must not be warmer without being quieter or louder without being cooler, and has to draw at least 3 % less
+  power, run at least 2 °C cooler or with the fans at least 5 points slower. Otherwise the run says why, saves nothing and
+  leaves the card at stock. A measurement at stock that the temperature stopped compares with nothing, and the run
+  stops there.
 - **Undervolt on a hot card:** when the card ran hotter than 75 °C at stock, the run uses that temperature as its limit
   instead. It goes no higher than the card's own temperature target, or 85 °C when the card reports none. The fan curve
-  moves up by the same amount, so the fans do not run at full speed to reach a temperature the card never had.
+  moves up by the same amount, so the fans do not run at full speed to reach a temperature the card never had. The card is
+  then measured at stock a second time on the moved curve, and the result is compared with that.
 - **The Undervolt profile replaces a saved overclock.** On the card, a core offset and the curve are one table. All in one
   saves both as one shape, and so does `gao --undervolt --on-overclock`.
 - **The card's built-in curve moves with temperature,** so the points above the one the card runs on are stored a little

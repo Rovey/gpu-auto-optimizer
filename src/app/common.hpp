@@ -162,6 +162,11 @@ struct UndervoltOutcome {
     bool ran = false;          // false: stopped before the search; `error` says why
     std::string error;
     UndervoltResult result;    // valid when ran
+    // The Undervolt profile's result against stock, as it was judged (#84):
+    // the counted part of each measurement (core/stability.hpp), both with
+    // the fans on the run's curve. Empty on top of a saved tune, and when the
+    // result was not kept.
+    std::optional<StabilityResult> before, after;
     bool saved = false;        // the profile was saved for --apply / boot-apply
     std::string save_note;     // why it was not saved, when !saved
 };

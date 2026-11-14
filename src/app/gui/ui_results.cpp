@@ -11,14 +11,16 @@ namespace {
 // The two runs it compares differ in length, and it says so: a card is not
 // heated through after half a minute, so the temperature and the fan speed
 // of the short run read lower than they would on a warm card.
+// on_curve: both sides are the counted part of a measurement with the fans
+// on the app's curve (app::UndervoltOutcome::before), and the table says so.
 template <typename Rows>
-void comparison(const StabilityResult& before, const StabilityResult& after, Rows rows) {
+void comparison(const StabilityResult& before, const StabilityResult& after, Rows rows, bool on_curve = false) {
     if (!ImGui::BeginTable("cmp", 3, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_BordersOuter |
                                          ImGuiTableFlags_SizingStretchSame | ImGuiTableFlags_PadOuterX))
         return;
     ImGui::TableSetupColumn("");
-    ImGui::TableSetupColumn(("Before (stock, " + duration_text(before.seconds) + ")").c_str());
-    ImGui::TableSetupColumn(("After (" + duration_text(after.seconds) + ")").c_str());
+    ImGui::TableSetupColumn(on_curve ? "Before (stock, fans on the app's curve)" : ("Before (stock, " + duration_text(before.seconds) + ")").c_str());
+    ImGui::TableSetupColumn(on_curve ? "After (fans on the app's curve)" : ("After (" + duration_text(after.seconds) + ")").c_str());
     ImGui::TableHeadersRow();
     rows([](const char* name, const std::string& a, const std::string& b) {
         ImGui::TableNextRow(ImGuiTableRowFlags_None, em() * 1.6f);
@@ -27,7 +29,10 @@ void comparison(const StabilityResult& before, const StabilityResult& after, Row
         ImGui::TableNextColumn(); ImGui::TextUnformatted(b.c_str());
     });
     ImGui::EndTable();
-    if (before.verdict == Verdict::TooHot)
+    if (on_curve)
+        wrapped(kDim, "Both ran five minutes with the fans on the app's curve. Speed, clock and power are the averages of the last half "
+                      "of each, when the card was warm; the temperature is the peak of the whole run.");
+    else if (before.verdict == Verdict::TooHot)
         wrapped(kDim, "The stock run was stopped at " + reading(before.peak_temp_c, " \xC2\xB0""C") + " after " + duration_text(before.seconds) +
                           ": with the NVIDIA driver's own fan control (fans at " + reading(before.end_fan_pct, " %") +
                           ") the card gets that hot under full load. From there the run kept the fans on a curve.");
@@ -111,7 +116,10 @@ bool undervolt_result(const app::UndervoltOutcome& o, bool put_back) {
         return false;
     }
     const UndervoltResult& r = o.result;
-    heading(done_heading(r.baseline, r.after).c_str());
+    const bool judged = o.before && o.after;   // against stock, on the same fan curve
+    const StabilityResult& before = judged ? *o.before : r.baseline;
+    const StabilityResult& after = judged ? *o.after : r.after;
+    heading(done_heading(before, after).c_str());
     char line[200];
     std::snprintf(line, sizeof(line), "Applied: %d MHz at %d mV instead of %d mV", r.freq_khz / 1000, r.applied_uv / 1000,
                   r.stock_uv / 1000);
@@ -121,16 +129,16 @@ bool undervolt_result(const app::UndervoltOutcome& o, bool put_back) {
                   r.edge_uv / 1000, r.confirmed_uv / 1000);
     wrapped(kDim, line);
     ImGui::Spacing();
-    comparison(r.baseline, r.after, [&](auto row) {
-        row("Speed (stress test)", score_text(r.baseline.score), against(r.baseline.score, r.after.score, "it/s"));
-        row("Core clock", reading(r.baseline.avg_core_mhz, " MHz"), reading(r.after.avg_core_mhz, " MHz"));
+    comparison(before, after, [&](auto row) {
+        row("Speed (stress test)", score_text(before.score), against(before.score, after.score, "it/s"));
+        row("Core clock", reading(before.avg_core_mhz, " MHz"), reading(after.avg_core_mhz, " MHz"));
         row("Voltage for that clock", std::to_string(r.stock_uv / 1000) + " mV", std::to_string(r.applied_uv / 1000) + " mV");
-        row("Peak temperature", reading(r.baseline.peak_temp_c, " \xC2\xB0""C"), reading(r.after.peak_temp_c, " \xC2\xB0""C"));
-        row("Fan speed at the end", reading(r.baseline.end_fan_pct, " %"), reading(r.after.end_fan_pct, " %"));
-        row("Power", reading(r.baseline.avg_power_w, " W"),
-            r.baseline.avg_power_w > 0 && r.after.avg_power_w >= 0 ? against(r.baseline.avg_power_w, r.after.avg_power_w, "W")
-                                                                   : reading(r.after.avg_power_w, " W"));
-    });
+        row("Peak temperature", reading(before.peak_temp_c, " \xC2\xB0""C"), reading(after.peak_temp_c, " \xC2\xB0""C"));
+        row("Fan speed at the end", reading(before.end_fan_pct, " %"), reading(after.end_fan_pct, " %"));
+        row("Power", reading(before.avg_power_w, " W"),
+            before.avg_power_w > 0 && after.avg_power_w >= 0 ? against(before.avg_power_w, after.avg_power_w, "W")
+                                                             : reading(after.avg_power_w, " W"));
+    }, judged);
     return true;
 }
 

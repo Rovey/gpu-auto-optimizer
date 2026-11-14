@@ -320,3 +320,39 @@ TEST_CASE("a step that was refused before anything was written says the card was
     CHECK(gao::app::step_not_applied("setting core +150 MHz failed -- reset to stock FAILED, run `gao --reset`", false) ==
           "not applied: setting core +150 MHz failed -- reset to stock FAILED, run `gao --reset`");
 }
+
+TEST_CASE("an undervolt judged against stock shows the counted half of both sides") {
+    UndervoltOutcome o;
+    o.ran = true;
+    o.saved = true;
+    o.result.ok = true;
+    o.result.freq_khz = 2790000;
+    o.result.applied_uv = 990000;
+    o.result.stock_uv = 1100000;
+    o.result.baseline.score = 5600;   // the whole first measurement; not what is compared
+    gao::StabilityResult before, after;
+    before.seconds = after.seconds = 150;
+    before.score = 5641;
+    after.score = 5625;
+    before.avg_power_w = 194;
+    after.avg_power_w = 155;
+    o.before = before;
+    o.after = after;
+    const auto lines = gao::app::result_lines(o);
+    CHECK(has_line(lines, "before: score=5641 it/s"));
+    CHECK(has_line(lines, "after:  score=5625 it/s"));
+    CHECK(has_line(lines, "(150 s)"));
+    CHECK(has_line(lines, "  the last 150 s of five minutes each, both with the fans on the app's curve"));
+    CHECK_FALSE(has_line(lines, "score=5600"));
+}
+
+TEST_CASE("an undervolt that gained nothing against stock is not applied, and says why") {
+    UndervoltOutcome o;
+    o.ran = true;
+    o.result.ok = false;
+    o.result.stock_restored = true;
+    o.result.reason = "no gain against stock: not less power, not cooler, not quieter (score 5000 against 5000 it/s (+0.0 %))";
+    CHECK(gao::app::result_lines(o).front() ==
+          "RESULT: not applied -- no gain against stock: not less power, not cooler, not quieter (score 5000 against 5000 it/s "
+          "(+0.0 %)) (card at stock)");
+}
