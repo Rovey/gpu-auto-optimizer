@@ -36,6 +36,13 @@ std::optional<unsigned> version_number(std::string_view text) {
     return (parts[0] << 16) | (parts[1] << 8) | parts[2];
 }
 
+bool release_is_newer(std::string_view release, std::string_view running) {
+    const auto r = version_number(release), b = version_number(running);
+    if (!r || !b) return false;
+    const auto pre = [](std::string_view v) { return v.find('-') != std::string_view::npos; };
+    return *r > *b || (*r == *b && pre(running) && !pre(release));
+}
+
 std::optional<ReleaseInfo> parse_latest_release(const std::string& json) {
     const auto j = nlohmann::json::parse(json, nullptr, /*allow_exceptions=*/false);
     if (!j.is_object()) return std::nullopt;

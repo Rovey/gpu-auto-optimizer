@@ -30,6 +30,23 @@ TEST_CASE("version_number orders like the version") {
     CHECK(*version_number("0.4.8-rc1") == *version_number("0.4.8"));
 }
 
+TEST_CASE("a release is offered when it is higher, or the final of the pre-release that runs") {
+    CHECK(release_is_newer("0.4.10", "0.4.9"));
+    CHECK(release_is_newer("0.5.0", "0.4.10-rc1"));
+    // The same number: only a pre-release or test build is offered its final.
+    CHECK(release_is_newer("0.4.10", "0.4.10-rc2"));
+    CHECK(release_is_newer("0.4.10", "0.4.10-check112"));
+    CHECK_FALSE(release_is_newer("0.4.10", "0.4.10"));
+    CHECK_FALSE(release_is_newer("0.4.10-rc2", "0.4.10-rc1"));
+    CHECK_FALSE(release_is_newer("0.4.10-rc1", "0.4.10"));
+    // Never a lower one, whatever the suffix.
+    CHECK_FALSE(release_is_newer("0.4.9", "0.4.10-check112"));
+    CHECK_FALSE(release_is_newer("0.4.9", "0.4.10"));
+    // Nothing that is not a version.
+    CHECK_FALSE(release_is_newer("v0.4.10", "0.4.9"));
+    CHECK_FALSE(release_is_newer("0.4.10", ""));
+}
+
 TEST_CASE("version_number refuses anything that is not three small numbers") {
     for (const char* bad : {"", "0.3", "0.3.1.0", "v0.3.1", "0.3.x", "0..1", "0.3.256", "-1.0.0", " 0.3.1", "0.3.1 ", "0.3.1-"})
         CHECK_FALSE(version_number(bad).has_value());
