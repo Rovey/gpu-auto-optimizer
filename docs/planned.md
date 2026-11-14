@@ -1,6 +1,6 @@
 # Planned: tune history, stability, sharing
 
-Three features that are decided on but not built, one open design point, and the design that answers it. This page records the choices made for each, so
+Three features that are decided on but not built, one open design point, the design that answers it, and a proposed design for a fair before and after (#84). This page records the choices made for each, so
 that whoever builds one does not have to make them again. Nothing here is in the code yet; the
 first step of the same request, testing a saved tune again after a driver update, is
 (`core/retest.*`, hardware check 86).
@@ -235,3 +235,191 @@ allows N. And the result table, which already shows both temperatures and both f
 - **A memory overclock under a raised ceiling:** allowed as today, or left at stock because of
   what cannot be measured.
 - **Whether All in one is judged as a whole** against stock, as the two speed profiles are.
+
+## Proposed design: a fair before and after (#84)
+
+A proposal, waiting for the owner's approval. Nothing is built, and nothing a run saves changes
+until it is approved. It answers #84: the "before" and "after" a run shows are not always measured
+under the same conditions, and nothing judges an undervolt against stock at all.
+
+**What is compared today.**
+
+- **Before:** `measure_stock` (`src/app/common_run_steps.cpp`). 300 s (`kLongRunS`) with the fans
+  left to the NVIDIA driver. It stops at `kStockTempC` (85 C), and a measurement that stopped there
+  after at least `kStockMinS` (30 s) is still the "before". It starts from an idle card.
+- **After (Undervolt):** the soak in `find_undervolt` (`kUvSoakS`, 300 s). The fans follow the run's
+  curve, moved up with the ceiling (`temp_ceiling`). It stops at that ceiling, and it starts on a
+  card that is already warm from the search.
+- **The numbers:** score, clock and power are averages over the whole measurement, warm-up
+  included. The temperature is the peak, and the fan speed is the last reading.
+- **The verdict:** an undervolt is kept when its soak holds. No rule compares it with stock. The
+  speed profiles keep no result slower than 99 % of the stock score (`kNotSlowerScore`, hardware
+  check 93), measured against that same "before".
+
+Two cards show what that costs:
+
+- **GTX 1080 Ti (rc1, #83):** stock stopped after 119 s at 86 C, on the driver's fans (34 % rising
+  to 79 %). The soak ran 300 s on the curve at 89 %. The table read -3.2 % score and +10.7 % power.
+  It cannot say whether the undervolt is better or worse.
+- **Reference RTX 4070:** the fan control alone moves the numbers. One set of settings drew 176 W
+  at 63 C with the driver's fans at about 68 %, and 180 W at 71 C on the tuned curve at 62 %
+  (hardware check 76).
+
+### What makes a measurement valid
+
+- **A complete measurement** is Stable for its full length. A measurement at stock that the
+  temperature stopped after 30 s or more is **partial**. It is still good for what it gives today:
+  the ceiling, and the clock an undervolt keeps. It is not good for the comparison.
+- **The result** is valid when its soak passed. That is already required.
+- **A comparison** is valid when both sides are complete and ran under the same fan control: both on
+  the same curve, or both on the driver when the app cannot set the fans (`gpu.set_fan_pct`
+  empty).
+- **Not valid:** the before/after lines are replaced by one line, `not compared: <why>`, on screen
+  and in `run.log`. The reason names the side that failed and how: for example "the measurement at
+  stock stopped at 86 C after 119 s", or "at stock the driver had the fans, after it the app's
+  curve".
+
+### How the two sides are made comparable
+
+1. **The measurement at stock follows the run's fan curve,** the curve the run would use without a
+   raised ceiling. Only the clocks are at stock. This settles the "which temperature at stock" point
+   of the design above in the other direction: the ceiling is computed from the peak on that curve.
+   The tester's RTX 3080 Ti, for example, reached 82 to 83 C with its fans at 100 %, and 86 C on the
+   driver's fans.
+2. **When the ceiling moves the curve** (a card that was hotter at stock than the profile allows),
+   the measurement at stock is repeated on the moved curve after the cool-down. That second
+   measurement is the "before". It costs five minutes, only on such cards, and only it makes the
+   comparison fair there. Without it the before would run on a more aggressive curve than the
+   after, and a moved curve's quieter fans would read as a benefit of the undervolt.
+3. **The same length:** 300 s on both sides, as today.
+4. **The part that counts:** score, clock, power, temperature and fan speed are averaged over the
+   last half of each measurement (the last 150 s). By then the card has run under load for minutes,
+   on both sides. The peak temperature is still taken over the whole measurement, for the safety
+   stops. The cool-down that follows an early stop at stock is not part of either.
+5. **Throttling and early ends:** a measurement that the temperature ends early is partial, see
+   above, and is never averaged against a complete one. A card that holds its temperature by
+   slowing down shows it in the clock and the score of the counted half. That is a real effect of
+   the settings, and it is compared as one.
+
+### The keep/discard rule for the Undervolt profile
+
+The rule looks at three things separately, over the counted half: performance (score), power, and
+thermals (average temperature together with average fan speed). With a valid comparison:
+
+- **Slower:** a score under 99 % of stock discards the result. This is the share `kNotSlowerScore`
+  already uses, and the profile promises the same speed.
+- **A thermal regression:** the result is discarded when the card runs more than 2 C warmer and its
+  fans are not at least 5 points slower, or when its fans run more than 5 points faster and the card
+  is not at least 2 C cooler.
+- **No benefit:** the result is discarded unless at least one of these holds:
+  - power is at least 3 % lower;
+  - the card is at least 2 C cooler;
+  - the fans are at least 5 points slower.
+- **Otherwise it is kept.** Higher power alone never discards a result, as long as it is cooler or
+  quieter for it. Finishing the soak alone never keeps a result either.
+
+A result that is discarded is neither saved nor left on the card. The card goes back to how it was
+before the run: stock, or the saved tune. The `RESULT:` line gives the reason with both numbers, as
+the slower-than-stock refusal of the speed profiles does today.
+
+**Without a valid comparison** (proposed): the result is discarded, and the line says why. The
+principle of #84 is "kept only when it shows a benefit", and an incomplete comparison shows none.
+The cost: on a card whose fans cannot be set and which overheats at stock, the Undervolt profile
+saves nothing. The other choice is to save the result marked "not compared". That is the owner's
+decision.
+
+**Tolerances:** the 1 %, 3 %, 2 C and 5 points above are provisional, set at about twice the
+scatter seen so far:
+
+- **Two clean measurements at stock on the reference card,** days apart (checks 76 and 77):
+  5728 and 5731 it/s, 196 and 195 W, peak 67 and 67 C, fans 73 and 72 %.
+- **Two All in one results** (+1.6 % and +0.9 % score, -8.2 % and -10.8 % power) are no measure of
+  scatter: their memory overclocks differed (+1500 and +1100).
+
+Hardware check 1 below measures the scatter properly, and the values are fixed from it.
+
+### Where it applies
+
+- **The fair "before"** (stock on the run's curve, repeated on a moved curve, the counted half) is
+  the "before" of every run. The speed profiles keep their own rule, `kNotSlowerScore`, which then
+  compares on equal fans.
+- **The keep/discard rule** above is for the Undervolt profile.
+- **On top of the saved tune** (`gao --undervolt` on a tune, the undervolt step of All in one), the
+  reference is that overclock's own soak. Both sides are soaks on the run's curve, so the rule
+  applies as it is. Whether All in one is judged against stock as a whole
+  is still the open point of the design above.
+
+### What changes per card
+
+- **A card that is cool at stock** (the reference RTX 4070, 67 C): the measurement at stock runs on
+  the Undervolt curve instead of the driver's fans. Going by check 76, it reads a few degrees warmer
+  at lower fan speeds than today. There is no second measurement and no extra time. An undervolt
+  there drew 11 % less power at a higher clock (check 75, step 3: 172 W against 194 W), so it is
+  kept for its power.
+- **A card that is hot at stock** (this GTX 1080 Ti, the RTX 3080 Ti of check 97): the first
+  measurement at stock runs on the profile's curve. That curve reaches 100 % at 75 C, so it is loud
+  for five minutes, and it is expected to complete instead of stopping at 85 C. The ceiling comes
+  from its peak, capped at the card's target as today. The curve moves up, and stock is measured
+  again on the moved curve: about five minutes more for the run, which then compares like for like.
+
+### How it would be built (for the PR that follows approval)
+
+- `src/core/`:
+  - the averages over the counted half in `run_stability`, or next to it, from the readings it
+    already takes;
+  - one pure function that judges a result against stock and returns keep or discard, with the
+    reason;
+  - unit tests with the 1080 Ti and RTX 4070 numbers above.
+- `src/app/`:
+  - `measure_stock` drives the fans with the run's curve, through the `FanDriver` the search already
+    uses;
+  - the second measurement when the curve moves;
+  - the `not compared:` line and the reasons for a discard in `result_lines`.
+- Nothing about the ceiling, the stops or the journal is weakened. The measurement at stock still
+  stops at `kStockTempC`.
+
+### Hardware checks that would prove it
+
+1. **Scatter, reference card:**
+   - three measurements at stock in a row on the run's curve;
+   - three soaks of one saved undervolt;
+   - the spread of the score, the power, the average temperature and the average fan speed over the
+     counted half.
+
+   The tolerances are set from this. About 45 minutes, nothing applied beyond a saved tune.
+2. **An Undervolt run on the reference card:**
+   - the measurement at stock runs on the curve and completes;
+   - there is no second measurement;
+   - the comparison is valid, `RESULT:` keeps the result, and `run.log` gives the counted-half
+     numbers of both sides.
+3. **An Undervolt run on a card that is hot at stock** (a tester's GTX 1080 Ti or RTX 3080 Ti):
+   - the first measurement completes on the curve;
+   - the second measurement runs on the moved curve and is the "before";
+   - the verdict is given with its reasons.
+4. **All in one on the reference card:** the speed check (`kNotSlowerScore`) still passes against the
+   new "before".
+5. **The discard path and `not compared:`** are proven by unit tests. No card is known that gives
+   them on demand.
+
+### Decisions for the owner
+
+1. **Stock on the run's curve, with a second measurement on a moved curve** (proposed). The
+   alternatives:
+   - **Always two measurements:** one on the driver's fans as the user's own reference, one on the
+     curve. That is five minutes more on every card.
+   - **Keep the driver's fans at stock:** the difference is only stated, and power and temperature
+     are never judged.
+2. **No valid comparison:** discard (proposed), or keep it marked "not compared".
+3. **The counted half:** the last 150 s (proposed), or a fixed warm-up to skip.
+4. **The tolerances:** provisional, until check 1.
+5. **The screen's "Before" heading:** it would say the fans followed the app's curve.
+
+### Against the acceptance criteria of #84
+
+- **A valid stock measurement and a valid result:** "What makes a measurement valid", including the
+  `not compared:` line.
+- **The before/after line under the same conditions:** "How the two sides are made comparable".
+- **The keep/discard rule over performance, power and thermals, with tolerances:** "The
+  keep/discard rule". The tolerances are provisional and fixed by check 1.
+- **A cool card and a hot card:** "What changes per card".
+- **The hardware checks:** "Hardware checks that would prove it".
