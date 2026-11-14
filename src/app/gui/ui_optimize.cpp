@@ -135,6 +135,9 @@ void choose(UiState& s, const UiActions& act) {
                                               : undervolt ? "  About 13 minutes of full GPU load."
                                                           : "  About 15 minutes of full GPU load."))
                                .c_str());
+    if (undervolt)   // run_undervolt measures stock again on a curve moved up for a hot card
+        wrapped(kDim, "Up to 5 minutes longer when the card runs hotter than 75 \xC2\xB0""C at stock: it is then measured at stock a "
+                      "second time, on the fan curve the run uses.");
     if (!s.elevated) wrapped(kText, "Windows asks for administrator rights first; the app then opens here again.");
     wrapped(kDim, "The screen can go black for a few seconds while the run looks for the card's limit. That is expected. Save "
                   "your work first: rarely, Windows needs a sign-out or a restart afterwards.");

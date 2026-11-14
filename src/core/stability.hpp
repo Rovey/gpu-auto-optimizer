@@ -28,7 +28,23 @@ struct StabilityResult {
     int avg_power_w = -1;      // -1 when no sample reported the value
     int avg_core_mhz = -1;
     int avg_mem_mhz = -1;
+    // The part of a measurement that counts when two are compared: its last
+    // half (kCountedShare), when the card has run under load for minutes on
+    // either side, whatever it started from. Filled only for a run that
+    // covered its full length (Stable); seconds is 0 otherwise.
+    struct Counted {
+        double seconds = 0;
+        double score = 0;
+        int avg_power_w = -1;
+        int avg_core_mhz = -1;
+        int avg_mem_mhz = -1;
+        int avg_temp_c = -1;
+        int avg_fan_pct = -1;   // -1 when the card reports no fan speed
+    } counted;
 };
+
+// The share of a measurement, at its end, that StabilityResult::counted covers.
+inline constexpr double kCountedShare = 0.5;
 
 // Why three seconds: a batch delayed by up to about two seconds (a UAC prompt,
 // a display mode switch) does not look like a dead card, because the window
@@ -84,5 +100,11 @@ const char* verdict_name(Verdict v);
 // it/s  core=2848 MHz  mem=15551 MHz  peak=67 C  fan=51 %  power=164 W  (300 s)".
 // with_mem: the memory clock too.
 std::string measured_line(const char* name, const StabilityResult& s, bool with_mem);
+// A measurement as it was compared (StabilityResult::counted): the averages
+// of its counted part, then the peak and the last fan reading of the whole
+// run, each named as what it is: "  before: averages of the last 150 s:
+// score=5641 it/s  core=2790 MHz  power=194 W  temp=66 C  fan=60 %;  whole
+// 300 s: peak=67 C  fan at the end=61 %".
+std::string counted_line(const char* name, const StabilityResult& s);
 
 }

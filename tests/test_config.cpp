@@ -446,3 +446,37 @@ TEST_CASE("a run that did not finish leaves gao.json as it was before the run") 
     REQUIRE(none.has_value());
     CHECK_FALSE(none->profile.has_value());
 }
+
+TEST_CASE("a measurement against stock without averages is written as before, and one with them keeps them") {
+    Config c;
+    c.profile = sample();
+    c.profile->against_stock = AgainstStock{{5922, 2817, 14002, 72, 67, 200}, {6067, 2894, 15850, 72, 35, 170}};
+    const std::string whole = to_json(c);
+    CHECK(whole.find("counted_s") == std::string::npos);
+    CHECK(whole.find("avg_temp_c") == std::string::npos);
+    const Config back = from_json(whole);
+    REQUIRE(back.profile->against_stock);
+    CHECK(back.profile->against_stock->stock.counted_s == 0);
+    CHECK(back.profile->against_stock->stock.avg_temp_c == -1);
+    CHECK(back.profile->against_stock->stock.avg_fan_pct == -1);
+
+    MeasuredRun counted{5641, 2790, 10500, 68, 61, 194};
+    counted.counted_s = 150;
+    counted.avg_temp_c = 66;
+    counted.avg_fan_pct = 60;
+    c.profile->against_stock = AgainstStock{counted, counted};
+    const Config again = from_json(to_json(c));
+    REQUIRE(again.profile->against_stock);
+    CHECK(again.profile->against_stock->stock == counted);
+}
+
+TEST_CASE("averages that are not all there are not read, and the measurement stays") {
+    const std::string head = R"({"profile":{"preset":"quiet","power_pct":80,"core_mhz":90,"mem_mhz":600,"driver":"x","gpu":"g","saved_at":"y")";
+    const std::string run = R"({"score":5641,"core_mhz":2790,"mem_mhz":10500,"peak_temp_c":68,"fan_pct":61,"power_w":194,"counted_s":150,"avg_temp_c":66})";
+    const Config c = from_json(head + R"(,"against_stock":{"stock":)" + run + R"(,"tuned":)" + run + "}}}");
+    REQUIRE(c.profile);
+    REQUIRE(c.profile->against_stock);
+    CHECK(c.profile->against_stock->stock.score == doctest::Approx(5641));
+    CHECK(c.profile->against_stock->stock.counted_s == 0);   // avg_fan_pct is missing: no averages at all
+    CHECK(c.profile->against_stock->stock.avg_temp_c == -1);
+}
