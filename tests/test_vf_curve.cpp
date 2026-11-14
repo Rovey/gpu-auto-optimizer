@@ -132,6 +132,55 @@ TEST_CASE("put_vf_raw_offset writes where parse_vf_curve reads") {
     CHECK(points[0].raw_offset == -123456);
 }
 
+TEST_CASE("only a GTX 10 card (Pascal) counts its curve in half kHz") {
+    CHECK(vf_units_per_khz(kVfArchPascal) == 2);
+    CHECK(kVfArchPascal == 0x130);   // NV_GPU_ARCHITECTURE_GP100 of nvapi.h
+    // Volta, Turing, Ampere, Ada, Blackwell: kHz, as the reference RTX 4070 stores them (hardware check 61).
+    for (const unsigned later : {0x140u, 0x160u, 0x170u, 0x190u, 0x1B0u}) CHECK(vf_units_per_khz(later) == 1);
+    CHECK(vf_units_per_khz(0x120) == 1);   // Maxwell: no curve to read, nothing known about it
+    CHECK(vf_units_per_khz(0) == 1);       // the architecture could not be read: as it always was
+}
+
+TEST_CASE("a curve in half kHz is read in kHz: the points of a GTX 1080 are where its clock is") {
+    std::vector<unsigned char> mask(kVfMaskSize), status(kVfStatusSize), control(kVfControlSize);
+    // What a GTX 1080 answered on driver 582.78: 1556.5 MHz at 850 mV as 3113000, 1873 MHz at 1050 mV as 3746000.
+    const unsigned freq[] = {3113000, 3746000};
+    const unsigned volt[] = {850000, 1050000};
+    const int offset[] = {0, 30000};   // +15 MHz on the upper point
+    for (std::size_t i = 0; i < 2; ++i) {
+        mask[kVfEntries + i * kVfMaskEntry + 4] = 1;
+        put_u32(status, kVfEntries + i * kVfStatusEntry + 4, freq[i]);
+        put_u32(status, kVfEntries + i * kVfStatusEntry + 8, volt[i]);
+        put_i32(control, kVfEntries + i * kVfControlEntry + kVfControlOffset, offset[i]);
+    }
+    const auto points = parse_vf_curve(mask.data(), status.data(), control.data(), vf_units_per_khz(kVfArchPascal));
+    REQUIRE(points.size() == 2);
+    CHECK(points[0].freq_khz == 1556500);
+    CHECK(points[0].volt_uv == 850000);   // voltages are microvolts on every card
+    CHECK(points[0].raw_offset == 0);
+    CHECK(points[1].freq_khz == 1873000);
+    CHECK(points[1].raw_offset == 15000);
+}
+
+TEST_CASE("an offset for a curve in half kHz is stored at twice its kHz, and reads back as what was written") {
+    std::vector<unsigned char> mask(kVfMaskSize), status(kVfStatusSize), control(kVfControlSize);
+    mask[kVfEntries + 5 * kVfMaskEntry + 4] = 1;
+    put_u32(status, kVfEntries + 5 * kVfStatusEntry + 4, 3746000);
+    put_u32(status, kVfEntries + 5 * kVfStatusEntry + 8, 1050000);
+    auto stored = [&] {
+        int raw = 0;
+        std::memcpy(&raw, control.data() + kVfEntries + 5 * kVfControlEntry + kVfControlOffset, sizeof(raw));
+        return raw;
+    };
+    for (const int khz : {15000, -45000, 0}) {
+        put_vf_raw_offset(control.data(), 5, khz, 2);
+        CHECK(stored() == 2 * khz);
+        const auto points = parse_vf_curve(mask.data(), status.data(), control.data(), 2);
+        REQUIRE(points.size() == 1);
+        CHECK(points[0].raw_offset == khz);
+    }
+}
+
 TEST_CASE("a flat top: the anchor runs the target and reads as the top, the points below stay stock") {
     FakeCurve card;
     // Anchor: slot 8 (900 mV, 2300 MHz built in). Target: 2700 MHz, which the card reaches at 1000 mV by itself.
@@ -666,6 +715,17 @@ TEST_CASE("the clock grid is read off the curve, also from a read-out cut to who
                                     2932000, 2955000, 2970000, 2992000, 3007000})) == 7500);
     // Nothing of the usual grids fits: the greatest common divisor, as before.
     CHECK(clock_grid_khz(points_at({1500000, 1605000, 1700000})) == 5000);
+    // A GTX 1080 Ti on driver 582.78 (hardware check 110), its curve after the
+    // halving, all 80 points: 38/3 MHz steps, read as 12.5 or 13 MHz.
+    CHECK(clock_grid_khz(points_at({227500,  303500,  379500,  455500,  493500,  493500,  493500,  493500,  493500,
+                                    493500,  493500,  518500,  569500,  620000,  670500,  721000,  772000,  822500,
+                                    873000,  923500,  974500,  1025000, 1075500, 1126000, 1177000, 1227500, 1278000,
+                                    1328500, 1379500, 1430000, 1468000, 1493000, 1518500, 1544000, 1569000, 1582000,
+                                    1607000, 1632500, 1645000, 1670500, 1695500, 1708500, 1733500, 1746500, 1759000,
+                                    1784500, 1797000, 1809500, 1835000, 1847500, 1860000, 1873000, 1885500, 1898000,
+                                    1911000, 1923500, 1936000, 1949000, 1961500, 1974000, 1987000, 1987000, 1999500,
+                                    1999500, 1999500, 1999500, 1999500, 1999500, 1999500, 1999500, 1999500, 1999500,
+                                    1999500, 1999500, 1999500, 1999500, 1999500, 1999500, 1999500, 1999500})) == 12667);
 }
 
 TEST_CASE("a card that reads its 7.5 MHz grid in whole MHz: a step of drift after the lowering is accepted") {

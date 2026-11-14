@@ -37,9 +37,32 @@ inline constexpr std::size_t kVfControlOffset = 20;
 inline constexpr int kVfSlots = 255;
 inline constexpr unsigned kVfDomainGraphics = 0;
 
-// The enabled points of the graphics clock, lowest voltage first.
-std::vector<VfPoint> parse_vf_curve(const unsigned char* mask, const unsigned char* status, const unsigned char* control);
-void put_vf_raw_offset(unsigned char* control, int index, int raw);
+// The unit of a point's frequency and of its offset is the card's. From the
+// RTX 20 series on it is kHz: the reference RTX 4070 stores an offset one to
+// one (hardware check 61). A GTX 10 card (Pascal) counts both in half kHz:
+// 1873 MHz reads 3746000. NVIDIA documents neither. The half kHz are known
+// from a GTX 1080 on driver 582.78 (1556.5 MHz at 850 mV read 3113000, 1873
+// MHz at 1050 mV read 3746000) and from two projects that drive these calls
+// on such cards: nvapi-rs counts the curve in half kHz, green-curve halves
+// both fields for this architecture. A GTX 1080 Ti on driver 582.78 confirmed
+// it with this build (hardware check 110). Read as kHz, such a curve lies twice as high as the
+// clock the card reports, and an undervolt search ended before its first
+// candidate with "the load clock is below the card's curve".
+//
+// Both fields are brought to kHz where the buffers are read and written
+// (units_per_khz below), so nothing else knows about it. kVfArchPascal is
+// NV_GPU_ARCHITECTURE_GP100 of NVIDIA's nvapi.h: what NvAPI_GPU_GetArchInfo
+// answers for every GTX 10 chip.
+inline constexpr unsigned kVfArchPascal = 0x130;
+// How many of the card's units make a kHz: 2 on Pascal, 1 on everything
+// else, an architecture that could not be read (0) included.
+int vf_units_per_khz(unsigned architecture);
+
+// The enabled points of the graphics clock, lowest voltage first, in kHz.
+std::vector<VfPoint> parse_vf_curve(const unsigned char* mask, const unsigned char* status, const unsigned char* control,
+                                    int units_per_khz = 1);
+// `raw` in kHz, as parse_vf_curve gives it.
+void put_vf_raw_offset(unsigned char* control, int index, int raw, int units_per_khz = 1);
 
 // How close a point must read to its target. Cards quantise the clock in
 // steps of up to 15 MHz (RTX 50), so half a step is as close as a target
@@ -94,7 +117,8 @@ struct VfApplyResult {
 // itself (more is an overclock, not an undervolt).
 //
 // Offsets are written in kHz, one to one, as the reference RTX 4070 stores
-// them (hardware check 61); nothing estimates other units. What protects a
+// them (hardware check 61); nothing estimates other units (a GTX 10 card's
+// are known by its architecture, see above). What protects a
 // card that stores them differently is the order of the writes: the first
 // round raises a point only half of the way, so a card that moves twice as
 // far as asked lands on the target, not above it; every later round adds
@@ -143,7 +167,9 @@ CurveState curve_state(const std::vector<VfPoint>& curve, int anchor_uv, int bas
 // steps between the points. An RTX 5070 runs a 7.5 MHz grid and reads
 // 2932.5 MHz as 2932: the greatest common divisor of that read-out is 1 MHz,
 // and every tolerance built on the grid came out a step too small (hardware
-// check 99, second run).
+// check 99, second run). A GTX 10 card steps in 38/3 MHz, read out as 12.5 or
+// 13 MHz; it gets 12667 kHz, not the 0.5 MHz the greatest common divisor
+// would give (hardware check 110).
 int clock_grid_khz(const std::vector<VfPoint>& curve);
 
 }
