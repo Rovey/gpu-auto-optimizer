@@ -79,7 +79,7 @@ service.
 |---|---|
 | All in one (default) | About 40 minutes (31 on the reference card) |
 | Best of my GPU, Cool & efficient, Quiet, Max performance | About 15 minutes |
-| Undervolt | About 13 minutes, 5 more on a card that runs hot at stock |
+| Undervolt | About 13 minutes, up to 5 more on a card that runs hotter than 75 °C at stock |
 | Test the tune after a driver update | 5 minutes |
 
 The card is under full load all that time, and the fans get loud.
