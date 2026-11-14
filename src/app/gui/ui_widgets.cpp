@@ -171,6 +171,26 @@ bool primary_button(const std::string& label, ImVec2 size) {
     return pressed;
 }
 
+// An icon drawn in the middle of a box, by the glyph's own outline and not
+// by its advance: the glyphs of the icon font differ in width and in where
+// they sit in their cell (and the merged font moves them down, GlyphOffset).
+void icon_centred(ImDrawList* dl, Icon icon, ImVec2 at, ImVec2 box, float px, ImU32 colour) {
+    ImGui::PushFont(nullptr, px);
+    ImVec2 pen(at.x + (box.x - px) / 2, at.y + (box.y - px) / 2);   // a glyph the font does not have: roughly centred
+    if (const ImFontGlyph* glyph = ImGui::GetFontBaked()->FindGlyph(static_cast<ImWchar>(icon)))
+        pen = ImVec2(at.x + (box.x - glyph->X0 - glyph->X1) / 2, at.y + (box.y - glyph->Y0 - glyph->Y1) / 2);
+    dl->AddText(ImVec2(std::floor(pen.x + 0.5f), std::floor(pen.y + 0.5f)), colour, ic(icon).c_str());
+    ImGui::PopFont();
+}
+
+bool icon_button(const char* id, Icon icon, ImVec2 size) {
+    const ImVec2 at = ImGui::GetCursorScreenPos();
+    const bool pressed = ImGui::Button(id, size);
+    const ImVec2 box = ImGui::GetItemRectSize();   // the glyph as large as in a text button of this height
+    icon_centred(ImGui::GetWindowDrawList(), icon, at, box, box.y * 0.38f, ImGui::GetColorU32(ImGuiCol_Text));
+    return pressed;
+}
+
 // An on/off switch; returns true when clicked.
 bool toggle(const char* id, bool on) {
     const float h = em() * 1.25f, w = h * 1.9f;

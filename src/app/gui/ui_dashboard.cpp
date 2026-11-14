@@ -26,10 +26,10 @@ void gpu_card(const UiState& s, const UiActions& act) {
     ImGui::PopStyleVar();
     ImGui::EndGroup();
     // Rarely needed: an icon, its words in the tooltip.
-    const std::string detect = ic(kIconRefresh);
-    align_right(ImGui::GetFrameHeight());
+    const float side = ImGui::GetFrameHeight();
+    align_right(side);
     ImGui::SetCursorPosY(top);
-    if (ImGui::Button(detect.c_str(), ImVec2(ImGui::GetFrameHeight(), 0))) act.detect_gpu();
+    if (icon_button("##detect", kIconRefresh, ImVec2(side, side))) act.detect_gpu();
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Look for the card again (after a driver update)");
     ImGui::Spacing();
     telemetry_tiles(s);

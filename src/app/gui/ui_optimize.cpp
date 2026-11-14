@@ -11,9 +11,8 @@ namespace gao::gui {
 
 namespace {
 
-// An icon in a square badge, centred by the glyph's own outline and not by
-// its advance: the glyphs of the icon font differ in width and in where
-// they sit in their cell, which next to a title reads as uneven spacing.
+// An icon in a square badge, centred by the glyph's own outline: next to a
+// title, centring by the advance reads as uneven spacing.
 void icon_badge(Icon icon, float side, const ImVec4& fill, const ImVec4& edge, const ImVec4& ink) {
     const ImVec2 at = ImGui::GetCursorScreenPos();
     ImGui::Dummy(ImVec2(side, side));
@@ -21,12 +20,7 @@ void icon_badge(Icon icon, float side, const ImVec4& fill, const ImVec4& edge, c
     const ImVec2 corner(at.x + side, at.y + side);
     dl->AddRectFilled(at, corner, ImGui::GetColorU32(fill), side * 0.28f);
     dl->AddRect(at, corner, ImGui::GetColorU32(edge), side * 0.28f);
-    ImGui::PushFont(nullptr, side * 0.5f);
-    ImVec2 pen(at.x + side * 0.25f, at.y + side * 0.25f);   // a glyph the font does not have: roughly centred
-    if (const ImFontGlyph* glyph = ImGui::GetFontBaked()->FindGlyph(static_cast<ImWchar>(icon)))
-        pen = ImVec2(at.x + (side - glyph->X0 - glyph->X1) / 2, at.y + (side - glyph->Y0 - glyph->Y1) / 2);
-    dl->AddText(ImVec2(std::floor(pen.x + 0.5f), std::floor(pen.y + 0.5f)), ImGui::GetColorU32(ink), ic(icon).c_str());
-    ImGui::PopFont();
+    icon_centred(dl, icon, at, ImVec2(side, side), side * 0.5f, ImGui::GetColorU32(ink));
 }
 
 // What a profile card says. A no-break space keeps the temperature and its unit on one line.

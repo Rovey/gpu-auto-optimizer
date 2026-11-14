@@ -96,6 +96,10 @@ void align_right(float width);
 float button_width(const std::string& label);
 bool primary_button(const std::string& label, ImVec2 size = ImVec2(0, 0));
 bool toggle(const char* id, bool on);
+// An icon in the middle of the box at `at`, `px` high, centred by its outline.
+void icon_centred(ImDrawList* dl, Icon icon, ImVec2 at, ImVec2 box, float px, ImU32 colour);
+// A button with only an icon on it, centred; `id` is "##name".
+bool icon_button(const char* id, Icon icon, ImVec2 size);
 void tile(const char* id, Icon icon, const char* label, const std::string& value, float w, float h);
 void telemetry_tiles(const UiState& s);
 std::optional<FanPreset> fan_preset_buttons(const char* id, const std::optional<FanPreset>& current);
