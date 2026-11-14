@@ -242,8 +242,9 @@ Decided by the owner on 2026-11-14: the five choices under "Decided" below. It a
 "before" and "after" a run shows are not always measured under the same conditions, and nothing
 judges an undervolt against stock at all.
 
-**Built for the Undervolt profile** on the branch `feat/fair-undervolt-compare`. It is not
-verified on a card; hardware checks 111 and 112 do that. "Where it applies" below says what is
+**Built for the Undervolt profile** on the branch `feat/fair-undervolt-compare`. Hardware
+check 111 passed on the reference card (2026-11-14); check 112, a card that is hot at stock, has
+not run. "Where it applies" below says what is
 not built.
 
 **What is compared today.**
@@ -347,7 +348,12 @@ they can be adjusted on their own: `kNotSlowerScore`, `kKeepPowerShare`, `kKeepC
 - **Two All in one results** (+1.6 % and +0.9 % score, -8.2 % and -10.8 % power) are no measure of
   scatter: their memory overclocks differed (+1500 and +1100).
 
-Hardware check 111 measures the scatter properly, and the values are fixed from it.
+Hardware check 111 measures the scatter properly, and the values are fixed from it. Its three
+runs (2026-11-14, all three at 990 mV, so one tune) gave twice the range of the counted half:
+score 0.09 % at stock and 0.04 % for the result, power 0 and 1.3 %, temperature 0 and 2 C, fan 2
+and 2 points. Every tolerance holds on the reference card; the temperature one sits at twice the
+smallest step a whole-degree reading can show. The values stay as they are until check 112 shows
+the scatter of a card that is hot at stock.
 
 ### Where it applies
 
