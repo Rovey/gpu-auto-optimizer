@@ -27,6 +27,11 @@ StabilityResult run_stability(const std::function<StressBatch()>& batch,
     StabilityResult r;
     long long iterations = 0;
     Avg power, core, mem;
+    // The counted part (StabilityResult::counted): the batches that begin in
+    // the last kCountedShare of the asked-for length.
+    const double counted_from = seconds * (1 - kCountedShare);
+    long long counted_its = 0;
+    Avg c_power, c_core, c_mem, c_temp, c_fan;
     struct Recent { long long iterations; double seconds; };
     std::deque<Recent> recent;   // the batches covering the last kStallWindowS
     long long recent_its = 0;
@@ -36,6 +41,7 @@ StabilityResult run_stability(const std::function<StressBatch()>& batch,
         // A batch that claims no time would never advance the loop; count it
         // as 1 ms so a broken timer ends the run instead of hanging it.
         const double batch_s = std::max(b.elapsed_ms, 1.0) / 1000.0;
+        const bool counts = r.seconds >= counted_from;
         r.seconds += batch_s;
         // Device lost first: after a TDR the error counter is garbage.
         if (b.device_lost) { r.verdict = Verdict::DeviceLost; break; }
@@ -49,6 +55,15 @@ StabilityResult run_stability(const std::function<StressBatch()>& batch,
         power.add(t.power_w, batch_s);
         core.add(t.core_mhz, batch_s);
         mem.add(t.mem_mhz, batch_s);
+        if (counts) {
+            r.counted.seconds += batch_s;
+            counted_its += b.iterations;
+            c_power.add(t.power_w, batch_s);
+            c_core.add(t.core_mhz, batch_s);
+            c_mem.add(t.mem_mhz, batch_s);
+            c_temp.add(t.temp_c, batch_s);
+            c_fan.add(t.fan_pct, batch_s);
+        }
         if (t.temp_c > max_temp_c) { r.verdict = Verdict::TooHot; break; }
         recent.push_back({b.iterations, batch_s});
         recent_its += b.iterations;
@@ -69,7 +84,28 @@ StabilityResult run_stability(const std::function<StressBatch()>& batch,
     r.avg_power_w = power.get();
     r.avg_core_mhz = core.get();
     r.avg_mem_mhz = mem.get();
+    if (r.verdict == Verdict::Stable && r.counted.seconds > 0) {
+        r.counted.score = static_cast<double>(counted_its) / r.counted.seconds;
+        r.counted.avg_power_w = c_power.get();
+        r.counted.avg_core_mhz = c_core.get();
+        r.counted.avg_mem_mhz = c_mem.get();
+        r.counted.avg_temp_c = c_temp.get();
+        r.counted.avg_fan_pct = c_fan.get();
+    } else {
+        r.counted = {};
+    }
     return r;
+}
+
+StabilityResult counted_view(const StabilityResult& r) {
+    if (r.counted.seconds <= 0) return r;
+    StabilityResult v = r;
+    v.seconds = r.counted.seconds;
+    v.score = r.counted.score;
+    v.avg_power_w = r.counted.avg_power_w;
+    v.avg_core_mhz = r.counted.avg_core_mhz;
+    v.avg_mem_mhz = r.counted.avg_mem_mhz;
+    return v;
 }
 
 const char* verdict_name(Verdict v) {

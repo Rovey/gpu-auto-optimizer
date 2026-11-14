@@ -241,3 +241,56 @@ TEST_CASE("the line about the card's own temperature target says when it is not 
     CHECK(temp_target_text(0, 0) == "  the card reports no temperature target of its own");
     CHECK(temp_target_text(0, 84) == "  the card reports no temperature target of its own");
 }
+
+TEST_CASE("the counted part is the last half of a run that covered its full length") {
+    // 10 s of 1 s batches: 100 iterations each in the first half, 200 in the
+    // second; the card warms from 60 to 69 C and its fans from 30 to 48 %.
+    int calls = 0;
+    int temp = 59;
+    const auto r = run_stability(
+        [&] { ++calls; return StressBatch{calls <= 5 ? 100 : 200, 0, false, 1000}; },
+        [&] {
+            Telemetry t = tel(++temp, calls <= 5 ? 150 : 200, calls <= 5 ? 2800 : 2700);
+            t.fan_pct = 30 + 2 * (temp - 60);
+            return t;
+        },
+        10.0, 85);
+    REQUIRE(r.verdict == Verdict::Stable);
+    CHECK(r.score == doctest::Approx(150));   // the whole run
+    CHECK(r.avg_power_w == 175);
+    CHECK(r.counted.seconds == doctest::Approx(5.0));
+    CHECK(r.counted.score == doctest::Approx(200));   // batches 6 to 10
+    CHECK(r.counted.avg_power_w == 200);
+    CHECK(r.counted.avg_core_mhz == 2700);
+    CHECK(r.counted.avg_mem_mhz == 10500);
+    CHECK(r.counted.avg_temp_c == 67);   // 65 to 69
+    CHECK(r.counted.avg_fan_pct == 44);  // 40 to 48
+    CHECK(r.peak_temp_c == 69);
+
+    const StabilityResult v = counted_view(r);
+    CHECK(v.seconds == doctest::Approx(5.0));
+    CHECK(v.score == doctest::Approx(200));
+    CHECK(v.avg_power_w == 200);
+    CHECK(v.avg_core_mhz == 2700);
+    CHECK(v.peak_temp_c == 69);   // over the whole run, as the safety stops see it
+    CHECK(v.end_fan_pct == 48);
+}
+
+TEST_CASE("a run that ended early has no counted part, and its view is the run itself") {
+    int calls = 0;
+    const auto r = run_stability([&] { ++calls; return good(100, 1000); }, [&] { return tel(calls < 8 ? 80 : 86); }, 10.0, 85);
+    REQUIRE(r.verdict == Verdict::TooHot);
+    CHECK(r.counted.seconds == 0);
+    CHECK(r.counted.score == 0);
+    CHECK(r.counted.avg_temp_c == -1);
+    const StabilityResult v = counted_view(r);
+    CHECK(v.seconds == doctest::Approx(r.seconds));
+    CHECK(v.score == doctest::Approx(r.score));
+}
+
+TEST_CASE("a card that reports no fan speed has no counted fan speed") {
+    const auto r = run_stability([] { return good(100, 1000); }, [] { Telemetry t = tel(60); t.fan_pct = -1; return t; }, 4.0, 85);
+    REQUIRE(r.verdict == Verdict::Stable);
+    CHECK(r.counted.avg_fan_pct == -1);
+    CHECK(r.counted.avg_temp_c == 60);
+}
