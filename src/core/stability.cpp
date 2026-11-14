@@ -97,17 +97,6 @@ StabilityResult run_stability(const std::function<StressBatch()>& batch,
     return r;
 }
 
-StabilityResult counted_view(const StabilityResult& r) {
-    if (r.counted.seconds <= 0) return r;
-    StabilityResult v = r;
-    v.seconds = r.counted.seconds;
-    v.score = r.counted.score;
-    v.avg_power_w = r.counted.avg_power_w;
-    v.avg_core_mhz = r.counted.avg_core_mhz;
-    v.avg_mem_mhz = r.counted.avg_mem_mhz;
-    return v;
-}
-
 const char* verdict_name(Verdict v) {
     switch (v) {
         case Verdict::Stable: return "STABLE";
@@ -127,6 +116,17 @@ std::string measured_line(const char* name, const StabilityResult& s, bool with_
     char line[256];
     std::snprintf(line, sizeof(line), "  %s score=%.0f it/s  core=%d MHz%s  peak=%d C  fan=%s  power=%d W  (%.0f s)", name, s.score,
                   s.avg_core_mhz, mem, s.peak_temp_c, reading(s.end_fan_pct, " %").c_str(), s.avg_power_w, s.seconds);
+    return line;
+}
+
+std::string counted_line(const char* name, const StabilityResult& s) {
+    const StabilityResult::Counted& c = s.counted;
+    char line[320];
+    std::snprintf(line, sizeof(line),
+                  "  %s averages of the last %.0f s: score=%.0f it/s  core=%d MHz  power=%d W  temp=%s  fan=%s;  whole %.0f s: peak=%d C  "
+                  "fan at the end=%s",
+                  name, c.seconds, c.score, c.avg_core_mhz, c.avg_power_w, reading(c.avg_temp_c, " C").c_str(),
+                  reading(c.avg_fan_pct, " %").c_str(), s.seconds, s.peak_temp_c, reading(s.end_fan_pct, " %").c_str());
     return line;
 }
 

@@ -163,9 +163,10 @@ struct UndervoltOutcome {
     std::string error;
     UndervoltResult result;    // valid when ran
     // The Undervolt profile's result against stock, as it was judged (#84):
-    // the counted part of each measurement (core/stability.hpp), both with
-    // the fans on the run's curve. Empty on top of a saved tune, and when the
-    // result was not kept.
+    // the two whole measurements, both with the fans on the run's curve. The
+    // judgement used their counted part (StabilityResult::counted); whoever
+    // shows them shows that part's averages, and the peak apart. Empty on top
+    // of a saved tune, and when the result was not kept.
     std::optional<StabilityResult> before, after;
     bool saved = false;        // the profile was saved for --apply / boot-apply
     std::string save_note;     // why it was not saved, when !saved
@@ -187,6 +188,12 @@ struct UndervoltOnTune {
     std::optional<Preset> save_as;             // the preset the profile is saved under; empty: as it was
 };
 UndervoltOutcome run_undervolt(const OptimizeHooks& hooks, bool on_saved_tune = false, const UndervoltOnTune& how = {});
+
+// What a profile keeps of an undervolt judged against stock: for each side the
+// averages of its counted part (score, clocks, power, temperature and fan
+// speed: what the judgement used), and the peak temperature and the last fan
+// reading of the whole run.
+AgainstStock counted_against_stock(const StabilityResult& stock, const StabilityResult& tuned);
 
 struct AllInOneOutcome {
     bool ran = false;            // false: stopped before anything was tuned; `error` says why

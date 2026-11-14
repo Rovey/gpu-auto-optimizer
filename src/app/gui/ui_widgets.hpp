@@ -79,6 +79,8 @@ std::string against(double before, double after, const char* unit);
 // "Done: 4.6 % faster, 6 % more power": the result in one line, from the
 // two runs a result page compares. Just "Done" when either has no score.
 std::string done_heading(const StabilityResult& before, const StabilityResult& after);
+// The same from the numbers: scores, and powers (-1 when not known).
+std::string done_heading(double score_before, double score_after, int power_before, int power_after);
 // The engine's words, said for the window: its lines also go to the command
 // line and boot.log, where `gao --reset` and boot-apply are the right names.
 std::string for_window(std::string text);

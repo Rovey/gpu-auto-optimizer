@@ -119,8 +119,17 @@ void tuning_card(UiState& s, const UiActions& act) {
             if (const auto& m = p.against_stock; m && s.profile_gpu_ok) {
                 row("Speed vs stock", stock_to_tune(m->stock.score, m->tuned.score, " it/s", true));
                 row("Power vs stock", stock_to_tune(m->stock.power_w, m->tuned.power_w, " W", true));
-                row("Fans under load", stock_to_tune(m->stock.fan_pct, m->tuned.fan_pct, " %", false));
-                row("Peak temperature", stock_to_tune(m->stock.peak_temp_c, m->tuned.peak_temp_c, " \xC2\xB0""C", false));
+                if (m->stock.counted_s > 0 && m->tuned.counted_s > 0) {   // an undervolt judged against stock (#84)
+                    row("Temperature, average", stock_to_tune(m->stock.avg_temp_c, m->tuned.avg_temp_c, " \xC2\xB0""C", false));
+                    row("Fans, average", stock_to_tune(m->stock.avg_fan_pct, m->tuned.avg_fan_pct, " %", false));
+                    row("Peak temperature", stock_to_tune(m->stock.peak_temp_c, m->tuned.peak_temp_c, " \xC2\xB0""C", false));
+                    row("", "(averages of the last half of five minutes each, both with the fans on the app's curve; the peak of the "
+                            "whole run)",
+                        kDim);
+                } else {
+                    row("Fans under load", stock_to_tune(m->stock.fan_pct, m->tuned.fan_pct, " %", false));
+                    row("Peak temperature", stock_to_tune(m->stock.peak_temp_c, m->tuned.peak_temp_c, " \xC2\xB0""C", false));
+                }
                 if (!step.empty()) row("", "(measured for the tune the run found, not for this step)", kDim);
             } else if (s.profile_gpu_ok) {
                 row("Against stock", "Not measured for this tune (it was made by an older version).", kDim);

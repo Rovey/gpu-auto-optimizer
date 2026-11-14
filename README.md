@@ -304,7 +304,9 @@ What it cannot do: promise that every card stays stable in every game, or keep a
 - **You see what it does.** During a run the window draws the card's voltage/frequency curve as the run writes it, over the
   card's own curve. It says which step the run is at and counts every long step down.
 - **You keep seeing what it gave.** The dashboard shows the saved tune against the card at stock, as measured when the tune
-  was made: speed, power, fan speed under load and peak temperature.
+  was made: speed, power, fan speed under load and peak temperature. For an Undervolt tune those are the averages of the
+  last half of each measurement, the numbers the run judged it on, with the average temperature and fan speed and the
+  peak temperature of the whole run apart.
 - **Fan curves:** the measured one, Silent, Normal, Cool or Aggressive, or your own. The fans stop at idle without cycling
   on and off. The app learns the lowest speed your fans can actually hold. The fans go back to the driver on exit, sleep,
   logoff and crashes.

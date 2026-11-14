@@ -321,7 +321,24 @@ TEST_CASE("a step that was refused before anything was written says the card was
           "not applied: setting core +150 MHz failed -- reset to stock FAILED, run `gao --reset`");
 }
 
-TEST_CASE("an undervolt judged against stock shows the counted half of both sides") {
+namespace {
+// A five-minute measurement whose whole-run numbers differ from its counted
+// half, so that a test sees which of the two is shown and kept.
+gao::StabilityResult judged_run(double score, int power_w, int avg_temp_c, int avg_fan_pct, int peak_temp_c, int end_fan_pct) {
+    gao::StabilityResult r;
+    r.seconds = 300;
+    r.score = score - 100;          // the whole run, warm-up included
+    r.avg_power_w = power_w + 10;
+    r.avg_core_mhz = 2800;
+    r.avg_mem_mhz = 10500;
+    r.peak_temp_c = peak_temp_c;
+    r.end_fan_pct = end_fan_pct;
+    r.counted = {150, score, power_w, 2790, 10501, avg_temp_c, avg_fan_pct};
+    return r;
+}
+}
+
+TEST_CASE("an undervolt judged against stock shows the averages it was judged on, and the peak apart") {
     UndervoltOutcome o;
     o.ran = true;
     o.saved = true;
@@ -329,21 +346,44 @@ TEST_CASE("an undervolt judged against stock shows the counted half of both side
     o.result.freq_khz = 2790000;
     o.result.applied_uv = 990000;
     o.result.stock_uv = 1100000;
-    o.result.baseline.score = 5600;   // the whole first measurement; not what is compared
-    gao::StabilityResult before, after;
-    before.seconds = after.seconds = 150;
-    before.score = 5641;
-    after.score = 5625;
-    before.avg_power_w = 194;
-    after.avg_power_w = 155;
-    o.before = before;
-    o.after = after;
+    o.result.baseline.score = 5600;   // the ceiling's measurement; not what is compared
+    o.before = judged_run(5641, 194, 66, 60, 68, 61);
+    o.after = judged_run(5625, 155, 59, 55, 61, 56);
     const auto lines = gao::app::result_lines(o);
-    CHECK(has_line(lines, "before: score=5641 it/s"));
-    CHECK(has_line(lines, "after:  score=5625 it/s"));
-    CHECK(has_line(lines, "(150 s)"));
-    CHECK(has_line(lines, "  the last 150 s of five minutes each, both with the fans on the app's curve"));
+    CHECK(has_line(lines, "  before: averages of the last 150 s: score=5641 it/s  core=2790 MHz  power=194 W  temp=66 C  fan=60 %;  "
+                          "whole 300 s: peak=68 C  fan at the end=61 %"));
+    CHECK(has_line(lines, "  after:  averages of the last 150 s: score=5625 it/s  core=2790 MHz  power=155 W  temp=59 C  fan=55 %;  "
+                          "whole 300 s: peak=61 C  fan at the end=56 %"));
+    CHECK(has_line(lines, "  both with the fans on the app's curve; the result was judged on the averages"));
     CHECK_FALSE(has_line(lines, "score=5600"));
+    CHECK_FALSE(has_line(lines, "score=5541"));   // the whole run's score is not the one compared
+}
+
+TEST_CASE("the saved comparison of a judged undervolt keeps the averages it was judged on, and survives the profile file") {
+    const gao::AgainstStock a = gao::app::counted_against_stock(judged_run(5641, 194, 66, 60, 68, 61), judged_run(5625, 155, 59, 55, 61, 56));
+    CHECK(a.stock.score == doctest::Approx(5641));
+    CHECK(a.stock.power_w == 194);
+    CHECK(a.stock.core_mhz == 2790);
+    CHECK(a.stock.mem_mhz == 10501);
+    CHECK(a.stock.avg_temp_c == 66);
+    CHECK(a.stock.avg_fan_pct == 60);
+    CHECK(a.stock.counted_s == doctest::Approx(150));
+    CHECK(a.stock.peak_temp_c == 68);   // the whole run's, apart
+    CHECK(a.stock.fan_pct == 61);
+    CHECK(a.tuned.score == doctest::Approx(5625));
+    CHECK(a.tuned.power_w == 155);
+    CHECK(a.tuned.avg_temp_c == 59);
+    CHECK(a.tuned.avg_fan_pct == 55);
+    CHECK(a.tuned.peak_temp_c == 61);
+
+    gao::Config c;
+    c.profile = gao::Profile{gao::Preset::Undervolt, 100, 0, 0, "617.42", "GPU-1", "2026-11-14 18:00"};
+    c.profile->undervolt = gao::UndervoltTune{990000, 2790000, 0};
+    c.profile->against_stock = a;
+    const gao::Config back = gao::from_json(gao::to_json(c));
+    REQUIRE(back.profile);
+    REQUIRE(back.profile->against_stock);
+    CHECK(*back.profile->against_stock == a);
 }
 
 TEST_CASE("an undervolt that gained nothing against stock is not applied, and says why") {

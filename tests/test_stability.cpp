@@ -265,27 +265,23 @@ TEST_CASE("the counted part is the last half of a run that covered its full leng
     CHECK(r.counted.avg_mem_mhz == 10500);
     CHECK(r.counted.avg_temp_c == 67);   // 65 to 69
     CHECK(r.counted.avg_fan_pct == 44);  // 40 to 48
-    CHECK(r.peak_temp_c == 69);
+    CHECK(r.peak_temp_c == 69);   // over the whole run, as the safety stops see it
+    CHECK(r.end_fan_pct == 48);
 
-    const StabilityResult v = counted_view(r);
-    CHECK(v.seconds == doctest::Approx(5.0));
-    CHECK(v.score == doctest::Approx(200));
-    CHECK(v.avg_power_w == 200);
-    CHECK(v.avg_core_mhz == 2700);
-    CHECK(v.peak_temp_c == 69);   // over the whole run, as the safety stops see it
-    CHECK(v.end_fan_pct == 48);
+    // As it is shown: the averages of the counted part, then the peak and the
+    // last fan reading of the whole run, each named.
+    CHECK(counted_line("before:", r) ==
+          "  before: averages of the last 5 s: score=200 it/s  core=2700 MHz  power=200 W  temp=67 C  fan=44 %;  whole 10 s: peak=69 C  "
+          "fan at the end=48 %");
 }
 
-TEST_CASE("a run that ended early has no counted part, and its view is the run itself") {
+TEST_CASE("a run that ended early has no counted part") {
     int calls = 0;
     const auto r = run_stability([&] { ++calls; return good(100, 1000); }, [&] { return tel(calls < 8 ? 80 : 86); }, 10.0, 85);
     REQUIRE(r.verdict == Verdict::TooHot);
     CHECK(r.counted.seconds == 0);
     CHECK(r.counted.score == 0);
     CHECK(r.counted.avg_temp_c == -1);
-    const StabilityResult v = counted_view(r);
-    CHECK(v.seconds == doctest::Approx(r.seconds));
-    CHECK(v.score == doctest::Approx(r.score));
 }
 
 TEST_CASE("a card that reports no fan speed has no counted fan speed") {
@@ -293,4 +289,5 @@ TEST_CASE("a card that reports no fan speed has no counted fan speed") {
     REQUIRE(r.verdict == Verdict::Stable);
     CHECK(r.counted.avg_fan_pct == -1);
     CHECK(r.counted.avg_temp_c == 60);
+    CHECK(counted_line("after: ", r).find("temp=60 C  fan=n/a;") != std::string::npos);
 }

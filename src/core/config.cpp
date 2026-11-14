@@ -32,8 +32,14 @@ std::optional<FanCurve> curve_from(const nlohmann::json& j) {
 }
 
 nlohmann::json run_json(const MeasuredRun& r) {
-    return {{"score", r.score},       {"core_mhz", r.core_mhz}, {"mem_mhz", r.mem_mhz},
-            {"peak_temp_c", r.peak_temp_c}, {"fan_pct", r.fan_pct}, {"power_w", r.power_w}};
+    nlohmann::json j = {{"score", r.score},       {"core_mhz", r.core_mhz}, {"mem_mhz", r.mem_mhz},
+                        {"peak_temp_c", r.peak_temp_c}, {"fan_pct", r.fan_pct}, {"power_w", r.power_w}};
+    if (r.counted_s > 0) {   // only then: a whole-run measurement is written as it always was
+        j["counted_s"] = r.counted_s;
+        j["avg_temp_c"] = r.avg_temp_c;
+        j["avg_fan_pct"] = r.avg_fan_pct;
+    }
+    return j;
 }
 
 // nullopt unless every field is there with its type: half a run never shows.
@@ -49,6 +55,15 @@ std::optional<MeasuredRun> run_from(const nlohmann::json& j) {
         const auto it = j.find(key);
         if (it == j.end() || !it->is_number_integer()) return std::nullopt;
         *field = it->get<int>();
+    }
+    // The averages of a counted part: all three, or the run counts as a
+    // whole-run measurement (as written before they existed).
+    const auto counted = j.find("counted_s"), temp = j.find("avg_temp_c"), fan = j.find("avg_fan_pct");
+    if (counted != j.end() && counted->is_number() && counted->get<double>() > 0 && temp != j.end() && temp->is_number_integer() &&
+        fan != j.end() && fan->is_number_integer()) {
+        r.counted_s = counted->get<double>();
+        r.avg_temp_c = temp->get<int>();
+        r.avg_fan_pct = fan->get<int>();
     }
     return r;
 }

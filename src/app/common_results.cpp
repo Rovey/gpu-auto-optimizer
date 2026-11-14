@@ -60,11 +60,10 @@ std::vector<std::string> result_lines(const UndervoltOutcome& o) {
                   r.applied_uv / 1000, r.stock_uv / 1000, r.edge_uv / 1000, r.confirmed_uv / 1000);
     lines.push_back(line);
     add_resets(lines, driver_resets(o));
-    if (o.before && o.after) {   // judged against stock: the counted part of each, on the same fan curve
-        lines.push_back(measured_line("before:", *o.before, false));
-        lines.push_back(measured_line("after: ", *o.after, false));
-        lines.push_back("  the last " + std::to_string(static_cast<int>(o.after->seconds + 0.5)) +
-                        " s of five minutes each, both with the fans on the app's curve");
+    if (o.before && o.after) {   // judged against stock: the averages it was judged on, and the peak apart
+        lines.push_back(counted_line("before:", *o.before));
+        lines.push_back(counted_line("after: ", *o.after));
+        lines.push_back("  both with the fans on the app's curve; the result was judged on the averages");
     } else {
         lines.push_back(measured_line("before:", r.baseline, false));
         lines.push_back(measured_line("after: ", r.after, false));

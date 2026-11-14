@@ -388,8 +388,8 @@ UndervoltOutcome run_undervolt(const OptimizeHooks& hooks, bool on_saved_tune, c
         }
         log("against stock: " + judged.why + ", over the last " + std::to_string(static_cast<int>(out.result.after.counted.seconds + 0.5)) +
             " s of each");
-        out.before = counted_view(before->result);
-        out.after = counted_view(out.result.after);
+        out.before = before->result;
+        out.after = out.result.after;
     }
 
     const std::string driver = hw.DriverVersion(), gpu_id = hw.GpuUuid();
@@ -424,7 +424,8 @@ UndervoltOutcome run_undervolt(const OptimizeHooks& hooks, bool on_saved_tune, c
     }
     p.undervolt = UndervoltTune{out.result.applied_uv, out.result.freq_khz, out.result.raise_khz};
     // On a saved tune the baseline is that tune, not stock: the stock run it was saved with stays.
-    if (!over) p.against_stock = out.before && out.after ? against_stock(*out.before, *out.after) : against_stock(out.result.baseline, out.result.after);
+    if (!over)
+        p.against_stock = out.before && out.after ? counted_against_stock(*out.before, *out.after) : against_stock(out.result.baseline, out.result.after);
     else if (p.against_stock && out.result.after.score > 0) p.against_stock->tuned = measured_run(out.result.after);
     cfg.profile = p;
     cfg.boot_strikes = 0;   // strikes belong to the profile they were earned by

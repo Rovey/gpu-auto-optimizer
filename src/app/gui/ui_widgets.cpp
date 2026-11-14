@@ -83,15 +83,19 @@ std::string against(double before, double after, const char* unit) {
 }
 
 std::string done_heading(const StabilityResult& before, const StabilityResult& after) {
-    if (before.score <= 0 || after.score <= 0) return "Done";
+    return done_heading(before.score, after.score, before.avg_power_w, after.avg_power_w);
+}
+
+std::string done_heading(const double score_before, const double score_after, const int power_before, const int power_after) {
+    if (score_before <= 0 || score_after <= 0) return "Done";
     char buf[96];
-    const double speed = (after.score / before.score - 1) * 100;
+    const double speed = (score_after / score_before - 1) * 100;
     if (speed >= 0.05) std::snprintf(buf, sizeof(buf), "Done: %.1f %% faster", speed);
     else if (speed <= -0.05) std::snprintf(buf, sizeof(buf), "Done: %.1f %% slower", -speed);
     else std::snprintf(buf, sizeof(buf), "Done: the same speed");
     std::string out = buf;
-    if (before.avg_power_w > 0 && after.avg_power_w > 0) {
-        const double power = (static_cast<double>(after.avg_power_w) / before.avg_power_w - 1) * 100;
+    if (power_before > 0 && power_after > 0) {
+        const double power = (static_cast<double>(power_after) / power_before - 1) * 100;
         if (power >= 0.5) std::snprintf(buf, sizeof(buf), ", %.0f %% more power", power);
         else if (power <= -0.5) std::snprintf(buf, sizeof(buf), ", %.0f %% less power", -power);
         else std::snprintf(buf, sizeof(buf), ", the same power");

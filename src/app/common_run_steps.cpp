@@ -16,6 +16,21 @@ MeasuredRun measured_run(const StabilityResult& r) {
     return {r.score, r.avg_core_mhz, r.avg_mem_mhz, r.peak_temp_c, r.end_fan_pct, r.avg_power_w};
 }
 
+namespace {
+MeasuredRun counted_run(const StabilityResult& r) {
+    const StabilityResult::Counted& c = r.counted;
+    MeasuredRun m{c.score, c.avg_core_mhz, c.avg_mem_mhz, r.peak_temp_c, r.end_fan_pct, c.avg_power_w};
+    m.counted_s = c.seconds;
+    m.avg_temp_c = c.avg_temp_c;
+    m.avg_fan_pct = c.avg_fan_pct;
+    return m;
+}
+}
+
+AgainstStock counted_against_stock(const StabilityResult& stock, const StabilityResult& tuned) {
+    return AgainstStock{counted_run(stock), counted_run(tuned)};
+}
+
 // Both runs, or nothing: a comparison with half its numbers says nothing.
 std::optional<AgainstStock> against_stock(const StabilityResult& stock, const StabilityResult& tuned) {
     if (stock.score <= 0 || tuned.score <= 0) return std::nullopt;
