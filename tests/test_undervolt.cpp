@@ -711,3 +711,85 @@ TEST_CASE("find_undervolt: a card that fails while the load warms up starts no s
     CHECK_FALSE(s2.ok);
     CHECK(s2.reason == "aborted");
 }
+
+namespace {
+// A measurement that ran its full length, with its counted part.
+StabilityResult measured(double score, int power_w, int temp_c, int fan_pct) {
+    StabilityResult r;
+    r.verdict = Verdict::Stable;
+    r.seconds = 300;
+    r.score = score;
+    r.peak_temp_c = temp_c + 1;
+    r.counted = {150, score, power_w, 2790, 10500, temp_c, fan_pct};
+    return r;
+}
+}
+
+TEST_CASE("judge_against_stock: the reference RTX 4070's undervolt is kept for its power") {
+    // Check 75, step 3: 5725 it/s on 172 W against 5641 it/s on 194 W at stock.
+    const StockJudgement j = judge_against_stock(measured(5641, 194, 66, 60), measured(5725, 172, 63, 58), true);
+    CHECK(j.keep);
+    CHECK(j.why.find("power 172 against 194 W (-11.3 %)") != std::string::npos);
+}
+
+TEST_CASE("judge_against_stock: a measurement at stock that the temperature stopped compares with nothing") {
+    // The GTX 1080 Ti of rc1: stock stopped after 119 s at 86 C.
+    StabilityResult stock;
+    stock.verdict = Verdict::TooHot;
+    stock.seconds = 119;
+    stock.score = 2696;
+    stock.peak_temp_c = 86;
+    const StockJudgement j = judge_against_stock(stock, measured(2610, 197, 84, 89), true);
+    CHECK_FALSE(j.keep);
+    CHECK(j.why == "not compared: the measurement at stock did not run its full length (TOO HOT at 86 C after 119 s)");
+}
+
+TEST_CASE("judge_against_stock: the soak without a counted part, or other fan control, compares with nothing") {
+    StabilityResult soak = measured(5725, 172, 63, 58);
+    soak.counted = {};
+    CHECK(judge_against_stock(measured(5641, 194, 66, 60), soak, true).why == "not compared: the result's soak did not run its full length");
+    const StockJudgement j = judge_against_stock(measured(5641, 194, 66, 60), measured(5725, 172, 63, 58), false);
+    CHECK_FALSE(j.keep);
+    CHECK(j.why == "not compared: the fans were not under the same control at stock and with the result");
+}
+
+TEST_CASE("judge_against_stock: slower than 99 % of stock is not kept, whatever it saves") {
+    const StockJudgement j = judge_against_stock(measured(5000, 200, 70, 60), measured(4940, 150, 60, 40), true);
+    CHECK_FALSE(j.keep);
+    CHECK(j.why.starts_with("slower than stock (score 4940 against 5000 it/s (-1.2 %)"));
+    CHECK(judge_against_stock(measured(5000, 200, 70, 60), measured(4950, 150, 70, 60), true).keep);   // exactly 99 %
+}
+
+TEST_CASE("judge_against_stock: warmer without being quieter, or louder without being cooler, is a regression") {
+    const StabilityResult stock = measured(5000, 200, 70, 60);
+    CHECK(judge_against_stock(stock, measured(5000, 180, 73, 58), true).why.starts_with("warmer than stock, with the fans no slower"));
+    CHECK(judge_against_stock(stock, measured(5000, 180, 70, 66), true).why.starts_with("louder than stock, with the card no cooler"));
+    CHECK(judge_against_stock(stock, measured(5000, 180, 72, 60), true).keep);   // 2 C warmer is within the tolerance
+    CHECK(judge_against_stock(stock, measured(5000, 180, 70, 65), true).keep);   // 5 points louder too
+    // Warmer and quieter by enough, or louder and cooler by enough: a trade, not a regression.
+    CHECK(judge_against_stock(stock, measured(5000, 210, 74, 55), true).keep);
+    CHECK(judge_against_stock(stock, measured(5000, 210, 68, 70), true).keep);
+}
+
+TEST_CASE("judge_against_stock: more power alone does not discard a result that is cooler or quieter") {
+    CHECK(judge_against_stock(measured(5000, 200, 70, 60), measured(5000, 210, 67, 60), true).keep);
+    CHECK(judge_against_stock(measured(5000, 200, 70, 60), measured(5000, 210, 70, 55), true).keep);
+}
+
+TEST_CASE("judge_against_stock: finishing the soak keeps nothing that gained nothing") {
+    const StabilityResult stock = measured(5000, 200, 70, 60);
+    const StockJudgement j = judge_against_stock(stock, measured(5000, 195, 69, 57), true);   // -2.5 %, 1 C, 3 points
+    CHECK_FALSE(j.keep);
+    CHECK(j.why == "no gain against stock: not less power, not cooler, not quieter (score 5000 against 5000 it/s (+0.0 %), "
+                   "power 195 against 200 W (-2.5 %), 69 against 70 C, fans 57 against 60 %, over the last 150 s)");
+    CHECK(judge_against_stock(stock, measured(5000, 194, 70, 60), true).keep);   // exactly 97 % of the power
+}
+
+TEST_CASE("judge_against_stock: a reading the card does not give is not judged") {
+    // No fan speed on either side: only power and temperature count.
+    CHECK(judge_against_stock(measured(5000, 200, 70, -1), measured(5000, 180, 70, -1), true).keep);
+    CHECK_FALSE(judge_against_stock(measured(5000, 200, 70, -1), measured(5000, 199, 73, -1), true).keep);
+    // No power reading: cooler or quieter must carry it.
+    CHECK_FALSE(judge_against_stock(measured(5000, -1, 70, 60), measured(5000, -1, 70, 60), true).keep);
+    CHECK(judge_against_stock(measured(5000, -1, 70, 60), measured(5000, -1, 68, 60), true).keep);
+}

@@ -282,4 +282,51 @@ UndervoltResult find_undervolt(const GpuControl& gpu, Journal& journal, const Un
     return finish_fail("the soak failed");
 }
 
+namespace {
+
+// "score 2610 against 2696 it/s (-3.2 %), power 197 against 178 W (+10.7 %),
+// 84 against 83 C, fans 89 against 79 %": the counted parts, after first.
+std::string compared_text(const StabilityResult::Counted& s, const StabilityResult::Counted& a) {
+    char buf[300];
+    int n = std::snprintf(buf, sizeof(buf), "score %.0f against %.0f it/s (%+.1f %%)", a.score, s.score, (a.score / s.score - 1) * 100);
+    auto more = [&](const char* fmt, auto... v) {
+        if (n > 0 && n < static_cast<int>(sizeof(buf))) n += std::snprintf(buf + n, sizeof(buf) - n, fmt, v...);
+    };
+    if (a.avg_power_w >= 0 && s.avg_power_w > 0)
+        more(", power %d against %d W (%+.1f %%)", a.avg_power_w, s.avg_power_w, (double(a.avg_power_w) / s.avg_power_w - 1) * 100);
+    if (a.avg_temp_c >= 0 && s.avg_temp_c >= 0) more(", %d against %d C", a.avg_temp_c, s.avg_temp_c);
+    if (a.avg_fan_pct >= 0 && s.avg_fan_pct >= 0) more(", fans %d against %d %%", a.avg_fan_pct, s.avg_fan_pct);
+    return buf;
+}
+
+}
+
+StockJudgement judge_against_stock(const StabilityResult& stock, const StabilityResult& after, bool same_fans) {
+    const auto not_compared = [](const std::string& why) { return StockJudgement{false, "not compared: " + why}; };
+    if (stock.verdict != Verdict::Stable || stock.counted.seconds <= 0 || stock.counted.score <= 0) {
+        char buf[200];
+        std::snprintf(buf, sizeof(buf), "the measurement at stock did not run its full length (%s at %d C after %.0f s)",
+                      verdict_name(stock.verdict), stock.peak_temp_c, stock.seconds);
+        return not_compared(buf);
+    }
+    if (after.verdict != Verdict::Stable || after.counted.seconds <= 0 || after.counted.score <= 0)
+        return not_compared("the result's soak did not run its full length");
+    if (!same_fans) return not_compared("the fans were not under the same control at stock and with the result");
+
+    const StabilityResult::Counted& s = stock.counted;
+    const StabilityResult::Counted& a = after.counted;
+    const std::string numbers = " (" + compared_text(s, a) + ", over the last " + std::to_string(static_cast<int>(a.seconds + 0.5)) + " s)";
+    if (a.score < kNotSlowerScore * s.score) return {false, "slower than stock" + numbers};
+
+    const bool temps = a.avg_temp_c >= 0 && s.avg_temp_c >= 0, fans = a.avg_fan_pct >= 0 && s.avg_fan_pct >= 0;
+    const int warmer = temps ? a.avg_temp_c - s.avg_temp_c : 0, louder = fans ? a.avg_fan_pct - s.avg_fan_pct : 0;
+    const bool cooler = temps && warmer <= -kKeepCoolerC, quieter = fans && louder <= -kKeepQuieterPts;
+    if (temps && warmer > kKeepCoolerC && !quieter) return {false, "warmer than stock, with the fans no slower" + numbers};
+    if (fans && louder > kKeepQuieterPts && !cooler) return {false, "louder than stock, with the card no cooler" + numbers};
+
+    const bool less_power = a.avg_power_w >= 0 && s.avg_power_w > 0 && a.avg_power_w <= kKeepPowerShare * s.avg_power_w + 1e-9;
+    if (!less_power && !cooler && !quieter) return {false, "no gain against stock: not less power, not cooler, not quieter" + numbers};
+    return {true, compared_text(s, a)};
+}
+
 }

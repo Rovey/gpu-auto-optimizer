@@ -18,6 +18,11 @@ struct UndervoltTune {
 
 // A five-minute run under full load, as the dashboard compares the tune with
 // stock: the run's own numbers, -1 (0 for the score) where it had none.
+// counted_s > 0: score, clocks and power are the averages of the run's last
+// counted_s seconds (StabilityResult::counted), the part an undervolt was
+// judged on, and avg_temp_c and avg_fan_pct are the averages over it too.
+// 0: they are of the whole run, and there are no averages of temperature
+// and fan speed. peak_temp_c and fan_pct are of the whole run either way.
 struct MeasuredRun {
     double score = 0;   // iterations per second
     int core_mhz = -1;
@@ -25,6 +30,9 @@ struct MeasuredRun {
     int peak_temp_c = -1;
     int fan_pct = -1;   // at the end of the run
     int power_w = -1;
+    double counted_s = 0;
+    int avg_temp_c = -1;
+    int avg_fan_pct = -1;
     bool operator==(const MeasuredRun&) const = default;
 };
 

@@ -30,17 +30,21 @@ std::string other_tool();
 BusyGate busy_before_run(const OptimizeHooks& hooks);
 
 // The card at stock under load, five minutes: the "before" of every result.
-// It brings its own drivers and stress load, like the searches, and leaves the
-// fans to the NVIDIA driver.
+// It brings its own drivers and stress load, like the searches. The fans
+// follow `curve` (with curve_limit_c as its limit) when one is given, so that
+// the result can be compared under the same fan control (#84); without one
+// they stay with the NVIDIA driver.
 struct StockOutcome {
     std::string error;       // why no run follows: it did not run, was stopped, or the card failed at stock
     StabilityResult result;
+    bool on_curve = false;   // the curve drove the fans to the end (not when the card's fans cannot be set)
+    int temp_target_c = 0;   // the card's own temperature target (GpuControl), 0 or less when it reports none
 };
 
 // The card's clock grid from its V/F curve; kDefaultGridKhz when it cannot be read.
 int grid_khz_of(const GpuControl& gpu);
 
-StockOutcome measure_stock(const OptimizeHooks& hooks);
+StockOutcome measure_stock(const OptimizeHooks& hooks, const std::optional<FanCurve>& curve = {}, int curve_limit_c = 0);
 
 // The wait between a driver reset and the next load (io.rest of the runs).
 // The card is left alone: no load, no driver call, no fan tick, and no log

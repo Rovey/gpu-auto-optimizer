@@ -16,6 +16,21 @@ MeasuredRun measured_run(const StabilityResult& r) {
     return {r.score, r.avg_core_mhz, r.avg_mem_mhz, r.peak_temp_c, r.end_fan_pct, r.avg_power_w};
 }
 
+namespace {
+MeasuredRun counted_run(const StabilityResult& r) {
+    const StabilityResult::Counted& c = r.counted;
+    MeasuredRun m{c.score, c.avg_core_mhz, c.avg_mem_mhz, r.peak_temp_c, r.end_fan_pct, c.avg_power_w};
+    m.counted_s = c.seconds;
+    m.avg_temp_c = c.avg_temp_c;
+    m.avg_fan_pct = c.avg_fan_pct;
+    return m;
+}
+}
+
+AgainstStock counted_against_stock(const StabilityResult& stock, const StabilityResult& tuned) {
+    return AgainstStock{counted_run(stock), counted_run(tuned)};
+}
+
 // Both runs, or nothing: a comparison with half its numbers says nothing.
 std::optional<AgainstStock> against_stock(const StabilityResult& stock, const StabilityResult& tuned) {
     if (stock.score <= 0 || tuned.score <= 0) return std::nullopt;
@@ -88,7 +103,7 @@ BusyGate busy_before_run(const OptimizeHooks& hooks) {
         hooks.busy, [&](const std::string& m) { if (hooks.log) hooks.log(m); });
 }
 
-StockOutcome measure_stock(const OptimizeHooks& hooks) {
+StockOutcome measure_stock(const OptimizeHooks& hooks, const std::optional<FanCurve>& curve, const int curve_limit_c) {
     StockOutcome out;
     auto fail = [&](const std::string& why) { out.error = why; return out; };
     const TuningLock lock;
@@ -109,6 +124,13 @@ StockOutcome measure_stock(const OptimizeHooks& hooks) {
         ~Unregister() { if (h.active_gpu) h.active_gpu(nullptr); }
     } unregister{hooks};
     if (!gpu.reset_to_stock || !gpu.reset_to_stock()) return fail("could not set the card to stock");
+    out.temp_target_c = gpu.temp_target_c;
+    // The run's fan curve, when given, from here to the end of the cool-down;
+    // handed back to the driver on every way out (FanRelease).
+    std::optional<FanDriver> fans;
+    if (curve) fans.emplace(gpu, *curve, curve_limit_c, fan_min_for(load_config(), hw.GpuUuid(), gpu.fan_min_pct));
+    std::optional<FanRelease> fan_release;
+    if (fans) fan_release.emplace(*fans, hw, gpu, hooks);
     const KeepAwake keep_awake;
     auto log = [&](const std::string& m) { if (hooks.log) hooks.log(m); };
     // In every run's log, whatever the profile: a target that another tool
@@ -124,7 +146,7 @@ StockOutcome measure_stock(const OptimizeHooks& hooks) {
         out.result = run_stability(
             [&] { return load->Batch(); },
             [&] {
-                const Telemetry t = gpu.read();
+                const Telemetry t = fans ? read_with_fans(gpu, *fans, hooks) : gpu.read();
                 const double at = std::chrono::duration<double>(std::chrono::steady_clock::now() - began).count();
                 if (t.ok && trace.due(at)) {
                     log(trace_line(at, t));
@@ -143,16 +165,20 @@ StockOutcome measure_stock(const OptimizeHooks& hooks) {
     }
     if (unlogged) log(trace_line(unlogged->first, unlogged->second));   // how it ended, when that fell between two lines
     log(stock_line(out.result));
+    out.on_curve = fans && gpu.set_fan_pct && fans->state().mode != FanMode::Failed && fans->state().mode != FanMode::Foreign;
     out.error = stock_refusal(out.result);
     if (!out.error.empty() || out.result.verdict != Verdict::TooHot) return out;
-    // The driver's own fan control let the card reach the limit. That is the
-    // "before"; the run goes on, with the fans on a curve from here.
-    log("  the card reached " + std::to_string(out.result.peak_temp_c) + " C at stock with the driver's own fan control (fans at " +
+    // The card reached the limit with the fans it had. What was measured
+    // until then is the "before" of a run on the driver's fans; the run goes
+    // on, with the fans on a curve from here. On the run's own curve it is
+    // only the ceiling's measurement (run_undervolt).
+    log("  the card reached " + std::to_string(out.result.peak_temp_c) + " C at stock " +
+        (out.on_curve ? "with the fans on the run's curve" : "with the driver's own fan control") + " (fans at " +
         reading(out.result.end_fan_pct, " %") + "): the measurement stopped there, after " +
-        std::to_string(static_cast<int>(out.result.seconds)) + " s. The run goes on with the fans on a curve.");
+        std::to_string(static_cast<int>(out.result.seconds)) + " s." + (out.on_curve ? "" : " The run goes on with the fans on a curve."));
     if (hooks.measuring) hooks.measuring("Letting the card cool down", kCoolDownMaxS);
     for (int i = 0; i < kCoolDownMaxS * 4 && !(hooks.aborted && hooks.aborted()); ++i) {
-        const Telemetry t = gpu.read();
+        const Telemetry t = fans ? read_with_fans(gpu, *fans, hooks) : gpu.read();
         if (!t.ok || t.temp_c <= kStockTempC - kCoolDownC) break;
         Sleep(250);
     }
