@@ -44,8 +44,8 @@ inline constexpr unsigned kVfDomainGraphics = 0;
 // from a GTX 1080 on driver 582.78 (1556.5 MHz at 850 mV read 3113000, 1873
 // MHz at 1050 mV read 3746000) and from two projects that drive these calls
 // on such cards: nvapi-rs counts the curve in half kHz, green-curve halves
-// both fields for this architecture. This project has not seen it on a card
-// (hardware check 110). Read as kHz, such a curve lies twice as high as the
+// both fields for this architecture. A GTX 1080 Ti on driver 582.78 confirmed
+// it with this build (hardware check 110). Read as kHz, such a curve lies twice as high as the
 // clock the card reports, and an undervolt search ended before its first
 // candidate with "the load clock is below the card's curve".
 //
@@ -167,7 +167,9 @@ CurveState curve_state(const std::vector<VfPoint>& curve, int anchor_uv, int bas
 // steps between the points. An RTX 5070 runs a 7.5 MHz grid and reads
 // 2932.5 MHz as 2932: the greatest common divisor of that read-out is 1 MHz,
 // and every tolerance built on the grid came out a step too small (hardware
-// check 99, second run).
+// check 99, second run). A GTX 10 card steps in 38/3 MHz, read out as 12.5 or
+// 13 MHz; it gets 12667 kHz, not the 0.5 MHz the greatest common divisor
+// would give (hardware check 110).
 int clock_grid_khz(const std::vector<VfPoint>& curve);
 
 }

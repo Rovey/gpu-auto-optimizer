@@ -113,6 +113,14 @@ int clock_grid_khz(const std::vector<VfPoint>& curve) {
     if (!curve.empty())
         for (int grid : {15000, 7500, 5000, 2500})
             if (fits(grid)) return grid;
+    // A GTX 10 card steps in 38/3 MHz and reads out in half MHz, so its steps
+    // read 12.5 or 13 MHz: every step between two points is a whole number of
+    // 38/3 MHz to within half a MHz (counted in thirds of a kHz).
+    const bool pascal = curve.size() > 1 && std::adjacent_find(curve.begin(), curve.end(), [](const VfPoint& a, const VfPoint& b) {
+                            const long long d3 = 3LL * std::abs(b.freq_khz - a.freq_khz);
+                            return std::llabs(d3 - (d3 + 19000) / 38000 * 38000) > 1500;
+                        }) == curve.end();
+    if (pascal) return 12667;
     int grid = 0;
     for (std::size_t i = 1; i < curve.size(); ++i) grid = std::gcd(grid, std::abs(curve[i].freq_khz - curve[i - 1].freq_khz));
     return grid > 0 ? grid : 1;
