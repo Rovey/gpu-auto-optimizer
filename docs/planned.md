@@ -1,7 +1,7 @@
 # Planned: tune history, stability, sharing
 
-Three features that are decided on but not built, one open design point, the design that answers it, and a proposed design for a fair before and after (#84). This page records the choices made for each, so
-that whoever builds one does not have to make them again. Nothing here is in the code yet; the
+Three features that are decided on but not built, one open design point, the design that answers it, and the design for a fair before and after (#84). This page records the choices made for each, so
+that whoever builds one does not have to make them again. Nothing here is in the code yet, apart from the fair before and after for the Undervolt profile (#84); the
 first step of the same request, testing a saved tune again after a driver update, is
 (`core/retest.*`, hardware check 86).
 
@@ -236,11 +236,15 @@ allows N. And the result table, which already shows both temperatures and both f
   what cannot be measured.
 - **Whether All in one is judged as a whole** against stock, as the two speed profiles are.
 
-## Proposed design: a fair before and after (#84)
+## Design: a fair before and after (#84)
 
-A proposal, waiting for the owner's approval. Nothing is built, and nothing a run saves changes
-until it is approved. It answers #84: the "before" and "after" a run shows are not always measured
-under the same conditions, and nothing judges an undervolt against stock at all.
+Decided by the owner on 2026-11-14: the five choices under "Decided" below. It answers #84. The
+"before" and "after" a run shows are not always measured under the same conditions, and nothing
+judges an undervolt against stock at all.
+
+**Built for the Undervolt profile** on the branch `feat/fair-undervolt-compare`. It is not
+verified on a card; hardware checks 111 and 112 do that. "Where it applies" below says what is
+not built.
 
 **What is compared today.**
 
@@ -322,32 +326,42 @@ A result that is discarded is neither saved nor left on the card. The card goes 
 before the run: stock, or the saved tune. The `RESULT:` line gives the reason with both numbers, as
 the slower-than-stock refusal of the speed profiles does today.
 
-**Without a valid comparison** (proposed): the result is discarded, and the line says why. The
+**Without a valid comparison** (decided): the result is discarded, and the line says why. The
 principle of #84 is "kept only when it shows a benefit", and an incomplete comparison shows none.
-The cost: on a card whose fans cannot be set and which overheats at stock, the Undervolt profile
-saves nothing. The other choice is to save the result marked "not compared". That is the owner's
-decision.
+
+- **When the measurement at stock is not complete,** the run already knows there is nothing to
+  compare with, so it stops before the search: `not compared: the measurement at stock stopped at
+  N C after S s`.
+- **When the soak or the fan control makes the comparison invalid,** that is only known after the
+  search. The result is then discarded like any other.
+- **The cost:** on a card whose fans cannot be set and which overheats at stock, the Undervolt
+  profile saves nothing.
 
 **Tolerances:** the 1 %, 3 %, 2 C and 5 points above are provisional, set at about twice the
-scatter seen so far:
+scatter seen so far. They are named constants in `core/undervolt.hpp` and `core/search.hpp`, so
+they can be adjusted on their own: `kNotSlowerScore`, `kKeepPowerShare`, `kKeepCoolerC` and
+`kKeepQuieterPts`. The scatter they rest on:
 
 - **Two clean measurements at stock on the reference card,** days apart (checks 76 and 77):
   5728 and 5731 it/s, 196 and 195 W, peak 67 and 67 C, fans 73 and 72 %.
 - **Two All in one results** (+1.6 % and +0.9 % score, -8.2 % and -10.8 % power) are no measure of
   scatter: their memory overclocks differed (+1500 and +1100).
 
-Hardware check 1 below measures the scatter properly, and the values are fixed from it.
+Hardware check 111 measures the scatter properly, and the values are fixed from it.
 
 ### Where it applies
 
-- **The fair "before"** (stock on the run's curve, repeated on a moved curve, the counted half) is
-  the "before" of every run. The speed profiles keep their own rule, `kNotSlowerScore`, which then
-  compares on equal fans.
-- **The keep/discard rule** above is for the Undervolt profile.
-- **On top of the saved tune** (`gao --undervolt` on a tune, the undervolt step of All in one), the
-  reference is that overclock's own soak. Both sides are soaks on the run's curve, so the rule
-  applies as it is. Whether All in one is judged against stock as a whole
-  is still the open point of the design above.
+- **Built: the Undervolt profile.** The fair "before" (stock on the run's curve, repeated on a
+  moved curve, the counted half) and the keep/discard rule.
+- **Not built: the speed profiles and All in one.** Their measurement at stock still leaves the
+  fans to the driver, and the speed profiles keep their own rule, `kNotSlowerScore`, against that
+  "before". Moving them to the run's curve changes the "before" their rule and the All in one table
+  compare with. That is left for a change of its own.
+- **On top of the saved tune** (`gao --undervolt --on-overclock`, the undervolt step of All in
+  one): not judged against stock. This differs from the proposal. The reference there is the
+  overclock's own soak, and the undervolt step of All in one keeps a clock between stock and the
+  overclock on purpose, so "not slower than the reference" would discard it every time. Whether
+  All in one is judged against stock as a whole is still the open point of the design above.
 
 ### What changes per card
 
@@ -362,57 +376,59 @@ Hardware check 1 below measures the scatter properly, and the values are fixed f
   from its peak, capped at the card's target as today. The curve moves up, and stock is measured
   again on the moved curve: about five minutes more for the run, which then compares like for like.
 
-### How it would be built (for the PR that follows approval)
+### How it is built
 
 - `src/core/`:
-  - the averages over the counted half in `run_stability`, or next to it, from the readings it
-    already takes;
-  - one pure function that judges a result against stock and returns keep or discard, with the
-    reason;
+  - `StabilityResult::counted`: `run_stability` averages the last half (`kCountedShare`) of a
+    measurement that ran its full length. `counted_view` gives a measurement as that half;
+  - `judge_against_stock` (`core/undervolt.hpp`), a pure function that returns keep or discard,
+    with the reason;
   - unit tests with the 1080 Ti and RTX 4070 numbers above.
 - `src/app/`:
-  - `measure_stock` drives the fans with the run's curve, through the `FanDriver` the search already
-    uses;
-  - the second measurement when the curve moves;
-  - the `not compared:` line and the reasons for a discard in `result_lines`.
+  - `measure_stock` takes the run's curve and drives the fans through the `FanDriver` the search
+    already uses;
+  - `run_undervolt` takes the second measurement when the curve moves, stops before the search
+    when the measurement at stock is not complete, and puts a discarded result back to stock;
+  - `result_lines`, the result screen and the saved `against_stock` show the counted halves;
+  - the result screen's headers read **Before (stock, fans on the app's curve)** and
+    **After (fans on the app's curve)**.
 - Nothing about the ceiling, the stops or the journal is weakened. The measurement at stock still
   stops at `kStockTempC`.
 
 ### Hardware checks that would prove it
 
-1. **Scatter, reference card:**
-   - three measurements at stock in a row on the run's curve;
-   - three soaks of one saved undervolt;
-   - the spread of the score, the power, the average temperature and the average fan speed over the
-     counted half.
+These are hardware checks 111 and 112 in `docs/hardware-checks.md`.
 
-   The tolerances are set from this. About 45 minutes, nothing applied beyond a saved tune.
-2. **An Undervolt run on the reference card:**
-   - the measurement at stock runs on the curve and completes;
-   - there is no second measurement;
-   - the comparison is valid, `RESULT:` keeps the result, and `run.log` gives the counted-half
-     numbers of both sides.
-3. **An Undervolt run on a card that is hot at stock** (a tester's GTX 1080 Ti or RTX 3080 Ti):
+1. **Scatter, and the run, on the reference card (check 111):**
+   - three `gao --undervolt` runs in a row, each with its measurement at stock on the run's curve
+     and its soak;
+   - the spread of the score, the power, the average temperature and the average fan speed over the
+     counted half;
+   - the result screen of one run from the window.
+
+   The tolerances are set from this.
+2. **An Undervolt run on a card that is hot at stock (check 112),** a tester's GTX 1080 Ti or
+   RTX 3080 Ti:
    - the first measurement completes on the curve;
    - the second measurement runs on the moved curve and is the "before";
    - the verdict is given with its reasons.
-4. **All in one on the reference card:** the speed check (`kNotSlowerScore`) still passes against the
-   new "before".
-5. **The discard path and `not compared:`** are proven by unit tests. No card is known that gives
+3. **The discard path and `not compared:`** are proven by unit tests. No card is known that gives
    them on demand.
 
-### Decisions for the owner
+### Decided
 
-1. **Stock on the run's curve, with a second measurement on a moved curve** (proposed). The
-   alternatives:
-   - **Always two measurements:** one on the driver's fans as the user's own reference, one on the
-     curve. That is five minutes more on every card.
-   - **Keep the driver's fans at stock:** the difference is only stated, and power and temperature
+By the owner, 2026-11-14:
+
+1. **Stock on the run's curve, with a second measurement on a moved curve.** Two alternatives
+   were rejected:
+   - **Always two measurements,** one on the driver's fans and one on the curve: five minutes more
+     on every card.
+   - **The driver's fans at stock,** with the difference only stated: then power and temperature
      are never judged.
-2. **No valid comparison:** discard (proposed), or keep it marked "not compared".
-3. **The counted half:** the last 150 s (proposed), or a fixed warm-up to skip.
-4. **The tolerances:** provisional, until check 1.
-5. **The screen's "Before" heading:** it would say the fans followed the app's curve.
+2. **No valid comparison:** the result is discarded.
+3. **The counted half:** the last 150 s of the 300 s.
+4. **The tolerances:** provisional, as named constants, until check 111 measures the scatter.
+5. **The screen's "Before" heading:** it says that the fans followed the app's curve.
 
 ### Against the acceptance criteria of #84
 
@@ -422,4 +438,4 @@ Hardware check 1 below measures the scatter properly, and the values are fixed f
 - **The keep/discard rule over performance, power and thermals, with tolerances:** "The
   keep/discard rule". The tolerances are provisional and fixed by check 1.
 - **A cool card and a hot card:** "What changes per card".
-- **The hardware checks:** "Hardware checks that would prove it".
+- **The hardware checks:** "Hardware checks that would prove it" (checks 111 and 112).
