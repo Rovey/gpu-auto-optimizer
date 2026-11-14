@@ -10,6 +10,12 @@ namespace gao {
 // is exactly three numbers, each 0 to 255.
 std::optional<unsigned> version_number(std::string_view text);
 
+// Whether a build that is `running` is offered `release`: a higher version, or
+// the same one when the running build is a pre-release of it ("0.4.10-rc1" and
+// "0.4.10-check112" are offered "0.4.10", which version_number() orders the
+// same). False when either is not a version.
+bool release_is_newer(std::string_view release, std::string_view running);
+
 struct ReleaseInfo {
     std::string version;   // "0.3.1"
     std::string zip_url;   // the win-x64 zip of that release
