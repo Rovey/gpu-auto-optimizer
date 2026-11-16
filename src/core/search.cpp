@@ -316,7 +316,8 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
     // nothing in here ever leaves an entry behind. False: `stopped` is set and
     // the run must end. On a run that is already stopped it does nothing.
     // Nothing in here starts another recovery: a reset verdict in the health
-    // probe ends the run.
+    // probe ends the run, except a probe without telemetry right after the
+    // load was rebuilt, which reconnects once more (see below).
     auto ensure_hw = [&]() -> bool {
         if (!stopped.empty()) return false;
         if (!hw_suspect) return true;
@@ -355,9 +356,10 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
             if (!rest()) { stopped = "aborted"; return false; }
             // Once per recovery: a failed preparation is tried again after the
             // next rest and is no reset event; a prepared load stays prepared.
+            bool rebuilt = false;   // the load was prepared in this pass
             if (!load_ready) {
                 log("preparing the stress load");
-                load_ready = io.prepare_load();
+                load_ready = rebuilt = io.prepare_load();
                 if (io.aborted && io.aborted()) { stopped = "aborted"; return false; }
                 if (!load_ready) { log("the stress load is not ready yet"); continue; }
             }
@@ -370,6 +372,27 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
             if (s.verdict == Verdict::Stable && s.score < kStalledScore * r.baseline.score) s.verdict = Verdict::Stalled;
             log("health: " + describe(s));
             if (s.verdict == Verdict::Aborted) { stopped = "aborted"; return false; }
+            // GTX 1060, driver 560.94: building the load again reset the driver
+            // once more, 3 to 4 s later, after a rest of 20 s and of 60 s alike;
+            // the probe then had no telemetry while the card computed at 85 %
+            // of stock. That is the recovery still settling, so it is counted
+            // but gets a new connection, stock and one more probe. The load
+            // itself stays: the reconnect does not touch it.
+            if (rebuilt && s.verdict == Verdict::NoTelemetry) {
+                ++r.driver_resets;
+                log("the telemetry dropped after the stress load was rebuilt; reconnecting");
+                hw_suspect = true;   // until stock holds again: the way out reconnects once
+                if (!reconnect()) {
+                    stop("the driver did not come back after a reset");
+                    return false;
+                }
+                if (!reset_to_stock()) {
+                    stop("could not set the card to stock while recovering");
+                    return false;
+                }
+                hw_suspect = false;
+                continue;
+            }
             // The health probe is a load and can reset the driver itself. That
             // is counted, and the card is not loaded again in this run. The
             // connections may be dead again: the way out reconnects once.

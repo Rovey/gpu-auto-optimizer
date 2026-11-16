@@ -432,6 +432,34 @@ TEST_CASE("a preparation that fails once costs a rest, not a probe") {
     check_journal_rules(run);
 }
 
+// GTX 1060, driver 560.94: building the stress load again after a reset reset
+// the driver once more, 3 to 4 s later, after a rest of 20 s and of 60 s
+// alike. The health probe then had no telemetry while the card computed.
+TEST_CASE("a blind health probe right after the load was rebuilt gets a new connection and one more probe") {
+    Run run = lost_at_135_with_prepare();
+    run.card.blind_health_probes = 1;
+    const auto r = run.go(Preset::BestOfMyGpu);
+    REQUIRE(r.ok);
+    CHECK(r.driver_resets == 2);
+    CHECK(run.logged("the telemetry dropped after the stress load was rebuilt; reconnecting"));
+    CHECK(first_events_after_lost(run.card, 10) ==
+          Events{"recover", "stock", "rest", "prepare", "health", "recover", "stock", "rest", "health", "begin"});
+    CHECK(run.card.prepares == 1);
+    check_journal_rules(run);
+}
+
+TEST_CASE("a second blind health probe after the load was rebuilt ends the run") {
+    Run run = lost_at_135_with_prepare();
+    run.card.blind_health_probes = 2;
+    const auto r = run.go(Preset::BestOfMyGpu);
+    CHECK_FALSE(r.ok);
+    CHECK(r.reason == "the card was not usable when checked after a driver reset (NO TELEMETRY)");
+    CHECK(r.driver_resets == 3);
+    CHECK(count_events(run.card, "health") == 2);
+    CHECK(r.stock_restored);
+    check_journal_rules(run);
+}
+
 TEST_CASE("a load that cannot be prepared ends the run without a health probe") {
     Run run = lost_at_135_with_prepare();
     run.card.prepare_fails = 99;

@@ -195,17 +195,33 @@ UndervoltResult find_undervolt(const GpuControl& gpu, Journal& journal, const Un
     // short probe that must compute normally again. False: `stopped` says why the run ends.
     auto recovered = [&]() -> bool {
         if (++r.driver_resets >= 2) { stopped = "the driver reset twice"; return false; }
+        // Reconnect, stock, the overclock again, rest.
+        auto reconnect_and_rest = [&]() -> bool {
+            if (!gpu.recover || !gpu.recover()) { stopped = "the driver did not come back after a reset"; return false; }
+            if (!to_stock()) { stopped = "could not set the card to stock while recovering"; return false; }
+            if (!set_base()) { stopped = "could not set the overclock again after a driver reset"; return false; }
+            if (io.rest) {
+                log("resting " + std::to_string(static_cast<int>(kRestAfterResetS)) + " s before the card is loaded again");
+                if (!io.rest(kRestAfterResetS)) { stopped = "aborted"; return false; }
+            }
+            return true;
+        };
         log("the driver was reset; reconnecting");
-        if (!gpu.recover || !gpu.recover()) { stopped = "the driver did not come back after a reset"; return false; }
-        if (!to_stock()) { stopped = "could not set the card to stock while recovering"; return false; }
-        if (!set_base()) { stopped = "could not set the overclock again after a driver reset"; return false; }
-        if (io.rest) {
-            log("resting " + std::to_string(static_cast<int>(kRestAfterResetS)) + " s before the card is loaded again");
-            if (!io.rest(kRestAfterResetS)) { stopped = "aborted"; return false; }
-        }
+        if (!reconnect_and_rest()) return false;
         if (io.prepare_load && !io.prepare_load()) { stopped = "the stress load could not be rebuilt after a driver reset"; return false; }
-        const StabilityResult health = io.probe(kHealthProbeS, limit_c, 0.0);
+        StabilityResult health = io.probe(kHealthProbeS, limit_c, 0.0);
         log("health: " + describe(verdict_name(health.verdict), health));
+        // As in the search (GTX 1060, driver 560.94): rebuilding the load can
+        // reset the driver once more, and the probe then has no telemetry
+        // while the card computes. Counted, then one new connection and one
+        // more probe; the load itself stays.
+        if (io.prepare_load && health.verdict == Verdict::NoTelemetry) {
+            ++r.driver_resets;
+            log("the telemetry dropped after the stress load was rebuilt; reconnecting");
+            if (!reconnect_and_rest()) return false;
+            health = io.probe(kHealthProbeS, limit_c, 0.0);
+            log("health: " + describe(verdict_name(health.verdict), health));
+        }
         if (health.verdict == Verdict::Aborted) { stopped = "aborted"; return false; }
         if (is_reset_verdict(health.verdict)) { ++r.driver_resets; stopped = "the card was not usable when checked after a driver reset"; return false; }
         if (health.verdict != Verdict::Stable || health.score < kHealthyScore * r.baseline.score) {

@@ -53,6 +53,7 @@ struct FakeCard {
     bool bw_loses_device = false;    // a bandwidth measurement fails and the driver resets
     int sick_health_probes = 0;      // this many 5 s probes after a reset score 50 % of normal (computing, not back)
     std::optional<Verdict> health_verdict;   // the first 5 s probe ends with this verdict instead
+    int blind_health_probes = 0;     // this many 5 s probes after a reset end NO TELEMETRY, the card computing normally
     bool health_stalls = false;      // the first 5 s probe "passes" at 3 % of the normal score
     int stock_write_fails_after_recover = 0;   // the next N successful recovers each make the reset_to_stock after it fail
     bool fail_next_stock = false;    // armed by that recover, cleared by the reset it fails
@@ -208,6 +209,7 @@ struct FakeCard {
             if (seconds == abort_in_probe_s) { r.verdict = Verdict::Aborted; return r; }
             if (seconds == 3 && blind_probes > 0) { --blind_probes; r.verdict = Verdict::NoTelemetry; return r; }
             if (seconds == 3 && core == blind_at_core) { r.verdict = Verdict::NoTelemetry; return r; }
+            if (health && blind_health_probes > 0) { --blind_health_probes; r.verdict = Verdict::NoTelemetry; r.score = 1000; return r; }
             if (health && health_verdict) {
                 r.verdict = *health_verdict;
                 health_verdict.reset();

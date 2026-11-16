@@ -38,6 +38,9 @@ struct UvCard {
     int abort_at_probe = -1;
     bool aborted_now = false;
     bool with_recover = true;
+    bool with_prepare = false;    // the run offers UndervoltIo::prepare_load
+    int prepares = 0;
+    int blind_health_probes = 0;  // this many 5 s probes end NO TELEMETRY, the card computing normally
 
     int probes = 0, recovers = 0, resets_to_stock = 0, rests = 0;
     std::vector<double> probe_seconds;
@@ -126,6 +129,7 @@ struct UvCard {
         StabilityResult s;
         s.seconds = seconds;
         if (probes == abort_at_probe) { aborted_now = true; s.verdict = Verdict::Aborted; return s; }
+        if (seconds == 5 && blind_health_probes > 0) { --blind_health_probes; s.score = 5700; s.verdict = Verdict::NoTelemetry; return s; }
         const std::size_t op = operating_point();
         // At stock the power limit holds the clock between two points of the curve.
         const bool cold = cold_load && seconds < 30;
@@ -160,6 +164,7 @@ struct UvCard {
         io.aborted = [this] { return aborted_now; };
         io.log = [this](const std::string& m) { log.push_back(m); };
         io.rest = [this](double) { ++rests; return true; };
+        if (with_prepare) io.prepare_load = [this] { ++prepares; return true; };
         io.measuring = [this](const std::string& what, double seconds) {
             measuring.push_back(what + "|" + std::to_string(static_cast<int>(seconds)));
         };
@@ -297,6 +302,34 @@ TEST_CASE("find_undervolt: a second driver reset ends the run at stock, nothing 
     CHECK(r.reason == "the driver reset twice");
     CHECK(card.at_stock());
     CHECK(card.count("\"begin\"") == card.count("\"complete\""));
+}
+
+// GTX 1060, driver 560.94: rebuilding the stress load after a reset reset the
+// driver once more; the health probe then had no telemetry while the card computed.
+TEST_CASE("find_undervolt: a blind health probe right after the load was rebuilt gets a new connection and one more probe") {
+    UvCard card;
+    card.lost_above_khz = 150000;
+    card.with_prepare = true;
+    card.blind_health_probes = 1;
+    const auto r = card.go();
+    REQUIRE(r.ok);
+    CHECK(card.recovers == 2);
+    CHECK(card.rests == 2);
+    CHECK(card.prepares == 1);
+    CHECK(card.logged("the telemetry dropped after the stress load was rebuilt; reconnecting"));
+    CHECK(card.count("\"begin\"") == card.count("\"complete\""));
+}
+
+TEST_CASE("find_undervolt: a second blind health probe after the load was rebuilt ends the run at stock") {
+    UvCard card;
+    card.lost_above_khz = 150000;
+    card.with_prepare = true;
+    card.blind_health_probes = 2;
+    const auto r = card.go();
+    CHECK_FALSE(r.ok);
+    CHECK(r.reason == "the card was not usable when checked after a driver reset");
+    CHECK(card.recovers == 2);
+    CHECK(card.at_stock());
 }
 
 TEST_CASE("find_undervolt: a reset without a way to reconnect ends the run") {
