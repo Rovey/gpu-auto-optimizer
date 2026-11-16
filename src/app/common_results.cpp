@@ -73,6 +73,7 @@ std::vector<std::string> result_lines(const UndervoltOutcome& o) {
 }
 
 std::vector<std::string> result_lines(const AllInOneOutcome& o) {
+    if (!o.ran) return {"RESULT: not started -- " + o.error};   // as the other runs: nothing was tuned
     std::vector<std::string> lines;
     if (!o.ok) {
         lines.push_back("RESULT: not applied -- " + o.error);
