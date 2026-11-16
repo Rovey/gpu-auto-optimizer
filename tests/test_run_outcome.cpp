@@ -92,8 +92,16 @@ TEST_CASE("the end of an all-in-one run is in its result lines, with the final t
 
 TEST_CASE("a run that ended without a result says why in its result lines") {
     AllInOneOutcome all;
+    all.ran = true;
     all.error = "aborted";
     CHECK(gao::app::result_lines(all).front() == "RESULT: not applied -- aborted");
+
+    // Refused before anything was tuned (other programs on the card): the
+    // same words as the other runs use.
+    AllInOneOutcome refused;
+    refused.error = "other programs are using the graphics card: chrome (1 %)";
+    CHECK(gao::app::result_lines(refused) ==
+          std::vector<std::string>{"RESULT: not started -- other programs are using the graphics card: chrome (1 %)"});
 
     OptimizeOutcome stopped;
     stopped.error = "another program is tuning the card";

@@ -156,7 +156,12 @@ AllInOneOutcome all_in_one_steps(const OptimizeHooks& outer) {
     out.overclock = run_optimize(Preset::AllInOne, hooks, {}, out.stock);
     if (!out.overclock.ran) return stop(out.overclock.error);
     if (aborted()) return end_at_stock("aborted");
-    if (!out.overclock.result.ok) return end_at_stock("the overclock: " + out.overclock.result.reason);
+    // The run's own reset may have failed while the driver was still coming
+    // back; end_at_stock tries again. Say so, or the log's "reset FAILED" and
+    // this result's "card at stock" read as a contradiction.
+    if (!out.overclock.result.ok)
+        return end_at_stock("the overclock: " + out.overclock.result.reason +
+                            (out.overclock.result.stock_restored ? "" : " (its own reset to stock failed; tried again)"));
     if (!out.overclock.saved) return end_at_stock("the overclock could not be saved: " + out.overclock.save_note);
     out.now = out.overclock.result.soak;
 

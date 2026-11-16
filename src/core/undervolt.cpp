@@ -53,11 +53,22 @@ UndervoltResult find_undervolt(const GpuControl& gpu, Journal& journal, const Un
     };
     // Every way out that is not a success: the card goes back to stock, with
     // one reconnect if the plain reset does not get through.
+    // The journal entry that guards a recovery (Journal::begin_recovery), as in
+    // the search: open from before the reconnect until the card is back, or
+    // until the way out has reset it. 0: none open.
+    int recovery_entry = 0;
+    auto end_recovery = [&] {
+        if (recovery_entry == 0) return;
+        if (!journal.complete(recovery_entry, "RECOVERED"))
+            log("warning: the crash journal entry could not be closed; later runs will stay below this candidate");
+        recovery_entry = 0;
+    };
     auto finish_fail = [&](const std::string& why) {
         r.ok = false;
         r.reason = why;
         r.stock_restored = to_stock();
         if (!r.stock_restored && gpu.recover && gpu.recover()) r.stock_restored = to_stock();
+        end_recovery();
         log("stopped: " + why + (r.stock_restored ? " -- card restored to stock" : " -- reset FAILED, run `gao --reset`"));
         return r;
     };
@@ -195,23 +206,42 @@ UndervoltResult find_undervolt(const GpuControl& gpu, Journal& journal, const Un
     // short probe that must compute normally again. False: `stopped` says why the run ends.
     auto recovered = [&]() -> bool {
         if (++r.driver_resets >= 2) { stopped = "the driver reset twice"; return false; }
+        // Reconnect, stock, the overclock again, rest.
+        auto reconnect_and_rest = [&]() -> bool {
+            if (!gpu.recover || !gpu.recover()) { stopped = "the driver did not come back after a reset"; return false; }
+            if (!to_stock()) { stopped = "could not set the card to stock while recovering"; return false; }
+            if (!set_base()) { stopped = "could not set the overclock again after a driver reset"; return false; }
+            if (io.rest) {
+                log("resting " + std::to_string(static_cast<int>(kRestAfterResetS)) + " s before the card is loaded again");
+                if (!io.rest(kRestAfterResetS)) { stopped = "aborted"; return false; }
+            }
+            return true;
+        };
+        recovery_entry = journal.begin_recovery();
+        if (recovery_entry < 0) { recovery_entry = 0; stopped = "could not write the journal"; return false; }
         log("the driver was reset; reconnecting");
-        if (!gpu.recover || !gpu.recover()) { stopped = "the driver did not come back after a reset"; return false; }
-        if (!to_stock()) { stopped = "could not set the card to stock while recovering"; return false; }
-        if (!set_base()) { stopped = "could not set the overclock again after a driver reset"; return false; }
-        if (io.rest) {
-            log("resting " + std::to_string(static_cast<int>(kRestAfterResetS)) + " s before the card is loaded again");
-            if (!io.rest(kRestAfterResetS)) { stopped = "aborted"; return false; }
-        }
+        if (!reconnect_and_rest()) return false;
         if (io.prepare_load && !io.prepare_load()) { stopped = "the stress load could not be rebuilt after a driver reset"; return false; }
-        const StabilityResult health = io.probe(kHealthProbeS, limit_c, 0.0);
+        StabilityResult health = io.probe(kHealthProbeS, limit_c, 0.0);
         log("health: " + describe(verdict_name(health.verdict), health));
+        // As in the search (GTX 1060, driver 560.94): rebuilding the load can
+        // reset the driver once more, and the probe then has no telemetry
+        // while the card computes. Counted, then one new connection and one
+        // more probe; the load itself stays.
+        if (io.prepare_load && health.verdict == Verdict::NoTelemetry) {
+            ++r.driver_resets;
+            log("the telemetry dropped after the stress load was rebuilt; reconnecting");
+            if (!reconnect_and_rest()) return false;
+            health = io.probe(kHealthProbeS, limit_c, 0.0);
+            log("health: " + describe(verdict_name(health.verdict), health));
+        }
         if (health.verdict == Verdict::Aborted) { stopped = "aborted"; return false; }
         if (is_reset_verdict(health.verdict)) { ++r.driver_resets; stopped = "the card was not usable when checked after a driver reset"; return false; }
         if (health.verdict != Verdict::Stable || health.score < kHealthyScore * r.baseline.score) {
             stopped = "the card did not recover after a driver reset";
             return false;
         }
+        end_recovery();
         return true;
     };
 

@@ -256,8 +256,8 @@ five-minute soak before it was saved. The whole run took 12 minutes. The log of 
 |---|---|---|---|
 | **All in one** (default) | More speed than stock on less power: the overclock below, an undervolt on top of it at a clock half-way back to stock, and the quietest fan curve that holds the temperature | 75 °C | power, core, memory, the voltage/frequency curve, fans |
 | **Best of my GPU** | Highest confirmed clocks with a safety margin, most power the card allows | 75 °C | power, core, memory |
-| **Cool & efficient** | Lowest power limit that costs under 2 % speed; clocks stay stock | 65 °C | power |
-| **Quiet** | Milder clocks and the lowest power limit that costs under 2 % speed | 80 °C | power, core, memory |
+| **Cool & efficient** | The highest power limit that stays under 65 °C, then the lowest one below it that costs under 2 % speed against it; clocks stay stock | 65 °C | power |
+| **Quiet** | Milder clocks; the highest power limit that stays under 80 °C, then the lowest one below it that costs under 2 % speed against it | 80 °C | power, core, memory |
 | **Max performance** | Highest confirmed clocks minus one step, highest power limit | 83 °C | power, core, memory |
 | **Undervolt** | The clock the card runs under load at stock, on the lowest stable voltage plus the same margin; clocks and power limit stay stock | 75 °C, or what the card reached at stock if that was more (see below) | the voltage/frequency curve |
 
@@ -267,7 +267,9 @@ five-minute soak before it was saved. The whole run took 12 minutes. The log of 
   was at stock (within 1 %, the scatter of two five-minute runs). A card that runs warmer at stock than the profile allows
   has to have its power limit lowered to meet the temperature, and that can cost more than the clocks win back. The run then
   says so, saves nothing, and leaves the card at stock. **Undervolt** is the profile for such a card. Quiet and Cool &
-  efficient give a little speed away on purpose and are not judged this way.
+  efficient give speed away on purpose and are not judged this way. Their temperature limit comes first: on a card that
+  runs hotter than the limit at stock, the power limit goes as low as it takes, and that can cost far more than 2 %
+  (Cool & efficient on a GTX 1060 that reaches 83 °C at stock: power 50 %, 20 % slower, 49 instead of 96 W, 59 °C).
 - **Undervolt keeps a result only when it gains something.** The card is measured at stock with the fans on the same
   curve as the result, five minutes each, and the last half of each is compared. The result has to be as fast as stock
   (within 1 %), must not be warmer without being quieter or louder without being cooler, and has to draw at least 3 % less

@@ -322,16 +322,29 @@ TEST_CASE("a health probe that only computes wrong or runs hot is retried, not c
     }
 }
 
-TEST_CASE("a stock write that fails while recovering ends the run without a rest or a health probe") {
+// GTX 1060, driver 560.94: the stock writes right after the reconnect failed
+// while the driver was still coming back, and one ninety seconds later held.
+TEST_CASE("a stock write that fails while recovering is tried again after a rest and a new connection") {
     Run run = lost_at_135();
-    run.card.stock_write_fails_after_recover = true;
+    run.card.stock_write_fails_after_recover = 1;
+    const auto r = run.go(Preset::BestOfMyGpu);
+    REQUIRE(r.ok);
+    CHECK(r.driver_resets == 1);
+    CHECK(run.logged("the card did not take stock yet"));
+    CHECK(first_events_after_lost(run.card, 6) == Events{"recover", "rest", "recover", "stock", "rest", "health"});
+    check_journal_rules(run);
+}
+
+TEST_CASE("a stock write that keeps failing while recovering ends the run without a health probe") {
+    Run run = lost_at_135();
+    run.card.stock_write_fails_after_recover = gao::kHealthTries;
     const auto r = run.go(Preset::BestOfMyGpu);
     CHECK_FALSE(r.ok);
     CHECK(r.reason == "could not set the card to stock while recovering");
-    CHECK(run.card.rests == 0);
+    CHECK(run.card.rests == gao::kHealthTries - 1);
     CHECK(count_events(run.card, "health") == 0);
-    // The failed write pushes nothing; the way out reconnects once and resets.
-    CHECK(events_after_lost(run.card) == Events{"recover", "recover", "stock"});
+    // The failed writes push nothing; the way out reconnects once and resets.
+    CHECK(events_after_lost(run.card) == Events{"recover", "rest", "recover", "rest", "recover", "recover", "stock"});
     CHECK(r.driver_resets == 1);
     CHECK(r.stock_restored);
     check_journal_rules(run);
@@ -416,6 +429,61 @@ TEST_CASE("a preparation that fails once costs a rest, not a probe") {
     CHECK(count_events(run.card, "health") == 1);
     CHECK(r.driver_resets == 1);
     CHECK(run.logged("the stress load is not ready yet"));
+    check_journal_rules(run);
+}
+
+// GTX 1060, driver 560.94: building the stress load again after a reset reset
+// the driver once more, 3 to 4 s later, after a rest of 20 s and of 60 s
+// alike. The health probe then had no telemetry while the card computed.
+TEST_CASE("a blind health probe right after the load was rebuilt gets a new connection and one more probe") {
+    Run run = lost_at_135_with_prepare();
+    run.card.blind_health_probes = 1;
+    const auto r = run.go(Preset::BestOfMyGpu);
+    REQUIRE(r.ok);
+    CHECK(r.driver_resets == 2);
+    CHECK(run.logged("the telemetry dropped after the stress load was rebuilt; reconnecting"));
+    CHECK(first_events_after_lost(run.card, 10) ==
+          Events{"recover", "stock", "rest", "prepare", "health", "recover", "stock", "rest", "health", "begin"});
+    CHECK(run.card.prepares == 1);
+    check_journal_rules(run);
+}
+
+TEST_CASE("a second blind health probe after the load was rebuilt ends the run") {
+    Run run = lost_at_135_with_prepare();
+    run.card.blind_health_probes = 2;
+    const auto r = run.go(Preset::BestOfMyGpu);
+    CHECK_FALSE(r.ok);
+    CHECK(r.reason == "the card was not usable when checked after a driver reset (NO TELEMETRY)");
+    CHECK(r.driver_resets == 3);
+    CHECK(count_events(run.card, "health") == 2);
+    CHECK(r.stock_restored);
+    check_journal_rules(run);
+}
+
+// GTX 1060, driver 560.94: twice a BSOD 0x133 while the driver recovered from
+// a DEVICE LOST at core +375.
+TEST_CASE("a machine that goes down while the driver recovers leaves the candidate that reset as a ceiling") {
+    Run run = lost_at_135();
+    const auto r = run.go(Preset::BestOfMyGpu);
+    REQUIRE(r.ok);
+    Journal down(run.card.journal_at_first_recover, [](const std::string&) { return true; });
+    CHECK(down.ceilings().core_mhz == 135);
+    REQUIRE(down.freezes().size() == 1);
+    CHECK(down.freezes()[0].find("while the driver recovered from a reset there") != std::string::npos);
+    CHECK(run.card.journal_file.size() == run.card.journal.size() + 2);   // one recovery, opened and closed
+    check_journal_rules(run);   // the recovery ended: nothing left open
+}
+
+TEST_CASE("a recovery that ends the run stays guarded until the card is back at stock") {
+    Run run = lost_at_135();
+    run.card.health_verdict = Verdict::NoTelemetry;
+    const auto r = run.go(Preset::BestOfMyGpu);
+    CHECK_FALSE(r.ok);
+    CHECK(r.stock_restored);
+    // Closed after the way out's reconnect and reset: the last line of the file.
+    REQUIRE(!run.card.journal_file.empty());
+    CHECK(run.card.journal_file.back().find("RECOVERED") != std::string::npos);
+    CHECK(run.card.journal_file.size() == run.card.journal.size() + 2);
     check_journal_rules(run);
 }
 
