@@ -329,9 +329,23 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
             stop("the driver did not come back after a reset");
             return false;
         }
-        // Stock first, so no candidate stays applied while the card rests. On
-        // failure hw_suspect stays set: the way out makes its one reconnect.
-        if (!reset_to_stock()) {
+        // Stock first, so no candidate stays applied while the card rests. A
+        // driver that is still coming back can refuse the write: on a GTX 1060
+        // (driver 560.94) two resets right after the reconnect failed, and one
+        // ninety seconds after the fault held. So a refused write gets a rest,
+        // a new connection and another try, kHealthTries in all. On failure
+        // hw_suspect stays set: the way out makes its one reconnect.
+        bool at_stock = reset_to_stock();
+        for (int t = 1; !at_stock && t < kHealthTries; ++t) {
+            log("the card did not take stock yet");
+            if (!rest()) { stopped = "aborted"; return false; }
+            if (!reconnect()) {
+                stop("the driver did not come back after a reset");
+                return false;
+            }
+            at_stock = reset_to_stock();
+        }
+        if (!at_stock) {
             stop("could not set the card to stock while recovering");
             return false;
         }

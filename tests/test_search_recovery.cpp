@@ -322,16 +322,29 @@ TEST_CASE("a health probe that only computes wrong or runs hot is retried, not c
     }
 }
 
-TEST_CASE("a stock write that fails while recovering ends the run without a rest or a health probe") {
+// GTX 1060, driver 560.94: the stock writes right after the reconnect failed
+// while the driver was still coming back, and one ninety seconds later held.
+TEST_CASE("a stock write that fails while recovering is tried again after a rest and a new connection") {
     Run run = lost_at_135();
-    run.card.stock_write_fails_after_recover = true;
+    run.card.stock_write_fails_after_recover = 1;
+    const auto r = run.go(Preset::BestOfMyGpu);
+    REQUIRE(r.ok);
+    CHECK(r.driver_resets == 1);
+    CHECK(run.logged("the card did not take stock yet"));
+    CHECK(first_events_after_lost(run.card, 6) == Events{"recover", "rest", "recover", "stock", "rest", "health"});
+    check_journal_rules(run);
+}
+
+TEST_CASE("a stock write that keeps failing while recovering ends the run without a health probe") {
+    Run run = lost_at_135();
+    run.card.stock_write_fails_after_recover = gao::kHealthTries;
     const auto r = run.go(Preset::BestOfMyGpu);
     CHECK_FALSE(r.ok);
     CHECK(r.reason == "could not set the card to stock while recovering");
-    CHECK(run.card.rests == 0);
+    CHECK(run.card.rests == gao::kHealthTries - 1);
     CHECK(count_events(run.card, "health") == 0);
-    // The failed write pushes nothing; the way out reconnects once and resets.
-    CHECK(events_after_lost(run.card) == Events{"recover", "recover", "stock"});
+    // The failed writes push nothing; the way out reconnects once and resets.
+    CHECK(events_after_lost(run.card) == Events{"recover", "rest", "recover", "rest", "recover", "recover", "stock"});
     CHECK(r.driver_resets == 1);
     CHECK(r.stock_restored);
     check_journal_rules(run);

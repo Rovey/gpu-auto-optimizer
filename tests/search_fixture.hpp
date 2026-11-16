@@ -54,7 +54,7 @@ struct FakeCard {
     int sick_health_probes = 0;      // this many 5 s probes after a reset score 50 % of normal (computing, not back)
     std::optional<Verdict> health_verdict;   // the first 5 s probe ends with this verdict instead
     bool health_stalls = false;      // the first 5 s probe "passes" at 3 % of the normal score
-    bool stock_write_fails_after_recover = false;   // reset_to_stock fails once, right after a successful recover
+    int stock_write_fails_after_recover = 0;   // the next N successful recovers each make the reset_to_stock after it fail
     bool fail_next_stock = false;    // armed by that recover, cleared by the reset it fails
     std::vector<std::string> events; // "recover", "stock", "rest", "health", "begin" in the order they happen
     bool abort_during_rest = false;  // a stop request arrives while the search rests
@@ -170,7 +170,7 @@ struct FakeCard {
                     return false;
                 }
                 stale = false;
-                if (stock_write_fails_after_recover) { stock_write_fails_after_recover = false; fail_next_stock = true; }
+                if (stock_write_fails_after_recover > 0) { --stock_write_fails_after_recover; fail_next_stock = true; }
                 if (fail_next_core_set_after_recover) { fail_next_core_set_after_recover = false; fail_next_core_set = true; }
                 return true;
             };
