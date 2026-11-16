@@ -460,6 +460,33 @@ TEST_CASE("a second blind health probe after the load was rebuilt ends the run")
     check_journal_rules(run);
 }
 
+// GTX 1060, driver 560.94: twice a BSOD 0x133 while the driver recovered from
+// a DEVICE LOST at core +375.
+TEST_CASE("a machine that goes down while the driver recovers leaves the candidate that reset as a ceiling") {
+    Run run = lost_at_135();
+    const auto r = run.go(Preset::BestOfMyGpu);
+    REQUIRE(r.ok);
+    Journal down(run.card.journal_at_first_recover, [](const std::string&) { return true; });
+    CHECK(down.ceilings().core_mhz == 135);
+    REQUIRE(down.freezes().size() == 1);
+    CHECK(down.freezes()[0].find("while the driver recovered from a reset there") != std::string::npos);
+    CHECK(run.card.journal_file.size() == run.card.journal.size() + 2);   // one recovery, opened and closed
+    check_journal_rules(run);   // the recovery ended: nothing left open
+}
+
+TEST_CASE("a recovery that ends the run stays guarded until the card is back at stock") {
+    Run run = lost_at_135();
+    run.card.health_verdict = Verdict::NoTelemetry;
+    const auto r = run.go(Preset::BestOfMyGpu);
+    CHECK_FALSE(r.ok);
+    CHECK(r.stock_restored);
+    // Closed after the way out's reconnect and reset: the last line of the file.
+    REQUIRE(!run.card.journal_file.empty());
+    CHECK(run.card.journal_file.back().find("RECOVERED") != std::string::npos);
+    CHECK(run.card.journal_file.size() == run.card.journal.size() + 2);
+    check_journal_rules(run);
+}
+
 TEST_CASE("a load that cannot be prepared ends the run without a health probe") {
     Run run = lost_at_135_with_prepare();
     run.card.prepare_fails = 99;

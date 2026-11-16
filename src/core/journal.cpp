@@ -8,6 +8,7 @@ namespace gao {
 namespace {
 struct Pending {
     std::optional<int> core, mem, uv;
+    bool recovering = false;   // opened by begin_recovery
 };
 
 // True when a clock of the entry is above stock: only then is there a
@@ -22,6 +23,7 @@ std::string describe(const Pending& p) {
     if (p.core) s += "core +" + std::to_string(*p.core);
     if (p.mem) s += (s.empty() ? "" : " / ") + std::string("mem +") + std::to_string(*p.mem);
     if (p.uv) s += (s.empty() ? "" : " / ") + std::string("undervolt +") + std::to_string(*p.uv);
+    if (p.recovering) s += " (while the driver recovered from a reset there)";
     return s;
 }
 
@@ -68,7 +70,10 @@ Journal::Journal(const std::vector<std::string>& existing_lines, Append append, 
         auto sane = [](std::optional<int> v) { return !v || (*v >= 0 && *v <= kMaxClockMhz); };
         if (!sane(core) || !sane(mem) || !sane(uv)) continue;
         max_id = std::max(max_id, *id);
-        if (*state == "begin") pending[*id] = {core, mem, uv};
+        if (*state == "begin") {
+            const auto rec = j.find("recovering");
+            pending[*id] = {core, mem, uv, rec != j.end() && rec->is_boolean() && rec->get<bool>()};
+        }
         else if (*state == "complete") pending.erase(*id);
     }
     for (const auto& [id, p] : pending) {
@@ -90,14 +95,33 @@ int Journal::begin(std::optional<int> core, std::optional<int> mem, std::optiona
     if (uv) j["uv"] = *uv;
     if (!write(j.dump())) return -1;
     open_id_ = next_id_;
+    open_clocks_ = {core, mem, uv};
+    reset_.reset();
     return next_id_++;
 }
 
 bool Journal::complete(int id, const std::string& verdict) {
     const nlohmann::json j = {{"id", id}, {"state", "complete"}, {"verdict", verdict}};
     if (!write(j.dump())) return false;
+    const bool reset = verdict == "DEVICE LOST" || verdict == "STALLED" || verdict == "NO TELEMETRY";
+    if (id == open_id_ && reset) reset_ = open_clocks_;
+    else reset_.reset();
     if (id == open_id_) open_id_ = -1;
     return true;
+}
+
+int Journal::begin_recovery() {
+    if (!reset_ || !caps_anything({reset_->core, reset_->mem, reset_->uv})) return 0;
+    const Clocks c = *reset_;
+    nlohmann::json j = {{"id", next_id_}, {"state", "begin"}, {"recovering", true}};
+    if (c.core) j["core"] = *c.core;
+    if (c.mem) j["mem"] = *c.mem;
+    if (c.uv) j["uv"] = *c.uv;
+    if (!write(j.dump())) return -1;
+    open_id_ = next_id_;
+    open_clocks_ = c;
+    reset_.reset();   // one per reset
+    return next_id_++;
 }
 
 bool Journal::note_mem_edge(int mhz) {

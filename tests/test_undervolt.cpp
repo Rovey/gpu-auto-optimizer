@@ -41,6 +41,7 @@ struct UvCard {
     bool with_prepare = false;    // the run offers UndervoltIo::prepare_load
     int prepares = 0;
     int blind_health_probes = 0;  // this many 5 s probes end NO TELEMETRY, the card computing normally
+    std::vector<std::string> journal_at_first_recover;   // the file as it was when recover() was first called
 
     int probes = 0, recovers = 0, resets_to_stock = 0, rests = 0;
     std::vector<double> probe_seconds;
@@ -119,7 +120,7 @@ struct UvCard {
         g.set_mem_offset = [this](int mhz) { if (dead) return false; mem = mhz; return true; };
         g.set_power_limit = [this](int pct) { if (dead) return false; power = pct; return true; };
         if (with_recover)
-            g.recover = [this] { ++recovers; dead = false; std::fill(raw.begin(), raw.end(), 0); core = mem = 0; power = 100; return true; };
+            g.recover = [this] { if (recovers == 0) journal_at_first_recover = journal; ++recovers; dead = false; std::fill(raw.begin(), raw.end(), 0); core = mem = 0; power = 100; return true; };
         return g;
     }
     StabilityResult probe(double seconds, int max_temp = 1000) {
@@ -290,6 +291,22 @@ TEST_CASE("find_undervolt: a driver reset ends the descent; the card must prove 
     REQUIRE(lost != card.probe_raise_mhz.end());
     CHECK(std::all_of(lost + 1, card.probe_raise_mhz.end(), [](int v) { return v <= 150; }));
     CHECK(card.count("\"begin\"") == card.count("\"complete\""));
+}
+
+TEST_CASE("find_undervolt: a machine that goes down while the driver recovers leaves the raise that reset as a ceiling") {
+    UvCard card;
+    card.lost_above_khz = 150000;
+    const auto r = card.go();
+    REQUIRE(r.ok);
+    const auto lost = std::find_if(card.probe_raise_mhz.begin(), card.probe_raise_mhz.end(), [](int v) { return v > 150; });
+    REQUIRE(lost != card.probe_raise_mhz.end());
+    Journal down(card.journal_at_first_recover, [](const std::string&) { return true; });
+    CHECK(down.ceilings().uv_mhz == *lost);
+    REQUIRE(down.freezes().size() == 1);
+    CHECK(down.freezes()[0].find("while the driver recovered from a reset there") != std::string::npos);
+    Journal after(card.journal, [](const std::string&) { return true; });   // the recovery ended
+    CHECK(after.freezes().empty());
+    CHECK(card.count("RECOVERED") == 1);
 }
 
 TEST_CASE("find_undervolt: a second driver reset ends the run at stock, nothing applied") {

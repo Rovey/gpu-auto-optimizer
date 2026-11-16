@@ -226,15 +226,34 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
     bool power_ctl = gpu.set_power_limit && gpu.power_limit_range_pct;   // false once skipped
 
     // The only caller of gpu.recover, which can take half a minute, fail,
-    // crash or hang. Rule: never call this while a journal entry is open, or a
-    // crash in it would leave a ceiling for a candidate that never ran.
-    // Callers check gpu.recover first.
+    // crash or hang. Rule: never call this while a candidate's journal entry
+    // is open, or a crash in it would leave a ceiling for a candidate that
+    // never ran. The entry guard_recovery opens is the exception on purpose:
+    // it names a candidate that did run and reset the driver. Callers check
+    // gpu.recover first.
     auto reconnect = [&]() -> bool {
         if (gpu.recover()) return true;
         reconnect_futile = true;
         return false;
     };
     auto reset_to_stock = [&]() -> bool { return gpu.reset_to_stock && gpu.reset_to_stock(); };
+    // The journal entry that guards a recovery (Journal::begin_recovery): open
+    // from before the first reconnect after a probe reset the driver until the
+    // card is back, or until the way out has reset it. 0: none open.
+    int recovery_entry = 0;
+    auto guard_recovery = [&]() -> bool {
+        if (recovery_entry != 0) return true;
+        recovery_entry = journal.begin_recovery();
+        if (recovery_entry >= 0) return true;
+        recovery_entry = 0;
+        return false;
+    };
+    auto end_recovery = [&] {
+        if (recovery_entry == 0) return;
+        if (!journal.complete(recovery_entry, "RECOVERED"))
+            log("warning: the crash journal entry could not be closed; later runs will stay below this candidate");
+        recovery_entry = 0;
+    };
     // Ends the run because a write, a reconnect or the recovery after a driver
     // reset failed. A stop request that arrived meanwhile is the more useful
     // reason of the two.
@@ -255,6 +274,7 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
         // The reconnect can take half a minute: say so before it starts.
         const char* const reconnecting = "reconnecting to the driver to restore stock";
         if (reconnected) {
+            guard_recovery();   // on the way out: a journal that cannot be written does not stop the reset
             log(reconnecting);
             reconnect();
         }
@@ -263,6 +283,7 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
             log(reconnecting);
             if (reconnect()) r.stock_restored = reset_to_stock();
         }
+        end_recovery();
         r.ok = false;
         r.reason = why;
         log("stopped: " + why + (r.stock_restored ? " -- card restored to stock"
@@ -325,6 +346,7 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
             hw_suspect = false;
             return true;
         }
+        if (!guard_recovery()) { stopped = "could not write the journal"; return false; }
         log("the driver was reset; reconnecting");
         if (!reconnect()) {
             stop("the driver did not come back after a reset");
@@ -406,7 +428,10 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
             }
             // A baseline that scored nothing gives no bar to measure against:
             // then no health probe counts as healthy.
-            if (s.verdict == Verdict::Stable && r.baseline.score > 0 && s.score >= kHealthyScore * r.baseline.score) return true;
+            if (s.verdict == Verdict::Stable && r.baseline.score > 0 && s.score >= kHealthyScore * r.baseline.score) {
+                end_recovery();
+                return true;
+            }
             // Computing, but not back yet (slow, a wrong result, too hot).
         }
         stop("the card did not recover after a driver reset");

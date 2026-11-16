@@ -49,6 +49,51 @@ TEST_CASE("a begin without complete becomes a ceiling") {
     CHECK(after.freezes()[0] == "core +165");
 }
 
+// GTX 1060, driver 560.94: twice the machine went down with a BSOD 0x133 while
+// the driver recovered from a DEVICE LOST at core +375, with that entry closed.
+TEST_CASE("a machine that goes down while the driver recovers from a reset leaves that candidate as a ceiling") {
+    Sink s;
+    Journal first({}, s.append());
+    first.complete(first.begin(375, std::nullopt), "DEVICE LOST");
+    const int rec = first.begin_recovery();
+    CHECK(rec == 2);
+    CHECK(first.open_id() == rec);
+    REQUIRE(s.lines.size() == 3);
+    CHECK(s.lines[2].find("\"core\":375") != std::string::npos);
+    CHECK(s.lines[2].find("\"recovering\":true") != std::string::npos);
+    Journal after(s.lines, s.append());   // the machine went down: never closed
+    CHECK(after.ceilings().core_mhz == 375);
+    REQUIRE(after.freezes().size() == 1);
+    CHECK(after.freezes()[0] == "core +375 (while the driver recovered from a reset there)");
+}
+
+TEST_CASE("a recovery that ends leaves no ceiling") {
+    Sink s;
+    Journal first({}, s.append());
+    first.complete(first.begin(375, 300), "NO TELEMETRY");
+    const int rec = first.begin_recovery();
+    REQUIRE(rec > 0);
+    CHECK(first.complete(rec, "RECOVERED"));
+    Journal after(s.lines, s.append());
+    CHECK(after.ceilings().core_mhz == INT_MAX);
+    CHECK(after.ceilings().mem_mhz == INT_MAX);
+    CHECK(after.freezes().empty());
+}
+
+TEST_CASE("a recovery after anything but a probe that reset the driver writes nothing") {
+    Sink s;
+    Journal j({}, s.append());
+    CHECK(j.begin_recovery() == 0);                              // nothing closed yet
+    j.complete(j.begin(375, std::nullopt), "SET FAILED");      // a write failed: the candidate never ran
+    CHECK(j.begin_recovery() == 0);
+    j.complete(j.begin(std::nullopt, std::nullopt), "DEVICE LOST");   // at stock: nothing to stay below
+    CHECK(j.begin_recovery() == 0);
+    j.complete(j.begin(360, std::nullopt), "STALLED");
+    CHECK(j.begin_recovery() > 0);
+    CHECK(j.begin_recovery() == 0);                              // one per reset
+    CHECK(s.lines.size() == 7);
+}
+
 TEST_CASE("a soak freeze lowers both ceilings and the lowest freeze wins") {
     Sink s;
     Journal first({}, s.append());

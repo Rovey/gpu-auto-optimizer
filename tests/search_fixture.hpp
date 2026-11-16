@@ -67,7 +67,8 @@ struct FakeCard {
     int prepares_with_entry_open = 0;   // preparations made while the last journal line was a `begin`
     bool abort_after_prepare = false;   // a stop request arrives while the load is being prepared
     int probes = 0, power_probes = 0;
-    std::vector<std::string> journal;
+    std::vector<std::string> journal;        // the candidates' lines: the file without the entries that guard a recovery
+    std::vector<std::string> journal_file;   // every line, as the file has them
     std::string last_set_begin_ok;   // "" if every set had its begin line first
     std::optional<ClockOffsetRanges> ranges;   // what the card reports; empty = it reports nothing
     bool ranges_read_fails = false;            // the callback exists but returns nothing
@@ -106,6 +107,7 @@ struct FakeCard {
     std::vector<std::pair<double, double>> probe_floors;   // every probe as (seconds, stall_below), in the order they ran
 
     bool entry_open() const { return !journal.empty() && journal.back().find("\"begin\"") != std::string::npos; }
+    std::vector<std::string> journal_at_first_recover;   // the file as it was when recover() was first called
     // True while the journal's last line opens the entry of a soak with both
     // clocks above stock: the only entry that carries both a core and a memory
     // offset.
@@ -161,7 +163,8 @@ struct FakeCard {
                 events.push_back("recover");
                 // The reconnect can crash or hang: it must never run inside an
                 // open journal entry, or that candidate becomes a false ceiling.
-                if (!journal.empty() && journal.back().find("\"begin\"") != std::string::npos) ++recovers_with_entry_open;
+                if (entry_open()) ++recovers_with_entry_open;
+                if (recover_calls == 1) journal_at_first_recover = journal_file;
                 if (abort_in_recover) aborted_now = true;
                 if (recover_fails || (recover_fails_from_call >= 0 && recover_calls >= recover_fails_from_call)) {
                     if (begins_when_recover_failed < 0) {
@@ -256,9 +259,12 @@ struct Run {
     std::string rig = "card-a / 617.42";    // the card and driver the journal's memory edges are bound to
     std::vector<std::pair<std::string, double>> steps;   // what the search said it was doing, and for how long
     OptimizeResult go(Preset preset, GpuControl gpu) {
+        card.journal_file = card.journal;
         Journal j(card.journal, [this](const std::string& l) {
             if (l.find("\"complete\"") != std::string::npos && card.completes_ok >= 0 && card.completes_ok-- == 0)
                 return false;
+            card.journal_file.push_back(l);
+            if (l.find("\"recovering\"") != std::string::npos || l.find("RECOVERED") != std::string::npos) return true;
             if (l.find("\"begin\"") != std::string::npos) card.events.push_back("begin");
             card.journal.push_back(l);
             return true;
@@ -383,7 +389,7 @@ inline std::vector<int> begins_with_only(const FakeCard& card, const std::string
 inline void check_journal_rules(const Run& run) {
     CHECK(run.card.recovers_with_entry_open == 0);
     CHECK(run.card.count("\"begin\"") == run.card.count("\"complete\""));
-    Journal reread(run.card.journal, [](const std::string&) { return true; });
+    Journal reread(run.card.journal_file, [](const std::string&) { return true; });
     CHECK(reread.freezes().empty());
 }
 

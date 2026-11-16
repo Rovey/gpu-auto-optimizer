@@ -53,11 +53,22 @@ UndervoltResult find_undervolt(const GpuControl& gpu, Journal& journal, const Un
     };
     // Every way out that is not a success: the card goes back to stock, with
     // one reconnect if the plain reset does not get through.
+    // The journal entry that guards a recovery (Journal::begin_recovery), as in
+    // the search: open from before the reconnect until the card is back, or
+    // until the way out has reset it. 0: none open.
+    int recovery_entry = 0;
+    auto end_recovery = [&] {
+        if (recovery_entry == 0) return;
+        if (!journal.complete(recovery_entry, "RECOVERED"))
+            log("warning: the crash journal entry could not be closed; later runs will stay below this candidate");
+        recovery_entry = 0;
+    };
     auto finish_fail = [&](const std::string& why) {
         r.ok = false;
         r.reason = why;
         r.stock_restored = to_stock();
         if (!r.stock_restored && gpu.recover && gpu.recover()) r.stock_restored = to_stock();
+        end_recovery();
         log("stopped: " + why + (r.stock_restored ? " -- card restored to stock" : " -- reset FAILED, run `gao --reset`"));
         return r;
     };
@@ -206,6 +217,8 @@ UndervoltResult find_undervolt(const GpuControl& gpu, Journal& journal, const Un
             }
             return true;
         };
+        recovery_entry = journal.begin_recovery();
+        if (recovery_entry < 0) { recovery_entry = 0; stopped = "could not write the journal"; return false; }
         log("the driver was reset; reconnecting");
         if (!reconnect_and_rest()) return false;
         if (io.prepare_load && !io.prepare_load()) { stopped = "the stress load could not be rebuilt after a driver reset"; return false; }
@@ -228,6 +241,7 @@ UndervoltResult find_undervolt(const GpuControl& gpu, Journal& journal, const Un
             stopped = "the card did not recover after a driver reset";
             return false;
         }
+        end_recovery();
         return true;
     };
 
