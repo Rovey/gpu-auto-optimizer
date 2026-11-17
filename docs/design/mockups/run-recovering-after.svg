@@ -1,0 +1,113 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1180" height="860" viewBox="0 0 1180 860" role="img" aria-label="Proposed run screen during a driver reset: recovering, with what is confirmed">
+<rect width="1180" height="860" fill="#111317"/>
+<rect x="252" y="167" width="896" height="308.0" rx="8" fill="#171A1F" stroke="#2B313A" stroke-width="1"/>
+<rect x="0" y="0" width="220" height="860" rx="0" fill="#0D0F12"/>
+<rect x="24" y="34.0" width="24" height="24" rx="6" fill="#2661BF"/>
+<path d="M29 52.0 L34 46.0 L37 42.0 L43 42.0" fill="none" stroke="#E6E8ED" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="56" y="54" font-family="Segoe UI, 'Segoe UI Variable', sans-serif" font-size="15" font-weight="600" fill="#E6E8ED" text-anchor="start">GPU Auto Optimizer</text>
+<rect x="29" y="107.0" width="6" height="6" rx="1.5" fill="none" stroke="#99A3B0" stroke-width="1.5"/>
+<rect x="29" y="115.0" width="6" height="6" rx="1.5" fill="none" stroke="#99A3B0" stroke-width="1.5"/>
+<rect x="37" y="107.0" width="6" height="6" rx="1.5" fill="none" stroke="#99A3B0" stroke-width="1.5"/>
+<rect x="37" y="115.0" width="6" height="6" rx="1.5" fill="none" stroke="#99A3B0" stroke-width="1.5"/>
+<text x="56" y="119" font-family="Segoe UI, 'Segoe UI Variable', sans-serif" font-size="15" font-weight="400" fill="#99A3B0" text-anchor="start">Dashboard</text>
+<rect x="12" y="140" width="196" height="36" rx="6" fill="#242830"/>
+<line x1="29" y1="154.5" x2="43" y2="154.5" stroke="#E6E8ED" stroke-width="1.5" stroke-linecap="round"/>
+<line x1="29" y1="161.5" x2="43" y2="161.5" stroke="#E6E8ED" stroke-width="1.5" stroke-linecap="round"/>
+<circle cx="33.5" cy="154.5" r="2.5" fill="#242830" stroke="#E6E8ED" stroke-width="1.5"/>
+<circle cx="39" cy="161.5" r="2.5" fill="#242830" stroke="#E6E8ED" stroke-width="1.5"/>
+<text x="56" y="163" font-family="Segoe UI, 'Segoe UI Variable', sans-serif" font-size="15" font-weight="600" fill="#E6E8ED" text-anchor="start">Optimize</text>
+<circle cx="192" cy="158" r="3.5" fill="#4A94FF"/>
+<circle cx="36" cy="202" r="7" fill="none" stroke="#99A3B0" stroke-width="1.5"/>
+<line x1="36" y1="202" x2="36" y2="197.5" stroke="#99A3B0" stroke-width="1.5" stroke-linecap="round"/>
+<line x1="36" y1="202" x2="39.9" y2="204.25" stroke="#99A3B0" stroke-width="1.5" stroke-linecap="round"/>
+<line x1="36" y1="202" x2="32.1" y2="204.25" stroke="#99A3B0" stroke-width="1.5" stroke-linecap="round"/>
+<text x="56" y="207" font-family="Segoe UI, 'Segoe UI Variable', sans-serif" font-size="15" font-weight="400" fill="#99A3B0" text-anchor="start">Fan</text>
+<circle cx="36" cy="246" r="7" fill="none" stroke="#99A3B0" stroke-width="1.5"/>
+<circle cx="36" cy="242.8" r="1.1" fill="#99A3B0"/>
+<line x1="36" y1="245.5" x2="36" y2="249.5" stroke="#99A3B0" stroke-width="1.5" stroke-linecap="round"/>
+<text x="56" y="251" font-family="Segoe UI, 'Segoe UI Variable', sans-serif" font-size="15" font-weight="400" fill="#99A3B0" text-anchor="start">About</text>
+<line x1="12" y1="772" x2="208" y2="772" stroke="#2B313A" stroke-width="1" stroke-linecap="round"/>
+<circle cx="36" cy="808" r="12" fill="#242830"/>
+<path d="M36 802.0 L41 804.0 L41 808.5 Q41 813.0 36 815.0 Q31 813.0 31 808.5 L31 804.0 Z" fill="none" stroke="#99A3B0" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="56" y="804" font-family="Segoe UI, 'Segoe UI Variable', sans-serif" font-size="15" font-weight="400" fill="#E6E8ED" text-anchor="start">Administrator</text>
+<text x="56" y="824" font-family="Segoe UI, 'Segoe UI Variable', sans-serif" font-size="13" font-weight="400" fill="#7A8390" text-anchor="start">Can tune the card</text>
+<text x="252" y="54" font-family="Segoe UI, 'Segoe UI Variable', sans-serif" font-size="22" font-weight="600" fill="#E6E8ED" text-anchor="start">Max performance</text>
+<text x="252" y="78" font-family="Segoe UI, 'Segoe UI Variable', sans-serif" font-size="13" font-weight="400" fill="#99A3B0" text-anchor="start">GeForce GTX 1060 6GB  ·  9 of about 15 min (estimate)  ·  1 driver reset</text>
+<rect x="962" y="39.0" width="186" height="36" rx="6" fill="#1C2026" stroke="#3D4552" stroke-width="1"/>
+<text x="1055" y="62" font-family="Segoe UI, 'Segoe UI Variable', sans-serif" font-size="15" font-weight="600" fill="#E6E8ED" text-anchor="middle">Abort run</text>
+<rect x="252" y="106" width="160" height="3" rx="1.5" fill="#7A8390"/>
+<text x="252" y="131" font-family="Segoe UI, 'Segoe UI Variable', sans-serif" font-size="13" font-weight="400" fill="#99A3B0" text-anchor="start">Stock, 5 min</text>
+<rect x="436" y="106" width="160" height="3" rx="1.5" fill="#7A8390"/>
+<text x="436" y="131" font-family="Segoe UI, 'Segoe UI Variable', sans-serif" font-size="13" font-weight="400" fill="#99A3B0" text-anchor="start">Power limit</text>
+<rect x="620" y="106" width="160" height="3" rx="1.5" fill="#7A8390"/>
+<text x="620" y="131" font-family="Segoe UI, 'Segoe UI Variable', sans-serif" font-size="13" font-weight="400" fill="#99A3B0" text-anchor="start">Memory</text>
+<rect x="804" y="106" width="160" height="3" rx="1.5" fill="#4A94FF"/>
+<text x="804" y="131" font-family="Segoe UI, 'Segoe UI Variable', sans-serif" font-size="13" font-weight="600" fill="#E6E8ED" text-anchor="start">Core</text>
+<rect x="988" y="106" width="160" height="3" rx="1.5" fill="#242830"/>
+<text x="988" y="131" font-family="Segoe UI, 'Segoe UI Variable', sans-serif" font-size="13" font-weight="400" fill="#7A8390" text-anchor="start">Final test, 5 min</text>
+<circle cx="287" cy="205" r="11" fill="#E8B53B"/>
+<path d="M287 199.72 A5.28 5.28 0 1 1 281.72 205" fill="none" stroke="#111317" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M278.86 205.22 L281.72 202.36 L284.58 205.22" fill="none" stroke="#111317" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="308" y="213" font-family="Segoe UI, 'Segoe UI Variable', sans-serif" font-size="22" font-weight="600" fill="#E6E8ED" text-anchor="start">Recovering after a driver reset</text>
+<text x="308" y="239" font-family="Segoe UI, 'Segoe UI Variable', sans-serif" font-size="15" font-weight="400" fill="#99A3B0" text-anchor="start">The graphics driver was reset while the run tested core +330 MHz. A reset can happen</text>
+<text x="308" y="261" font-family="Segoe UI, 'Segoe UI Variable', sans-serif" font-size="15" font-weight="400" fill="#99A3B0" text-anchor="start">while a run looks for the card&#x27;s limit. The run reconnects to the driver and checks that the</text>
+<text x="308" y="283" font-family="Segoe UI, 'Segoe UI Variable', sans-serif" font-size="15" font-weight="400" fill="#99A3B0" text-anchor="start">card works before continuing.</text>
+<text x="308" y="327" font-family="Segoe UI, 'Segoe UI Variable', sans-serif" font-size="13" font-weight="400" fill="#99A3B0" text-anchor="start">Recovery</text>
+<line x1="315" y1="350" x2="315" y2="440" stroke="#2B313A" stroke-width="1" stroke-linecap="round"/>
+<circle cx="315" cy="350" r="7" fill="#242830"/>
+<path d="M311.8 350.2 L314.1 352.6 L318.4 347.6" fill="none" stroke="#E6E8ED" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="315" cy="380" r="7" fill="#242830"/>
+<path d="M311.8 380.2 L314.1 382.6 L318.4 377.6" fill="none" stroke="#E6E8ED" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="315" cy="410" r="6" fill="#171A1F" stroke="#242830" stroke-width="2"/>
+<path d="M315 404 A6 6 0 0 1 321 410" fill="none" stroke="#4A94FF" stroke-width="2" stroke-linecap="round"/>
+<circle cx="315" cy="440" r="5.5" fill="#171A1F" stroke="#3D4552" stroke-width="1.5"/>
+<text x="332" y="355" font-family="Segoe UI, 'Segoe UI Variable', sans-serif" font-size="15" font-weight="400" fill="#E6E8ED" text-anchor="start">Reconnected to the driver</text>
+<text x="332" y="385" font-family="Segoe UI, 'Segoe UI Variable', sans-serif" font-size="15" font-weight="400" fill="#E6E8ED" text-anchor="start">Card set to stock, confirmed by read-back</text>
+<text x="332" y="415" font-family="Segoe UI, 'Segoe UI Variable', sans-serif" font-size="15" font-weight="600" fill="#E6E8ED" text-anchor="start">Resting before the card is loaded again  ·  12 s left</text>
+<text x="332" y="445" font-family="Segoe UI, 'Segoe UI Variable', sans-serif" font-size="15" font-weight="400" fill="#7A8390" text-anchor="start">Checking that the card works, 5 s at stock</text>
+<text x="728" y="327" font-family="Segoe UI, 'Segoe UI Variable', sans-serif" font-size="13" font-weight="400" fill="#99A3B0" text-anchor="start">Your part</text>
+<text x="728" y="351" font-family="Segoe UI, 'Segoe UI Variable', sans-serif" font-size="15" font-weight="600" fill="#E6E8ED" text-anchor="start">Nothing. Keep the PC switched on.</text>
+<text x="728" y="387" font-family="Segoe UI, 'Segoe UI Variable', sans-serif" font-size="13" font-weight="400" fill="#99A3B0" text-anchor="start">Next</text>
+<text x="728" y="411" font-family="Segoe UI, 'Segoe UI Variable', sans-serif" font-size="15" font-weight="400" fill="#99A3B0" text-anchor="start">If the check passes, the run goes on below core +330 MHz.</text>
+<text x="728" y="433" font-family="Segoe UI, 'Segoe UI Variable', sans-serif" font-size="15" font-weight="400" fill="#99A3B0" text-anchor="start">If not, it stops and the result shows the card&#x27;s state.</text>
+<text x="252" y="521" font-family="Segoe UI, 'Segoe UI Variable', sans-serif" font-size="13" font-weight="400" fill="#99A3B0" text-anchor="start">Core clock</text>
+<text x="252" y="547" font-family="Segoe UI, 'Segoe UI Variable', sans-serif" font-size="18" font-weight="600" fill="#E6E8ED" text-anchor="start">139 MHz</text>
+<line x1="424" y1="507" x2="424" y2="553" stroke="#2B313A" stroke-width="1" stroke-linecap="round"/>
+<text x="436" y="521" font-family="Segoe UI, 'Segoe UI Variable', sans-serif" font-size="13" font-weight="400" fill="#99A3B0" text-anchor="start">Memory clock</text>
+<text x="436" y="547" font-family="Segoe UI, 'Segoe UI Variable', sans-serif" font-size="18" font-weight="600" fill="#E6E8ED" text-anchor="start">405 MHz</text>
+<line x1="608" y1="507" x2="608" y2="553" stroke="#2B313A" stroke-width="1" stroke-linecap="round"/>
+<text x="620" y="521" font-family="Segoe UI, 'Segoe UI Variable', sans-serif" font-size="13" font-weight="400" fill="#99A3B0" text-anchor="start">Temperature</text>
+<text x="620" y="547" font-family="Segoe UI, 'Segoe UI Variable', sans-serif" font-size="18" font-weight="600" fill="#E6E8ED" text-anchor="start">58 °C</text>
+<line x1="792" y1="507" x2="792" y2="553" stroke="#2B313A" stroke-width="1" stroke-linecap="round"/>
+<text x="804" y="521" font-family="Segoe UI, 'Segoe UI Variable', sans-serif" font-size="13" font-weight="400" fill="#99A3B0" text-anchor="start">Power</text>
+<text x="804" y="547" font-family="Segoe UI, 'Segoe UI Variable', sans-serif" font-size="18" font-weight="600" fill="#E6E8ED" text-anchor="start">11 / 120 W</text>
+<line x1="976" y1="507" x2="976" y2="553" stroke="#2B313A" stroke-width="1" stroke-linecap="round"/>
+<text x="988" y="521" font-family="Segoe UI, 'Segoe UI Variable', sans-serif" font-size="13" font-weight="400" fill="#99A3B0" text-anchor="start">Fans</text>
+<text x="988" y="547" font-family="Segoe UI, 'Segoe UI Variable', sans-serif" font-size="18" font-weight="600" fill="#E6E8ED" text-anchor="start">41 %</text>
+<text x="1034" y="547" font-family="Segoe UI, 'Segoe UI Variable', sans-serif" font-size="13" font-weight="400" fill="#7A8390" text-anchor="start">the run</text>
+<line x1="252" y1="585" x2="1148" y2="585" stroke="#2B313A" stroke-width="1" stroke-linecap="round"/>
+<text x="252" y="614" font-family="Segoe UI, 'Segoe UI Variable', sans-serif" font-size="15" font-weight="600" fill="#E6E8ED" text-anchor="start">Voltage/frequency curve</text>
+<text x="435" y="614" font-family="Segoe UI, 'Segoe UI Variable', sans-serif" font-size="13" font-weight="400" fill="#99A3B0" text-anchor="start">On the card now: stock  ·  MHz against mV</text>
+<path d="M1139 611.0 L1143 607.0 L1147 611.0" fill="none" stroke="#99A3B0" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="1132" y="614" font-family="Segoe UI, 'Segoe UI Variable', sans-serif" font-size="13" font-weight="400" fill="#4A94FF" text-anchor="end">Hide</text>
+<line x1="252" y1="633" x2="1148" y2="633" stroke="#2B313A" stroke-width="1" stroke-linecap="round"/>
+<line x1="308" y1="722.5" x2="1148" y2="722.5" stroke="#242830" stroke-width="1" stroke-linecap="round"/>
+<text x="300" y="727.5" font-family="Segoe UI, 'Segoe UI Variable', sans-serif" font-size="13" font-weight="400" fill="#7A8390" text-anchor="end">1400</text>
+<line x1="308" y1="691" x2="1148" y2="691" stroke="#242830" stroke-width="1" stroke-linecap="round"/>
+<text x="300" y="696" font-family="Segoe UI, 'Segoe UI Variable', sans-serif" font-size="13" font-weight="400" fill="#7A8390" text-anchor="end">1700</text>
+<line x1="308" y1="659.5" x2="1148" y2="659.5" stroke="#242830" stroke-width="1" stroke-linecap="round"/>
+<text x="300" y="664.5" font-family="Segoe UI, 'Segoe UI Variable', sans-serif" font-size="13" font-weight="400" fill="#7A8390" text-anchor="end">2000</text>
+<path d="M308.0 730.9 L434.0 712.0 L560.0 696.2 L686.0 681.5 L812.0 670.0 L896.0 663.7 L968.2 660.9 L1148.0 660.9" fill="none" stroke="#99A3B0" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="308" y="751" font-family="Segoe UI, 'Segoe UI Variable', sans-serif" font-size="13" font-weight="400" fill="#7A8390" text-anchor="start">700</text>
+<text x="476" y="751" font-family="Segoe UI, 'Segoe UI Variable', sans-serif" font-size="13" font-weight="400" fill="#7A8390" text-anchor="middle">800</text>
+<text x="644" y="751" font-family="Segoe UI, 'Segoe UI Variable', sans-serif" font-size="13" font-weight="400" fill="#7A8390" text-anchor="middle">900</text>
+<text x="812" y="751" font-family="Segoe UI, 'Segoe UI Variable', sans-serif" font-size="13" font-weight="400" fill="#7A8390" text-anchor="middle">1000</text>
+<text x="980" y="751" font-family="Segoe UI, 'Segoe UI Variable', sans-serif" font-size="13" font-weight="400" fill="#7A8390" text-anchor="middle">1100</text>
+<text x="1148" y="751" font-family="Segoe UI, 'Segoe UI Variable', sans-serif" font-size="13" font-weight="400" fill="#7A8390" text-anchor="end">1200</text>
+<line x1="252" y1="771" x2="1148" y2="771" stroke="#2B313A" stroke-width="1" stroke-linecap="round"/>
+<text x="252" y="800" font-family="Segoe UI, 'Segoe UI Variable', sans-serif" font-size="15" font-weight="600" fill="#E6E8ED" text-anchor="start">Technical log  ·  148 lines</text>
+<path d="M1139 793.0 L1143 797.0 L1147 793.0" fill="none" stroke="#99A3B0" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="1132" y="800" font-family="Segoe UI, 'Segoe UI Variable', sans-serif" font-size="13" font-weight="400" fill="#4A94FF" text-anchor="end">Show</text>
+<line x1="252" y1="819" x2="1148" y2="819" stroke="#2B313A" stroke-width="1" stroke-linecap="round"/>
+<text x="252" y="849" font-family="Segoe UI, 'Segoe UI Variable', sans-serif" font-size="13" font-weight="400" fill="#7A8390" text-anchor="start">Mockup. Reset at core +330 MHz and recovery steps from a logged GTX 1060 run (hardware check 113); curve shape illustrative.</text>
+</svg>
