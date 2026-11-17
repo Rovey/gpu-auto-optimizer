@@ -491,12 +491,12 @@ lies on the same 12 × 46 grid at 308 as the Dashboard's card, so the two screen
 name sits on the page title's baseline; the account area is the last 40 px above the bottom margin, with
 a hairline 16 px above it.
 
-**Window sizes.** The mockups show the window at 1180 × 860; they are the visual reference, not a
-minimum. Every page works from that size down to the existing minimum window of 1000 × 700, at 100, 150
-and 200 % scaling, without horizontal scrolling. The content width is the client width minus the nav
-(220) and the two page margins (32 each): 896 in the mockups, about 880 in a 1180 px window (its frame
-takes about 16 px) and about 700 at the minimum. Sizes are design pixels times the monitor's scale
-(`px()`), so these widths hold at every scaling. What adapts and what does not:
+**Window sizes** (approved 2026-11-17). The mockups show the window at 1180 × 860; they are the visual
+reference, not a minimum. Every page works from that size down to the existing minimum window of 1000 ×
+700, at 100, 150 and 200 % scaling, without horizontal scrolling. The content width is the client width
+minus the nav (220) and the two page margins (32 each): 896 in the mockups, about 880 in a 1180 px window
+(its frame takes about 16 px) and about 700 at the minimum. Sizes are design pixels times the monitor's
+scale (`px()`), so these widths hold at every scaling. What adapts and what does not:
 
 - *Fixed at every width:* the type scale and line heights, the spacing scale, the gutter (24), card
   padding (24), the status-icon lead (32), page margins (32), control heights (36, Start 48), the nav
@@ -644,8 +644,11 @@ How the three hard cases stay distinct, even in greyscale:
 2. *Search step* (no length known): no bar; the activity line ("Trying core +150 MHz") and the time in
    this phase. Never an invented percentage.
 3. *Phase rail*: one 3 px segment per phase with its name under it: done `text-3` with the name in
-   `text-2`, current `accent-text` with the name in `text-1` semibold, next `surface-3` with the name in
-   `text-3`. The rail shows position only; a recovery does not recolour it. The overall time stays an
+   `text-2` after a check mark (the check glyph of 6.5 at caption size, in `text-2`, 4 px before the
+   name), current `accent-text` with the name in `text-1` semibold and no check mark, next `surface-3`
+   with the name in `text-3`. The check mark is the one addition to the rail of the revision 5 mockups
+   (decided 2026-11-17); the mockups show done phases without it and are not redrawn for it. The rail
+   shows position only; a recovery does not recolour it. The overall time stays an
    estimate in words ("12 of about 40 min (estimate)").
 
 **Notifications:** tray balloons stay native (Windows decides their position, motion and quiet hours).
@@ -696,8 +699,8 @@ restart as administrator): native dialogs are accessible and look like Windows.
 
 ### 6.10 Motion
 
-Decided by the product owner on 2026-11-17: **motion communicates a change of state; it never decorates.**
-Restrained, functional micro-animation only, and only where something changes.
+Decided by the product owner on 2026-11-17, timings included: **motion communicates a change of state;
+it never decorates.** Restrained, functional micro-animation only, and only where something changes.
 
 | Motion | Duration / easing | When |
 |---|---|---|
@@ -705,7 +708,7 @@ Restrained, functional micro-animation only, and only where something changes.
 | A triggered action shows at once (pressed state, then the busy label) | immediate, then 120 ms | A click or key press on a button |
 | Disclosure and expander open / close (height, content clipped) | 180 ms, ease-out | User clicks Show / Hide |
 | Status icon or heading changes state (cross-fade of the icon) | 180 ms, ease-out | The engine reports a new state |
-| Phase rail: the active segment moves to the next phase; the finished one takes its done colour | 180 ms, ease-out | The phase hook reports the next phase (11.2) |
+| Phase rail: the active segment moves to the next phase; the finished one takes its done colour and its check mark | 180 ms, ease-out (the check mark fades in with the colour; it has no motion of its own) | The phase hook reports the next phase (11.2) |
 | A recovery step appears in the timeline; a mark turns from current to confirmed | 160 ms, ease-out (fade in over a rise of 4 px at most) | The recovery hook reports the step |
 | Progress bar of a timed step | continuous, as today | Timed steps |
 | Loader (the progress ring of 6.5) turns | one turn in about 1.2 s, linear | While the app waits on something without a known length: detection, a search step, the rest after a reset |
@@ -713,8 +716,7 @@ Restrained, functional micro-animation only, and only where something changes.
 Rules:
 
 - **No** page transitions, slides, large fades, bounce, spring or overshoot, pulsing, or anything that
-  moves without a state behind it. The finished phase in the rail keeps the done style of the mockups (no
-  check mark is added there); the recovery timeline already has its check marks.
+  moves without a state behind it.
 - **Never in the way:** an animation only shows what is already true. The state, the enabled buttons and
   the hit areas change in the frame the input or report arrives; Abort and the recovery actions act on
   the click itself, never after an animation.
@@ -874,7 +876,11 @@ next to what they act on.
        points** fans (73 → 62 %), and the trade-off "+4 °C warmer" (67 → 71 °C; fans aim for 70 °C) in
        the trade-off style of section 6.8. Numbers: the README's All in one run on the reference RTX
        4070, which also says why it runs warmer (the fan tune aims for 70 °C on quieter fans); an outcome
-       is shown as measured, not only when it is good.
+       is shown as measured, not only when it is good. The README gives that run's peak temperatures
+       only, so the mockup uses them as its example; the built metric compares the **average**
+       temperatures (D14, section 13.3) with the same label, value and caption form, and the peaks move
+       to "Show all", which names both as average and peak. A tune saved without averages shows the
+       other three outcomes and no temperature.
      - *Settings* (below a hairline, the left half): "Settings" with the "Show all" disclosure after it
        (the saved date, the step, the full stock comparison), then undervolt, core offset, memory offset
        and power limit as a key/value list (the key in the first 186 px column, the value from the
@@ -997,8 +1003,8 @@ next to what they act on.
      The log shows its line count, "Copy" and "Open run.log".
   5. Charts: removed in favour of the readings with the limit (decision D5), or kept with a y-axis label
      and the limit line.
-  6. While a timed measurement runs, a caption under the readings: "Leaving this window open is fine.
-     Screen recording (for example the NVIDIA app's Instant Replay) lowers the measured score." (D10).
+
+  No caption about screen recording is added (D10, rejected).
 - **Why:** the beginner sees where the run is and whether it is normal, in one place that changes its
   content but not its look; the advanced user keeps the curve and the log one click away.
 
@@ -1073,8 +1079,8 @@ log).
   legend row (four short line samples: min speed, limit, fan-stop zone, now); presets above the editor as
   a segmented row (they are the keyboard path); "Back to the tested curve" becomes a link; the warning
   "quieter than the tested curve" becomes a status line (!) above the editor; point add/remove stay as
-  secondary buttons under the editor, next to what they change. Arrow keys move the selected point by
-  1 °C / 1 % (keyboard access; decision D12, a small behaviour addition in the UI only).
+  secondary buttons under the editor, next to what they change. The editor's keyboard behaviour stays
+  as it is today; no arrow-key editing of points is added (D12, rejected).
 
 ### 7.7 About (S7)
 
@@ -1203,7 +1209,9 @@ The engine's own reason and the log stay under "Why" for advanced users and prob
 - **Focus:** a visible 2 px ring in `focus` on every focusable control (ImGui's nav highlight restyled);
   Tab order top-to-bottom, left-to-right; the selected profile row and the Start button reachable in
   two Tabs from the list.
-- **Keyboard:** everything that works by mouse works by keyboard, including fan points (decision D12).
+- **Keyboard:** every control keeps the keyboard behaviour it has today, and new components are
+  reachable and operable by keyboard; the fan curve's points get no new keyboard editing (D12, rejected),
+  the presets stay its keyboard path.
 - **Not colour alone:** every state has words and its own icon glyph (section 6.5).
 - **Reduced motion:** with Windows' "Animation effects" off every transition is instant and the loader
   still (section 6.10).
@@ -1309,31 +1317,40 @@ specification; a stage that cannot follow it stops and asks instead of deviating
 
 ### 13.1 Stages, files and dependencies
 
-| # | Stage | Files expected to change | Depends on |
-|---|---|---|---|
-| 0 | **Copy fixes**: the profile goal lines and the Choose subtitle as in 7.3, generated from `objectives_for`, with a test | `src/app/gui/ui_widgets.hpp` (`kPresets`, `kAllInOne`, `kUndervolt`), `src/app/gui/ui_optimize.cpp`, `tests/test_ui_text.cpp` | — |
-| 1 | **Engine reporting hooks (D7)**, reporting only (11.2): phase, recovery step, `ResultKind`, the measurements of a rejected result, the crash ceiling; stored in the worker's snapshot | `src/core/search.hpp/.cpp` (`OptimizeIo`), `src/core/undervolt.hpp/.cpp` (`UndervoltIo`), `src/app/common.hpp`, `src/app/common_optimize.cpp`, `src/app/common_all_in_one.cpp`, `src/app/common_retest.cpp`, `src/app/common_run_steps.cpp`, `src/app/common_results.cpp` (`ResultKind` beside the result lines), `src/app/gui/worker.hpp/.cpp`; tests `tests/test_search_recovery.cpp`, `tests/test_undervolt.cpp`, `tests/test_run_outcome.cpp`, `tests/test_screen_flow.cpp` | — |
-| 2 | **Tokens, layout, motion and primitives**: `theme.hpp` (colour, type, spacing, radius, `px()`), five font sizes, `layout.hpp`, `motion.hpp`, the components of 11.1 with their hover, press and disclosure motion; every page moved to tokens with its present layout; `--demo=<state>` and `tools/ui-shots.ps1` | new `src/app/gui/theme.hpp`, new `src/app/gui/layout.hpp`, new `src/app/gui/motion.hpp`, `src/app/gui/ui_widgets.hpp/.cpp`, `ui.hpp`, every `ui_*.cpp` (tokens only), `main_gui.cpp` (demo argument; "animating until" in the frame loop; `WM_SETTINGCHANGE`), `src/app/gui/worker.cpp` (demo states), `CMakeLists.txt`, new `tests/test_layout.cpp`, new `tests/test_motion.cpp`, new `tools/ui-shots.ps1` | 0 |
-| 3 | **Shell and sidebar** (7.1): product mark, icon column, selection, run dot, account area, update line | `src/app/gui/ui.cpp`, `ui_widgets.*` | 2 |
-| 4 | **Results** (7.5): status heading per `ResultKind`, "Your card" / "Saved tune" from `stock_restored`, `put_back`, `put_back_as_before` only, comparison table, next step (D8), Why; retest, All in one and Undervolt results | `src/app/gui/ui_results.cpp`, `ui_widgets.*`, `tests/test_ui_text.cpp` | 1, 2 |
-| 5 | **Run and recovery** (7.4, 8.3): phase rail from the phase hook with its transition, activity card in every state (measuring, searching, recovering, stopping, the busy question) with status transitions and the loader, recovery timeline from the recovery hook with steps appearing, readings strip, curve open and log collapsed (D5), run dot | `src/app/gui/ui_optimize.cpp` (`run_screen`, `curve_card`), `ui.cpp` (dot), `ui_widgets.*`, `tests/test_screen_flow.cpp` | 1, 2, 3 |
-| 6 | **Optimize, Choose** (7.3): list and detail, five answers, the D9 information line, switch and Start, Advanced options with the fan preset of a run | `src/app/gui/ui_optimize.cpp` (`choose`, `preset_card*` replaced), `ui_widgets.*` | 0, 2 |
-| 7 | **Dashboard** (7.2): the eight states, outcomes from `Profile::against_stock` (temperature: section 13.3), settings, tune step, Revert and logon, Recent activity timeline | `src/app/gui/ui_dashboard.cpp`, `ui_widgets.*`, `tests/test_ui_text.cpp` | 2, 3 |
-| 8 | **Fan, About and tray** in the design system, functions unchanged (7.6–7.8; no mockups) | `src/app/gui/ui_fan.cpp`, `ui_about.cpp`, the tray and balloon wording in `main_gui.cpp` (text only) | 2 |
-| 9 | **Consistency, regression, overhead**: all pages and states side by side, both window sizes and three scalings, the README pictures, the old helpers removed | `src/app/gui/*` (fixes only), `docs/images/`, `README.md` (pictures), `docs/hardware-checks.md` (the overhead check) | 3–8 |
+| # | Stage | Files expected to change | Depends on | Size* | Risk* |
+|---|---|---|---|---|---|
+| 0 | **Copy fixes**: the profile goal lines and the Choose subtitle as in 7.3, generated from `objectives_for`, with a test | `src/app/gui/ui_widgets.hpp` (`kPresets`, `kAllInOne`, `kUndervolt`), `src/app/gui/ui_optimize.cpp`, `tests/test_ui_text.cpp` | — | S | very low |
+| 1a | **Engine reporting hooks (D7)**, reporting only (11.2): phase, recovery step, `ResultKind`, the measurements of a rejected result, the crash ceiling; stored in the worker's snapshot | `src/core/search.hpp/.cpp` (`OptimizeIo`), `src/core/undervolt.hpp/.cpp` (`UndervoltIo`), `src/app/common.hpp`, `src/app/common_optimize.cpp`, `src/app/common_all_in_one.cpp`, `src/app/common_retest.cpp`, `src/app/common_run_steps.cpp`, `src/app/common_results.cpp` (`ResultKind` beside the result lines), `src/app/gui/worker.hpp/.cpp`; tests `tests/test_search_recovery.cpp`, `tests/test_undervolt.cpp`, `tests/test_run_outcome.cpp`, `tests/test_screen_flow.cpp` | — | M | medium |
+| 1b | **Average temperature saved (D14)**, a data addition (section 13.3): the average temperature of each measurement saved with Best, Max and All in one tunes; the window shows it on the Dashboard; no change to what the engine decides or writes to the card | `src/core/config.hpp/.cpp` (`MeasuredRun`, `run_json`, `run_from`), `src/app/common_run_steps.cpp` (`measured_run`), `src/app/common_optimize.cpp`, `src/app/common_all_in_one.cpp` (where `against_stock` is saved); tests `tests/test_config.cpp`, `tests/test_run_outcome.cpp` | — | S | low–medium |
+| 2 | **Tokens, layout, motion and primitives**: `theme.hpp` (colour, type, spacing, radius, `px()`), five font sizes, `layout.hpp`, `motion.hpp`, the components of 11.1 with their hover, press and disclosure motion; every page moved to tokens with its present layout; `--demo=<state>` and `tools/ui-shots.ps1` | new `src/app/gui/theme.hpp`, new `src/app/gui/layout.hpp`, new `src/app/gui/motion.hpp`, `src/app/gui/ui_widgets.hpp/.cpp`, `ui.hpp`, every `ui_*.cpp` (tokens only), `main_gui.cpp` (demo argument; "animating until" in the frame loop; `WM_SETTINGCHANGE`), `src/app/gui/worker.cpp` (demo states), `CMakeLists.txt`, new `tests/test_layout.cpp`, new `tests/test_motion.cpp`, new `tools/ui-shots.ps1` | 0 | M–L | low |
+| 3 | **Shell and sidebar** (7.1): product mark, icon column, selection, run dot, account area, update line | `src/app/gui/ui.cpp`, `ui_widgets.*` | 2 | S | low |
+| 4 | **Results** (7.5): status heading per `ResultKind`, "Your card" / "Saved tune" from `stock_restored`, `put_back`, `put_back_as_before` only, comparison table, next step (D8), Why; retest, All in one and Undervolt results | `src/app/gui/ui_results.cpp`, `ui_widgets.*`, `tests/test_ui_text.cpp` | 1a, 2 | M–L | medium |
+| 5 | **Run and recovery** (7.4, 8.3): phase rail from the phase hook with its transition, activity card in every state (measuring, searching, recovering, stopping, the busy question) with status transitions and the loader, recovery timeline from the recovery hook with steps appearing, readings strip, curve open and log collapsed (D5), run dot | `src/app/gui/ui_optimize.cpp` (`run_screen`, `curve_card`), `ui.cpp` (dot), `ui_widgets.*`, `tests/test_screen_flow.cpp` | 1a, 2, 3 | L | medium |
+| 6 | **Optimize, Choose** (7.3): list and detail, five answers, the D9 information line, switch and Start, Advanced options with the fan preset of a run | `src/app/gui/ui_optimize.cpp` (`choose`, `preset_card*` replaced), `ui_widgets.*` | 0, 2 | M | low |
+| 7 | **Dashboard** (7.2): the eight states, outcomes from `Profile::against_stock` (temperature: section 13.3), settings, tune step, Revert and logon, Recent activity timeline | `src/app/gui/ui_dashboard.cpp`, `ui_widgets.*`, `tests/test_ui_text.cpp` | 1b, 2, 3 | M | low–medium |
+| 8 | **Fan, About and tray** in the design system, functions unchanged (7.6–7.8; no mockups) | `src/app/gui/ui_fan.cpp`, `ui_about.cpp`, the tray and balloon wording in `main_gui.cpp` (text only) | 2 | S–M | low |
+| 9 | **Consistency, regression, overhead**: all pages and states side by side, both window sizes and three scalings, the README pictures, the old helpers removed | `src/app/gui/*` (fixes only), `docs/images/`, `README.md` (pictures), `docs/hardware-checks.md` (the overhead check) | 3–8 | S–M | low |
 
-Stages 1 and 2 can run side by side. 4 and 5 wait for 1; 6, 7 and 8 need only 2 (and 3 for the
-Dashboard's run dot). After 2, each page keeps working at every stage, so any stage can be released.
+\* Estimates, not commitments: S ≤ 1 day, M 2–3 days, L 4–6 days of one developer with an assistant;
+risk is the chance that a stage needs rework or changes behaviour by mistake.
+
+Stages 1a, 1b and 2 can run side by side. 1a and 1b are separate PRs: 1a reports only (11.2), 1b
+changes what is saved (13.3), and neither waits for the other; they touch the same three files in
+`src/app/` (`common_optimize.cpp`, `common_all_in_one.cpp`, `common_run_steps.cpp`), so the second to
+merge rebases on the first. 4 and 5 wait for 1a; 7 waits for 1b, so that its temperature outcome is
+checked with real averages; 6, 7 and 8 need 2 (and 7 needs 3 for the run dot). After 2, each page keeps
+working at every stage, so any stage can be released.
 
 ### 13.2 Validation per stage
 
 Every stage:
 
 - `cmake --workflow --preset ci` (Release, `/W4 /WX`) and the Debug preset build; `core_tests` and
-  `app_tests` pass, the existing tests unchanged (stage 1 adds to them, it does not edit their
-  assertions).
+  `app_tests` pass, the existing tests unchanged (stage 1a adds to them, it does not edit their
+  assertions; stage 1b edits only the assertions listed for it below).
 - `git diff main` outside `src/app/gui/`, `tests/`, `tools/`, `CMakeLists.txt` and `docs/` is empty,
-  except in stage 1, whose diff is limited to the reporting additions of 11.2.
+  except in stage 1a, whose diff is limited to the reporting additions of 11.2, and stage 1b, whose diff
+  is limited to the storage addition of 13.3.
 - Pictures of every demo state of the stage, taken with PrintWindow of the app's own window only, at
   1180 × 860 and 1000 × 700, each at 100, 150 and 200 %: compared with the mockup at 1180 × 860
   (layout, hierarchy, copy; within a few pixels of the grid), and at 1000 × 700 checked against
@@ -1345,13 +1362,14 @@ Per stage, in addition:
 
 | Stage | Also checked |
 |---|---|
-| 1 | The recorded phase and recovery sequences match what the engine does in the scripted resets; the CLI output of a demo-free `gao --undervolt` refusal and of the unit-test runs is unchanged; on the Z420 one targeted reset (`dxcap -forcetdr` during `gao --stress`) with the reported steps compared to `run.log` |
+| 1a | The recorded phase and recovery sequences match what the engine does in the scripted resets; the CLI output of a demo-free `gao --undervolt` refusal and of the unit-test runs is unchanged; on the Z420 one targeted reset (`dxcap -forcetdr` during `gao --stress`) with the reported steps compared to `run.log` |
+| 1b | The storage tests of 13.3; the CLI output and `run.log` of a Best run in the unit tests unchanged; on the Z420 one short Best run with the new build, then `gao --status` of the release before it on the same `gao.json` loads the tune |
 | 2 | Every page looks as before apart from colour and type; contrast test of the text tokens (≥ 4.5:1); `test_motion.cpp`: the durations and easing of 6.10, exact end values, reduced motion gives the end value at once, the frame request never below 33 ms while a run is under way; with "Animation effects" off nothing moves |
 | 4 | Every outcome kind: kept, not kept by a rule, not compared, refused, stopped with and without put-back, failed with the stock write failed; "at stock" only with `stock_restored` (unit test) |
-| 5 | Each phase of each profile, a recovery from the demo and one real reset on the Z420; Abort in every phase, also in the middle of a transition (it acts on the click); the busy question with each answer; frames drawn during a demo run equal to the old build's apart from the transitions |
+| 5 | Each phase of each profile, a recovery from the demo and one real reset on the Z420; Abort in every phase, also in the middle of a transition (it acts on the click); the busy question with each answer; frames drawn during a demo run equal to the old build's apart from the transitions; done phases with their check mark, the active one without |
 | 6 | Every profile selected; D9 line shown and the definitive check still at Start; the logon switch saved |
-| 7 | All eight Dashboard states; ±5 % enabled and disabled with tooltips; Test this step; Revert; Apply at logon; a saved tune without `against_stock`, and one without an average temperature |
-| 8 | Fan curve editing, fan presets, fan control on and off, About links, update line and install, tray menu items and balloons |
+| 7 | All eight Dashboard states; ±5 % enabled and disabled with tooltips; Test this step; Revert; Apply at logon; a saved tune without `against_stock`; one without an average temperature (three outcomes, no temperature, no gap); one with averages (the average compared, the peak only under "Show all") |
+| 8 | Fan curve editing by mouse and the presets by keyboard as today (no new keys), fan control on and off, About links, update line and install, tray menu items and balloons |
 | 9 | All of the above once more on the release candidate; the overhead check below |
 
 **Window overhead** (stage 9, on the reference RTX 4070, window and other programs as in
@@ -1362,13 +1380,51 @@ GPU use as the busy-card check reads it, and the frames drawn per minute of a de
 a debug-only counter). Pass: the candidate's difference to "window closed" is no larger
 than the old build's, within the scatter of the runs (about 1 %).
 
-### 13.3 Dashboard temperature
+### 13.3 Dashboard temperature and its storage (D14)
 
 Decided on 2026-11-17: the average temperature is the comparison; the peak, when shown, is secondary
-(behind "Show all"); a saved tune without an average shows no temperature outcome, nothing estimated.
-Today only an Undervolt tune judged against stock saves averages (`counted_against_stock`); Best, Max
-and All in one save `against_stock` from `measured_run`, which records the peak and no average. See
-section 14, D14.
+(under "Show all"); a saved tune without an average shows no temperature outcome, nothing estimated.
+
+**What exists.** Every stable measurement already has the averages of its counted part, the last half of
+the measurement (`StabilityResult::counted`, `kCountedShare`). An Undervolt tune saves its comparison from
+that part (`counted_against_stock`: score, power, clocks and fans of the counted part, plus `counted_s`,
+`avg_temp_c` and `avg_fan_pct`). Best, Max and All in one save it from `measured_run`: the whole-run
+score, clocks and power, the peak temperature and the fan speed at the end, and no average.
+
+**The addition (stage 1b).** Best, Max and All in one also save `avg_temp_c` for both measurements of
+their comparison: the average temperature of the counted part, the same quantity an Undervolt tune
+saves under that name. Nothing else changes:
+
+- the other fields of these tunes keep their whole-run meaning, and they do not get `counted_s` or
+  `avg_fan_pct`: `counted_s` stays the mark of a comparison made of counted parts (Undervolt);
+- `peak_temp_c` stays as it is, and the window shows it as secondary data;
+- a measurement without a counted part (not stable, or a build that did not measure one) saves no
+  `avg_temp_c`; the Dashboard shows a temperature outcome only when both measurements have one;
+- the engine's measurements, decisions, writes to the card, CLI output and `run.log` stay the same.
+
+**Compatibility.**
+
+- *Older files in a new build:* a tune without `avg_temp_c` loads as before and shows no temperature
+  outcome; a file whose `avg_temp_c` is not an integer is read as having none, and the rest of the tune
+  still loads.
+- *New files in an older build* (someone installs 0.4.10 again): 0.4.10 reads the averages only when
+  `counted_s`, `avg_temp_c` and `avg_fan_pct` are all there, so it ignores the new key and loads the
+  tune as before. That is why the new key comes without the other two.
+- No new file, no format version; the key is optional in both directions.
+
+**Tests (stage 1b).**
+
+- `test_config.cpp`: a Best/Max/All in one comparison with averages writes `avg_temp_c` and no
+  `counted_s` or `avg_fan_pct`, and reads back equal; one without averages writes none of the three
+  (the assertion at the whole-run case changes from "no `avg_temp_c`" to this, the one existing
+  assertion this stage edits); a saved file from 0.4.10 (a fixture string) loads unchanged; an
+  `avg_temp_c` of the wrong type leaves the tune loaded without an average; an Undervolt comparison
+  still writes and reads all three keys as before.
+- `test_run_outcome.cpp`: `against_stock` of two stable measurements carries the counted average
+  temperatures; of an unstable one, none; the score, clocks, power, peak and fan stay the whole-run
+  values.
+- The downgrade rests on the writer test above (no `counted_s`, no `avg_fan_pct` next to the new key);
+  the manual check of 13.2 (stage 1b) confirms it with the 0.4.10 build itself.
 
 ## 14. Decisions for the product owner
 
@@ -1383,15 +1439,17 @@ section 14, D14.
 | D7 | The engine reporting additions of 11.2 (phase, recovery steps, result kind, measurements of rejected results, crash ceiling) | Yes, as separate PRs before 2a/2b's second half |
 | D8 | Suggest a next profile after a result that was not kept (rule-based, from the README's own advice) | **Decided:** Undervolt after Best/Max on a hot card only, and only when Undervolt can run on that card: not when the run's stock measurement stopped at 85 °C with the fans at 100 % or not controllable (section 7.5; check 112) |
 | D9 | Run the busy-card check (read-only) on the Choose page before Start, as part of the checklist | Yes, as information only; the definitive check still runs when the user presses Start, with today's question |
-| D10 | Tell users during a run that screen recording lowers the score | Yes, one caption |
+| D10 | Tell users during a run that screen recording lowers the score | **Rejected** 2026-11-17: no caption |
 | D11 | Dark theme only | Yes |
-| D12 | Keyboard control for fan points (arrow keys) | Yes |
+| D12 | Keyboard control for fan points (arrow keys) | **Rejected** 2026-11-17: keyboard behaviour as today |
 | D13 | Start after 0.4.10 final, on `design/ux-redesign` and per-phase branches | Yes |
-| D14 | Save the averages (temperature, fans, power, score) that Best, Max and All in one already measure, so their Dashboard can show the average temperature (13.3). A data addition in stage 1: new runs only; tunes saved before it keep showing no temperature outcome | **Open** |
+| D14 | Save the average temperature that Best, Max and All in one already measure, so their Dashboard can compare averages (13.3); peak kept as secondary data | **Approved** 2026-11-17: stage 1b; older tunes stay valid and show no temperature |
+| D15 | A check mark on the done phases of the phase rail (6.7) | **Approved** 2026-11-17: existing done style, the active phase without it, no motion of its own |
 
-Status on 2026-11-17: revision 5 is the approved visual baseline, and the decisions it needs are taken as
-it shows them: D1 (15 px), D2, D3, D4, D5 (curve open, log collapsed, no sparklines), D6, D9 and D11. D7
-is decided with the conditions of 11.2, and D8 and D13 as above. Motion (6.10: functional micro-animation
-only) and window sizes (6.3) are decided as written there. Not part of the mockups and still open: D10 (a
-caption about screen recording during a run), D12 (arrow keys for fan points: new behaviour on the Fan
-page) and D14.
+Status on 2026-11-17: every decision is taken. Revision 5 is the approved visual baseline, and the
+decisions it needs are taken as it shows them: D1 (15 px), D2, D3, D4, D5 (curve open, log collapsed, no
+sparklines), D6, D9 and D11. D7 is decided with the conditions of 11.2, D8 and D13 as above, D14 with the
+storage rules of 13.3, and D15 adds the one change to the mockups' look. D10 and D12 are rejected. Motion
+(6.10: functional micro-animation with its timings) and window sizes (6.3) are approved as written there,
+with these conditions: no clipped text, no smaller type, no horizontal scrolling of a normal page, Abort
+and recovery actions immediate, and no added load during measurements.
