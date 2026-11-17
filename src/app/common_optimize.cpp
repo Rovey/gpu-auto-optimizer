@@ -261,16 +261,20 @@ UndervoltOutcome run_undervolt(const OptimizeHooks& hooks, bool on_saved_tune, c
         if (!measured.error.empty()) return fail(measured.error);
         stock_run = measured.result;
         stock_ceiling = temp_ceiling(obj.max_temp_c, measured.result.peak_temp_c, measured.temp_target_c);
-        if (stock_ceiling > obj.max_temp_c) {
+        // Not again when the fans were already at 100 % (or cannot be set): a
+        // second measurement on the moved curve has less fan and stops too.
+        const bool again = measure_stock_again(stock_ceiling, obj.max_temp_c, measured.result, measured.on_curve);
+        const bool second_skipped = stock_ceiling > obj.max_temp_c && !again;
+        if (again) {
             log("the card at stock again, five minutes: on this card the fan curve moves up to " + std::to_string(stock_ceiling) +
                 " C, and the result is compared with stock on that same curve");
             measured = measure_stock(hooks, shifted_curve(own_curve, stock_ceiling - drawn_against), stock_ceiling);
             if (!measured.error.empty()) return fail(measured.error);
         }
+        // measure_stock set the card to stock, whatever was on it: the message
+        // says so, and that the saved tune is untouched (hardware check 112).
         if (measured.result.verdict != Verdict::Stable)
-            return fail("not compared: the measurement at stock stopped at " + std::to_string(measured.result.peak_temp_c) + " C after " +
-                        std::to_string(static_cast<int>(measured.result.seconds)) +
-                        " s, so there is nothing to judge an undervolt against. Nothing was changed");
+            return fail(undervolt_not_compared(measured.result, second_skipped, at_start.profile.has_value()));
         before = measured;
     }
     GuardedGpu hw(kGpu);   // guarded driver calls and a reconnect, as in run_optimize

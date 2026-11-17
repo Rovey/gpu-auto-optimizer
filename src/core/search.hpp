@@ -198,6 +198,25 @@ inline constexpr double kStockMinS = 30;   // stopped sooner than this, it measu
 // What was measured until then is the "before", and the run goes on with the
 // fans on a curve, which is what keeps the card below the profile's limit.
 std::string stock_refusal(const StabilityResult& stock);
+// The measurement at stock stopped at kStockTempC with nothing left to cool
+// the card with: its fans at 100 % at the end, or fans the app cannot set
+// (fans_settable false: no fan control, or a curve that could not drive them).
+// Another measurement at stock under the same load stops as well, on any
+// curve, and so does the Undervolt profile's own, after which it refuses
+// (hardware check 112: a GTX 1080 Ti at 86 C with its fans at 100 %). Near
+// certain, not certain: a cooler room can change it.
+bool hot_at_stock_at_full_fans(const StabilityResult& stock, bool fans_settable);
+// Whether the Undervolt profile measures the card at stock a second time, on
+// the curve moved up to stock_ceiling: only when the ceiling is above the
+// profile's limit, and not when the first measurement already stopped at
+// kStockTempC with full fans: the second, with less fan, would only cost time.
+bool measure_stock_again(int stock_ceiling, int profile_limit_c, const StabilityResult& first, bool fans_settable);
+// Why the Undervolt profile does not search: its measurement at stock did not
+// end stable, so there is nothing to judge an undervolt against. The card was
+// set to stock for that measurement and stays there. second_skipped: the
+// second measurement was not run (measure_stock_again). saved_tune: a tune is
+// saved; the run did not touch it.
+std::string undervolt_not_compared(const StabilityResult& stock, bool second_skipped, bool saved_tune);
 // Why no run starts next to another tuning tool, given the file names of the
 // programs that run now; empty when none of them is one. MSI Afterburner
 // sets clocks and fans itself, and RivaTuner hooks into every program that
