@@ -1,6 +1,7 @@
 # UX redesign proposal: GPU Auto Optimizer window
 
-Status: **design approved (revision 5, 2026-11-17); design phase complete. Nothing in it is built.**
+Status: **design approved (revision 5, 2026-11-17); design phase complete; implementation plan agreed
+(sections 11 and 13). Nothing in it is built.**
 Written 2026-11-17 against `main` at b49d43d (the code of 0.4.10-rc3).
 The release work for 0.4.10 stays separate; this redesign starts after 0.4.10.
 
@@ -490,6 +491,32 @@ lies on the same 12 × 46 grid at 308 as the Dashboard's card, so the two screen
 name sits on the page title's baseline; the account area is the last 40 px above the bottom margin, with
 a hairline 16 px above it.
 
+**Window sizes.** The mockups show the window at 1180 × 860; they are the visual reference, not a
+minimum. Every page works from that size down to the existing minimum window of 1000 × 700, at 100, 150
+and 200 % scaling, without horizontal scrolling. The content width is the client width minus the nav
+(220) and the two page margins (32 each): 896 in the mockups, about 880 in a 1180 px window (its frame
+takes about 16 px) and about 700 at the minimum. Sizes are design pixels times the monitor's scale
+(`px()`), so these widths hold at every scaling. What adapts and what does not:
+
+- *Fixed at every width:* the type scale and line heights, the spacing scale, the gutter (24), card
+  padding (24), the status-icon lead (32), page margins (32), control heights (36, Start 48), the nav
+  (220) and the order of everything on a page.
+- *Fluid:* every grid divides the width it has, `column = (width − (n − 1) × 24) / n`, so the page grid
+  is 5 × 160 at 896 and about 5 × 121 at 700; a standard button is three card units wide, a narrow one
+  half of that less 4, and neither is ever narrower than its label plus 16 a side.
+- *Reflow, only where content does not fit* (decided from the measured text, not from a breakpoint):
+  - the Dashboard's four outcomes become two rows of two, in the same order, when a column is narrower
+    than its widest value;
+  - a reading's owner caption ("app curve") moves under its value when it does not fit after it;
+  - key columns (settings, Optimize facts) take the width of their widest key, never more than the
+    grid gives them;
+  - in the comparison table the empty unit goes first, then Rule and Outcome wrap to a second line;
+  - the two halves of the run card and of the tune card stay side by side; their text wraps.
+- *Never:* truncated or ellipsised content (a long GPU name or a refusal wraps), a number broken over two
+  lines, type made smaller to fit, or elements scaled down as one picture.
+- Vertically the content scrolls, as today; the nav never scrolls, and its account area stays at the
+  bottom.
+
 **Vertical rhythm.** Label to value 4 px; label to a list or paragraph 8; a heading to its own sentence 4;
 a section heading to a grid of labels 16; parts of one group 24; groups 32; card padding 24. Text is
 placed by its line box (caption 18, body 22, title 24, page 28, display 34 px), so baselines follow from
@@ -669,26 +696,40 @@ restart as administrator): native dialogs are accessible and look like Windows.
 
 ### 6.10 Motion
 
-Dear ImGui animates only what the code interpolates per frame, and every extra frame is GPU work while
-GAO measures the GPU. So motion is rare, short and tied to a click:
+Decided by the product owner on 2026-11-17: **motion communicates a change of state; it never decorates.**
+Restrained, functional micro-animation only, and only where something changes.
 
 | Motion | Duration / easing | When |
 |---|---|---|
-| Expander open/close (height) | 150 ms, ease-out cubic | User clicks Show / Hide |
-| Hover and press colour | 100 ms linear | Pointer |
-| Selected profile row moves to the new row | 120 ms ease-out | User selects a profile |
-| The verdict appears (fade 0 → 1) | 150 ms ease-out | Once, when a run has ended and nothing is measured |
-| Countdown bar | continuous at the existing 30 fps | Timed steps only (as today) |
+| Hover and pressed feedback (fill colour) | 120 ms, ease-out | Pointer over or pressing a control |
+| A triggered action shows at once (pressed state, then the busy label) | immediate, then 120 ms | A click or key press on a button |
+| Disclosure and expander open / close (height, content clipped) | 180 ms, ease-out | User clicks Show / Hide |
+| Status icon or heading changes state (cross-fade of the icon) | 180 ms, ease-out | The engine reports a new state |
+| Phase rail: the active segment moves to the next phase; the finished one takes its done colour | 180 ms, ease-out | The phase hook reports the next phase (11.2) |
+| A recovery step appears in the timeline; a mark turns from current to confirmed | 160 ms, ease-out (fade in over a rise of 4 px at most) | The recovery hook reports the step |
+| Progress bar of a timed step | continuous, as today | Timed steps |
+| Loader (the progress ring of 6.5) turns | one turn in about 1.2 s, linear | While the app waits on something without a known length: detection, a search step, the rest after a reset |
 
 Rules:
 
-- No motion starts by itself during a run except the countdown that exists today; a state change during
-  a run (recovering included) switches without animation, and the progress ring is drawn still.
-- No motion when Windows' "Animation effects" is off (`SPI_GETCLIENTAREAANIMATION`), and none in
-  `soft_render`.
-- Pages switch instantly. Native menus, dialogs and balloons keep Windows' own motion.
-- The frame loop gets an "animating until" time so an animation gets its 150 ms of frames and then the
-  window falls back to its 4 fps idle.
+- **No** page transitions, slides, large fades, bounce, spring or overshoot, pulsing, or anything that
+  moves without a state behind it. The finished phase in the rail keeps the done style of the mockups (no
+  check mark is added there); the recovery timeline already has its check marks.
+- **Never in the way:** an animation only shows what is already true. The state, the enabled buttons and
+  the hit areas change in the frame the input or report arrives; Abort and the recovery actions act on
+  the click itself, never after an animation.
+- **No extra load during measurements.** Motion is drawn from the time at which a frame is drawn anyway.
+  While a run is under way a transition may ask for frames only up to the 30 a second the countdown
+  already gets, only for its own duration, and only on a state change (a handful per run). During a run
+  the loader and the progress bar never ask for frames of their own: they turn at the run's present 10
+  (searches) or 30 (countdowns) frames a second. Outside a run (detecting the card, checking for an
+  update) the loader may ask for up to 30 frames a second while it is on screen, and a transition for
+  its duration; the window then falls back to its 4 a second.
+- **Reduced motion:** with Windows' "Animation effects" off (`SPI_GETCLIENTAREAANIMATION`), and in
+  software rendering, every transition is instant and the loader is drawn still; the progress bar still
+  shows progress.
+- Native menus, dialogs and balloons keep Windows' own behaviour.
+- The mockups show the end state of each transition; they stay as they are.
 
 ### 6.11 Layout grammar
 
@@ -1164,9 +1205,11 @@ The engine's own reason and the log stay under "Why" for advanced users and prob
   two Tabs from the list.
 - **Keyboard:** everything that works by mouse works by keyboard, including fan points (decision D12).
 - **Not colour alone:** every state has words and its own icon glyph (section 6.5).
-- **Reduced motion:** section 6.10.
-- **Scaling:** all sizes through `px()`, tested at 100 %, 150 % and 200 %; the minimum window size stays
-  1000 × 700 at 100 % and must hold every page without clipped text.
+- **Reduced motion:** with Windows' "Animation effects" off every transition is instant and the loader
+  still (section 6.10).
+- **Scaling and window size:** all sizes through `px()`; every page is checked at 1180 × 860 and at the
+  minimum 1000 × 700, each at 100, 150 and 200 % scaling, without horizontal scrolling or clipped text
+  (section 6.3, "Window sizes").
 - **Screen readers:** Dear ImGui exposes no UI Automation tree. Out of scope: the CLI (`gao.exe`) is the
   accessible path, and the README should say so.
 
@@ -1177,14 +1220,25 @@ The engine's own reason and the log stay under "Why" for advanced users and prob
 ### 11.1 Within the window (no engine change)
 
 - `src/app/gui/theme.hpp`: colour, type, spacing and radius tokens; `px()`; `text(TextStyle, …)`.
-- `ui_widgets.*`: components `status_icon`, `status_heading`, `status_line`, `metric`, `readings`,
-  `key_values`, `expander` (with the 150 ms height animation), `phase_rail`, `button(Variant, …)`,
-  `segmented`; the old helpers kept until
-  every page has moved, then removed.
+- `src/app/gui/layout.hpp` (header only, no ImGui): the grid arithmetic of section 6.3 (`Grid`,
+  `column`, `span`, the reflow decisions from measured widths), so `app_tests` can test it without a
+  window.
+- `ui_widgets.*`: components `status_icon`, `status_heading`, `status_line`, `metric` (with the
+  trade-off style), `readings`, `key_values`, `comparison_table`, `timeline`, `disclosure`, `expander`
+  (6.10), `phase_rail`, `switch_label`, `button(Variant, …)`, `segmented`, `loader`; the old helpers
+  kept until every page has moved, then removed.
+- `src/app/gui/motion.hpp`: one tween per id (start time, from, to, duration, ease-out), read with the
+  frame's time; `reduced_motion()` from `SPI_GETCLIENTAREAANIMATION`, read at start and on
+  `WM_SETTINGCHANGE`; the "animating until" time for the frame loop.
 - Pages rewritten one at a time against the components; `UiState` and `UiActions` unchanged except a
   few view-only fields (expander states, the selected fan point).
-- `main_gui.cpp`: only the frame loop's "animating until" time and the reduced-motion flag; the tray,
-  watchdog and window code stay as they are.
+- `main_gui.cpp`: the frame loop keeps its rates (nothing drawn while hidden or while the device is lost;
+  about 4 frames a second when idle, 10 during a run, 30 while a countdown is on screen, a few after
+  input; slower under software rendering), and so do the timers (telemetry once a second, watchdog every
+  30 s). One addition: the "animating until" time of `motion.hpp`, which shortens the wait only for the
+  length of a transition and, during a run, never below the 33 ms the countdown already uses (6.10). No
+  timer, thread or polling is added. The tray, watchdog and window code stay as they are; the
+  `--demo=<state>` argument is added (section 11.3).
 - Dear ImGui stays vendored and unmodified.
 
 ### 11.2 Data the window needs from the engine (additions, no behaviour change)
@@ -1194,14 +1248,24 @@ The engine's own reason and the log stay under "Why" for advanced users and prob
 | Which phase a run is in | Only the timed step's label | A `phase(index, count, name)` hook in `app::OptimizeHooks`, called where each run moves to its next part; stored in `Snapshot` | `src/app/common*.cpp`, `worker.*` |
 | Recovery sub-steps confirmed | Step labels "The driver was reset…", "Checking that the card is back" | A `recovery(step)` hook (reconnected, at stock read back, resting, checking, second try) at the existing log points in `ensure_hw` and `undervolt.cpp` | `src/core/search.cpp`, `undervolt.cpp` via the existing callbacks |
 | Kind of verdict | Reason string prefixes (`aborted`, `not applied --`, refusals by `is_refusal`) | A `ResultKind` (kept, not_kept_rule, failed, stopped, refused) set where the reason is set | outcome structs in `src/app/common.hpp` |
-| Numbers of a result not kept | `UndervoltOutcome::before/after` are empty "when the result was not kept"; for optimize, `result` holds the soak but the window does not show it | Keep the two measurements in the outcome when a rule rejects the result | `common_undervolt.cpp`, `common_optimize.cpp` |
+| Numbers of a result not kept | `UndervoltOutcome::before/after` are empty "when the result was not kept"; for optimize, `result` holds the soak but the window does not show it | Keep the two measurements in the outcome when a rule rejects the result | `common_optimize.cpp` (it holds both `run_optimize` and `run_undervolt`) |
 | The crash ceiling for the run header | A log line | The ceiling's description in the outcome/snapshot | `common_optimize.cpp` (where the warning is logged) |
 
-Each addition is reporting only: the engine's decisions, timing and writes stay the same. Each gets
-unit tests in `core_tests`/`app_tests` that pin the values reported at the points they are emitted, and
-the existing tests must pass unchanged. Until a hook exists, the window can map today's step labels
-(`"The driver was reset: …"`, `"Checking that the card is back"`), with tests on that mapping, so the
-run screen can ship before the hooks.
+Each addition is reporting only: the engine's tuning decisions, its writes to the card, its recovery and
+its timing stay exactly as they are. Decided by the product owner on 2026-11-17 (D7):
+
+- The hooks are one separate PR, merged before any page uses them, with its own tests.
+- The window reads the run's state from these hooks only. It never infers phase, recovery step or verdict
+  from log text or step labels, not even as a first version.
+- A hook reports what the engine did at the point where it did it: a recovery step is reported after the
+  engine confirmed it (for example "at stock" after the read-back), never before.
+- The command line passes no hooks and keeps its output byte for byte; `run.log` and `boot.log` keep the
+  engine's words.
+
+Tests: in `core_tests` (`test_search_recovery.cpp`, `test_undervolt.cpp`) a recording `OptimizeIo` /
+`UndervoltIo` pins the sequence of phases and recovery steps for the scripted resets those files already
+drive, and the same scripts' existing assertions on writes and results stay unchanged; in `app_tests`
+(`test_run_outcome.cpp`) `ResultKind` is pinned for every outcome the existing result lines cover.
 
 ### 11.3 Tests and checks
 
@@ -1212,7 +1276,11 @@ run screen can ship before the hooks.
 - **Demo mode extended** with scripted states: `--demo=recover`, `--demo=notkept`, `--demo=failed`,
   `--demo=refused`, so every state can be looked at without a card. A `tools\ui-shots.ps1` takes
   PrintWindow pictures of the demo window only (never the screen) for review.
-- Manual: 100/150/200 % scaling, keyboard-only pass, Windows animation effects off.
+- `app_tests` for `layout.hpp`: the grids at content widths 896, 880 and 700; the reflow decisions for
+  the widest strings the pages show (taken from the copy in sections 7.1–7.5 with their measured widths
+  in Segoe UI as fixtures).
+- Manual: 1180 × 860 and 1000 × 700, each at 100, 150 and 200 % scaling; a keyboard-only pass.
+- **Window overhead**, before and after (section 13, stage 9).
 
 ---
 
@@ -1220,7 +1288,8 @@ run screen can ship before the hooks.
 
 | Risk | Effect | Mitigation |
 |---|---|---|
-| The window's own rendering loads the GPU during measurements | Lower or noisier scores | Motion only on clicks, none started by run states; frame budget unchanged; check a soak score with the window open before/after the redesign on the RTX 4070 |
+| The window's own rendering loads the GPU during measurements | Lower or noisier scores | Motion only on state changes, during a run capped at the countdown's existing 30 frames a second and only for its length; loader and bar use frames drawn anyway; timers unchanged (6.10, 11.1); the overhead measured before and after on the RTX 4070 (section 13, stage 9) |
+| A narrow window clips or overlaps text | Unreadable states at 1000 × 700 | The rules of 6.3 "Window sizes", `layout.hpp` tests with the widest strings, every demo state pictured at both sizes and three scalings |
 | Data hooks touch engine-facing code | A behaviour change slips in | Hooks are reporting only; separate PR; existing core tests unchanged; review against the rule "UI changes must not alter the meaning or timing of GPU operations" |
 | Plain-word mapping hides the engine's words | Problem reports lose detail | The engine's sentence is always under "Why"; run.log and boot.log keep the engine's words |
 | Claiming safety the engine did not confirm | Misplaced trust | The five answers read only `stock_restored`, `put_back`, `put_back_as_before`; unit tests pin it |
@@ -1232,28 +1301,74 @@ run screen can ship before the hooks.
 
 ---
 
-## 13. Prioritized implementation roadmap
+## 13. Implementation plan (agreed 2026-11-17)
 
-Each phase is one or more PRs that can be reviewed and released on their own. Sizes are rough for one
-developer with an assistant: S ≤ 1 day, M 2–3 days, L 4–6 days.
+Starts after v0.4.10 is complete. Each stage is its own branch and PR from `main`, reviewed and merged on
+its own; nothing of it goes into a 0.4.10 build. Revision 5 (the four mockups and sections 6–8) is the
+specification; a stage that cannot follow it stops and asks instead of deviating.
 
-| Phase | Content | Depends on | Size | Risk |
-|---|---|---|---|---|
-| **0. Copy fixes** | Cool & efficient and Quiet descriptions, the Choose subtitle; test that card text matches `objectives_for` | none | S | very low |
-| **1. Foundation** | `theme.hpp` tokens, five text styles, spacing scale, button variants, focus ring, toggle contrast; every page moved to tokens with the same layout | 0 | M | low |
-| **2a. Results** | Verdict as status heading, five answers, comparison with rule row; retest result | 1; data hook "ResultKind" and kept measurements for full value (can start on reason-string mapping) | M–L | medium |
-| **2b. Run screen** | Phase rail, activity card and its states (recovering included), expanders for curve and log, copy/open run.log, sidebar run dot | 1; phase and recovery hooks (can start on step-label mapping) | L | medium |
-| **3. Choose** | List + detail panel, goal lines, facts, checklist, advanced options | 1 | M | low |
-| **4. Dashboard** | Status card with the state table, metrics, Now, tune details expander, controls row, Activity | 1 | M | low–medium (many states) |
-| **5. Secondary** | Fan page tidy and keyboard points, About links, tray wording, balloon pass | 1 | S–M | low |
-| **6. Polish** | Motion (expanders, verdict fade, selection), reduced motion, scaling pass, demo states, README pictures | 2–5 | S–M | low |
+### 13.1 Stages, files and dependencies
 
-Recommended order: **0 → 1 → 2a → 2b → 3 → 4 → 5 → 6.** Results and the run screen come first because they
-decide trust (the five most important problems are mostly there); the Choose page and the Dashboard
-follow because they are lower-risk and benefit from the components built for the first two. Phase 0 can
-ship in 0.4.11 on its own.
+| # | Stage | Files expected to change | Depends on |
+|---|---|---|---|
+| 0 | **Copy fixes**: the profile goal lines and the Choose subtitle as in 7.3, generated from `objectives_for`, with a test | `src/app/gui/ui_widgets.hpp` (`kPresets`, `kAllInOne`, `kUndervolt`), `src/app/gui/ui_optimize.cpp`, `tests/test_ui_text.cpp` | — |
+| 1 | **Engine reporting hooks (D7)**, reporting only (11.2): phase, recovery step, `ResultKind`, the measurements of a rejected result, the crash ceiling; stored in the worker's snapshot | `src/core/search.hpp/.cpp` (`OptimizeIo`), `src/core/undervolt.hpp/.cpp` (`UndervoltIo`), `src/app/common.hpp`, `src/app/common_optimize.cpp`, `src/app/common_all_in_one.cpp`, `src/app/common_retest.cpp`, `src/app/common_run_steps.cpp`, `src/app/common_results.cpp` (`ResultKind` beside the result lines), `src/app/gui/worker.hpp/.cpp`; tests `tests/test_search_recovery.cpp`, `tests/test_undervolt.cpp`, `tests/test_run_outcome.cpp`, `tests/test_screen_flow.cpp` | — |
+| 2 | **Tokens, layout, motion and primitives**: `theme.hpp` (colour, type, spacing, radius, `px()`), five font sizes, `layout.hpp`, `motion.hpp`, the components of 11.1 with their hover, press and disclosure motion; every page moved to tokens with its present layout; `--demo=<state>` and `tools/ui-shots.ps1` | new `src/app/gui/theme.hpp`, new `src/app/gui/layout.hpp`, new `src/app/gui/motion.hpp`, `src/app/gui/ui_widgets.hpp/.cpp`, `ui.hpp`, every `ui_*.cpp` (tokens only), `main_gui.cpp` (demo argument; "animating until" in the frame loop; `WM_SETTINGCHANGE`), `src/app/gui/worker.cpp` (demo states), `CMakeLists.txt`, new `tests/test_layout.cpp`, new `tests/test_motion.cpp`, new `tools/ui-shots.ps1` | 0 |
+| 3 | **Shell and sidebar** (7.1): product mark, icon column, selection, run dot, account area, update line | `src/app/gui/ui.cpp`, `ui_widgets.*` | 2 |
+| 4 | **Results** (7.5): status heading per `ResultKind`, "Your card" / "Saved tune" from `stock_restored`, `put_back`, `put_back_as_before` only, comparison table, next step (D8), Why; retest, All in one and Undervolt results | `src/app/gui/ui_results.cpp`, `ui_widgets.*`, `tests/test_ui_text.cpp` | 1, 2 |
+| 5 | **Run and recovery** (7.4, 8.3): phase rail from the phase hook with its transition, activity card in every state (measuring, searching, recovering, stopping, the busy question) with status transitions and the loader, recovery timeline from the recovery hook with steps appearing, readings strip, curve open and log collapsed (D5), run dot | `src/app/gui/ui_optimize.cpp` (`run_screen`, `curve_card`), `ui.cpp` (dot), `ui_widgets.*`, `tests/test_screen_flow.cpp` | 1, 2, 3 |
+| 6 | **Optimize, Choose** (7.3): list and detail, five answers, the D9 information line, switch and Start, Advanced options with the fan preset of a run | `src/app/gui/ui_optimize.cpp` (`choose`, `preset_card*` replaced), `ui_widgets.*` | 0, 2 |
+| 7 | **Dashboard** (7.2): the eight states, outcomes from `Profile::against_stock` (temperature: section 13.3), settings, tune step, Revert and logon, Recent activity timeline | `src/app/gui/ui_dashboard.cpp`, `ui_widgets.*`, `tests/test_ui_text.cpp` | 2, 3 |
+| 8 | **Fan, About and tray** in the design system, functions unchanged (7.6–7.8; no mockups) | `src/app/gui/ui_fan.cpp`, `ui_about.cpp`, the tray and balloon wording in `main_gui.cpp` (text only) | 2 |
+| 9 | **Consistency, regression, overhead**: all pages and states side by side, both window sizes and three scalings, the README pictures, the old helpers removed | `src/app/gui/*` (fixes only), `docs/images/`, `README.md` (pictures), `docs/hardware-checks.md` (the overhead check) | 3–8 |
 
----
+Stages 1 and 2 can run side by side. 4 and 5 wait for 1; 6, 7 and 8 need only 2 (and 3 for the
+Dashboard's run dot). After 2, each page keeps working at every stage, so any stage can be released.
+
+### 13.2 Validation per stage
+
+Every stage:
+
+- `cmake --workflow --preset ci` (Release, `/W4 /WX`) and the Debug preset build; `core_tests` and
+  `app_tests` pass, the existing tests unchanged (stage 1 adds to them, it does not edit their
+  assertions).
+- `git diff main` outside `src/app/gui/`, `tests/`, `tools/`, `CMakeLists.txt` and `docs/` is empty,
+  except in stage 1, whose diff is limited to the reporting additions of 11.2.
+- Pictures of every demo state of the stage, taken with PrintWindow of the app's own window only, at
+  1180 × 860 and 1000 × 700, each at 100, 150 and 200 %: compared with the mockup at 1180 × 860
+  (layout, hierarchy, copy; within a few pixels of the grid), and at 1000 × 700 checked against
+  6.3 "Window sizes": no horizontal scroll, no clipped or overlapping text, reflow only where 6.3
+  allows it.
+- Keyboard pass of the stage's controls; tooltips on disabled controls still say why.
+
+Per stage, in addition:
+
+| Stage | Also checked |
+|---|---|
+| 1 | The recorded phase and recovery sequences match what the engine does in the scripted resets; the CLI output of a demo-free `gao --undervolt` refusal and of the unit-test runs is unchanged; on the Z420 one targeted reset (`dxcap -forcetdr` during `gao --stress`) with the reported steps compared to `run.log` |
+| 2 | Every page looks as before apart from colour and type; contrast test of the text tokens (≥ 4.5:1); `test_motion.cpp`: the durations and easing of 6.10, exact end values, reduced motion gives the end value at once, the frame request never below 33 ms while a run is under way; with "Animation effects" off nothing moves |
+| 4 | Every outcome kind: kept, not kept by a rule, not compared, refused, stopped with and without put-back, failed with the stock write failed; "at stock" only with `stock_restored` (unit test) |
+| 5 | Each phase of each profile, a recovery from the demo and one real reset on the Z420; Abort in every phase, also in the middle of a transition (it acts on the click); the busy question with each answer; frames drawn during a demo run equal to the old build's apart from the transitions |
+| 6 | Every profile selected; D9 line shown and the definitive check still at Start; the logon switch saved |
+| 7 | All eight Dashboard states; ±5 % enabled and disabled with tooltips; Test this step; Revert; Apply at logon; a saved tune without `against_stock`, and one without an average temperature |
+| 8 | Fan curve editing, fan presets, fan control on and off, About links, update line and install, tray menu items and balloons |
+| 9 | All of the above once more on the release candidate; the overhead check below |
+
+**Window overhead** (stage 9, on the reference RTX 4070, window and other programs as in
+`docs/hardware-checks.md`): the stress score of `gao --stress 300`, three runs each, with the window
+closed, with the window open on the Dashboard, and with the window open on a demo run's countdown;
+once with the last release before the redesign and once with the candidate, plus the window process's
+GPU use as the busy-card check reads it, and the frames drawn per minute of a demo run (old and new, from
+a debug-only counter). Pass: the candidate's difference to "window closed" is no larger
+than the old build's, within the scatter of the runs (about 1 %).
+
+### 13.3 Dashboard temperature
+
+Decided on 2026-11-17: the average temperature is the comparison; the peak, when shown, is secondary
+(behind "Show all"); a saved tune without an average shows no temperature outcome, nothing estimated.
+Today only an Undervolt tune judged against stock saves averages (`counted_against_stock`); Best, Max
+and All in one save `against_stock` from `measured_run`, which records the peak and no average. See
+section 14, D14.
 
 ## 14. Decisions for the product owner
 
@@ -1272,3 +1387,11 @@ ship in 0.4.11 on its own.
 | D11 | Dark theme only | Yes |
 | D12 | Keyboard control for fan points (arrow keys) | Yes |
 | D13 | Start after 0.4.10 final, on `design/ux-redesign` and per-phase branches | Yes |
+| D14 | Save the averages (temperature, fans, power, score) that Best, Max and All in one already measure, so their Dashboard can show the average temperature (13.3). A data addition in stage 1: new runs only; tunes saved before it keep showing no temperature outcome | **Open** |
+
+Status on 2026-11-17: revision 5 is the approved visual baseline, and the decisions it needs are taken as
+it shows them: D1 (15 px), D2, D3, D4, D5 (curve open, log collapsed, no sparklines), D6, D9 and D11. D7
+is decided with the conditions of 11.2, and D8 and D13 as above. Motion (6.10: functional micro-animation
+only) and window sizes (6.3) are decided as written there. Not part of the mockups and still open: D10 (a
+caption about screen recording during a run), D12 (arrow keys for fan points: new behaviour on the Fan
+page) and D14.
