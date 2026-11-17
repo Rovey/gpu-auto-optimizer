@@ -864,7 +864,8 @@ next to what they act on.
 
 - **Before:** All in one card, four cards, Undervolt card, all with icon badges and full descriptions;
   a fan row; Start; five warnings; logon checkbox.
-- **After:** the page header ("Optimize" and the one-line promise about stock), then one card holding the
+- **After:** the page header ("Optimize" and the one-line promise about stock: "Every result is measured against
+  your card at stock. If it does not hold or does not gain, nothing is kept."), then one card holding the
   whole decision, in three parts. The list takes the first four columns of the Choose grid (8 × 85,
   412 px); a vertical hairline stands on the fifth column's start, 24 px after the list; the detail
   starts 32 px after the hairline, on its own grid (4 × 77, 380 px), so the detail has room to breathe
@@ -1108,7 +1109,7 @@ the content change. The recovering state answers the five questions of a recover
 |---|---|---|
 | What happened | Heading and one sentence | Recovering after a driver reset. The graphics driver was reset while the run tested core +330 MHz. A reset can happen while a run looks for the card's limit. The run reconnects to the driver and checks that the card works before continuing. |
 | What is confirmed | "Recovery" step list, left | Only steps the engine reported: reconnected; card set to stock, confirmed by read-back; resting (countdown, 20 s); checking that the card works (5 s at stock); one more reconnect when the telemetry dropped right after the load was rebuilt (#93). |
-| What happens next | "Next", right | If the check passes, the run goes on below the setting that reset. If not, the run ends and the result shows the card's state. |
+| What happens next | "Next", right | If the check passes, the run goes on below the setting that reset. If not, it stops and the result shows the card's state. |
 | Do I need to act | "Your part", right, `body-strong` | Nothing. Keep the PC switched on. |
 | How often | Run header caption | 1 driver reset |
 
