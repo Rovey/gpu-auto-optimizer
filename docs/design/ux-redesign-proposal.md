@@ -993,10 +993,29 @@ log).
   its sentence, then the suggestion as a standard primary button and Back as a narrow button 8 px after
   it. The sentence says what the other profile aims for and that only its own run can show it, never
   that it will work: "This card ran above 75 °C at stock. Undervolt aims for the stock speed on less
-  power; only its own run (about 13 min) shows whether it gains on this card." Open since hardware check
-  112 (2026-11-17): on a GTX 1080 Ti that reached 86 °C at stock with its
-  fans at 100 %, Undervolt refused as well (`not compared`), so this suggestion must only be shown when
-  Undervolt can run on the card; that depends on the engine's rule, not on this window.
+  power; only its own run (about 13 min) shows whether it gains on this card." **Decided (D8, 2026-11-17,
+  after hardware check 112): the suggestion is shown only when Undervolt can run on the card.** In check 112
+  a GTX 1080 Ti reached 86 °C at stock with its fans at 100 %; Best and Max pointed to Undervolt, and
+  Undervolt then refused (`not compared`).
+
+  *What the engine can know in advance: nothing certain before a stock measurement.* Undervolt refuses when
+  its own measurement at stock does not end stable (`run_undervolt` in `common_optimize.cpp`). That
+  measurement runs with the fans on Undervolt's curve and stops at 85 °C (`kStockTempC`, in
+  `measure_stock`); when the peak moves the run's limit up (`temp_ceiling`: at most the card's own target,
+  at most 85 °C), the card is measured at stock a second time on a curve moved up with it, and that second
+  measurement decides. There is no check that answers the question without measuring.
+
+  *What the window can use:* the Best or Max run that is not kept has just measured the card at stock
+  (`StabilityResult` `o.stock`: verdict, peak temperature, fan speed at the end). Under the same load and
+  the same 85 °C stop, one case is clear: that measurement stopped at 85 °C (`TOO HOT`) with the fans
+  already at 100 %, or with fans the app cannot control. Undervolt's curve cannot cool the card more than
+  that, so its own measurement would stop as well. In that case no profile is suggested, and the sentence
+  states the fact: the card reached 85 °C at stock with the fans at full speed (or with fans the app cannot
+  control), so no profile can be compared with stock on it as it is now. In every other case the window
+  cannot know, and the suggestion stays with the wording above, which already promises nothing; if Undervolt
+  then refuses, its own result says so ("Not compared", above). This uses values the run already has and
+  changes no engine rule. It is a near-certainty, not a guarantee: a cooler room on the next run can change
+  the outcome.
 - **Driver resets:** a fact under the title ("Driver resets: 2, recovered each time"), plus today's advice
   about black windows in the explanation when the run failed after a reset.
 - **Four outcomes stay apart** in words and icon: tested and rejected (! Not kept: …), could not be
@@ -1246,7 +1265,7 @@ ship in 0.4.11 on its own.
 | D5 | During a run: curve and technical log collapsed by default? Keep the two sparklines? | Curve open, log collapsed; drop the sparklines for the readings with the limit |
 | D6 | "Not kept" in warning amber instead of danger red | Yes (since revision 2 the amber is the status icon only, section 6.1) |
 | D7 | The engine reporting additions of 11.2 (phase, recovery steps, result kind, measurements of rejected results, crash ceiling) | Yes, as separate PRs before 2a/2b's second half |
-| D8 | Suggest a next profile after a result that was not kept (rule-based, from the README's own advice) | Yes, Undervolt after Best/Max on a hot card only |
+| D8 | Suggest a next profile after a result that was not kept (rule-based, from the README's own advice) | **Decided:** Undervolt after Best/Max on a hot card only, and only when Undervolt can run on that card: not when the run's stock measurement stopped at 85 °C with the fans at 100 % or not controllable (section 7.5; check 112) |
 | D9 | Run the busy-card check (read-only) on the Choose page before Start, as part of the checklist | Yes, as information only; the definitive check still runs when the user presses Start, with today's question |
 | D10 | Tell users during a run that screen recording lowers the score | Yes, one caption |
 | D11 | Dark theme only | Yes |
