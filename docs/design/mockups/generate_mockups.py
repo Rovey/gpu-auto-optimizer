@@ -233,6 +233,7 @@ def same_baseline(top, style, other):
 # One family for every sequence: recent events and recovery steps. A 14 px slot; a hairline joins the
 # marks of one sequence; each mark is filled with the surface it sits on, so the line stops at it.
 MARK = 14
+CHECK_W = 10                       # the check before a done phase's name in the phase rail (D15)
 
 
 def mark(s, cx, cy, state, surface):
@@ -380,6 +381,8 @@ def shell(s, active, running=False):
 s = Svg('Proposed Dashboard: the card now, your tune, recent activity')
 shell(s, 'Dashboard')
 y, _ = page_header(s, 'NVIDIA GeForce RTX 4070', [('Driver 617.42', 0), ('Detect again', 1, 'link')])
+# the page is full to its bottom, so the mockup's note sits on the header's caption line, at the page edge
+s.text(PAGE_R, y - LH['caption'], 'Mockup. The average temperatures are illustrative.', 'caption', 'text3', anchor='end')
 y = readings(s, y + S6, [('Core clock', '2850 MHz'), ('Memory clock', '12001 MHz'), ('Temperature', '61 °C'),
                          ('Power', '172 / 220 W'), ('Fans', '52 %', 'app curve')])
 
@@ -397,11 +400,13 @@ sb = s.text(C4.x, top + LH['title'] + S1, 'All in one, saved 2026-10-08. Against
 button(s, C4.col(3), top + (sb - top - BTN_H) / 2, BTN_W, 'Optimize again...')
 top = sb + S6
 # a gain in text-1 semibold; a trade-off at the same size in text-2 regular, with the word that says what
-# it is and a caption that says why (README: the fan tune aims for 70 C, so the card runs warmer)
+# it is and a caption that says why (README: the fan tune aims for 70 C, so the card runs warmer). The
+# temperature is the average (decision D14); the README records only peaks (67 -> 71 C), so the averages
+# here are illustrative, and the note on the header line says so.
 for i, (label, big, small, gain) in enumerate([('Speed', '+1.6 %', '5728 → 5820 it/s', True),
                                                ('Power', '−8 %', '196 → 180 W', True),
                                                ('Fans', '−11 points', '73 → 62 %', True),
-                                               ('Temperature', '+4 °C warmer', '67 → 71 °C; fans aim for 70 °C', False)]):
+                                               ('Average temperature', '+4 °C warmer', '64 → 68 °C; fans aim for 70 °C', False)]):
     s.text(C4.col(i), top, label, 'caption', 'text2', maxw=C4.cw)
     b = s.text(C4.col(i), top + LH['caption'] + S1, big, 'display', 'text1' if gain else 'text2', 600 if gain else 400,
                maxw=C4.cw)
@@ -527,8 +532,13 @@ top = y + S6                       # the phase rail on the page's five columns
 for i, (name, st) in enumerate([('Stock, 5 min', 'done'), ('Power limit', 'done'), ('Memory', 'done'),
                                 ('Core', 'current'), ('Final test, 5 min', 'next')]):
     s.rect(PG.col(i), top, PG.cw, 3, {'done': T['text3'], 'current': T['accent_text'], 'next': T['surface3']}[st], 1.5)
-    s.text(PG.col(i), top + 3 + S2, name, 'caption', {'done': 'text2', 'current': 'text1', 'next': 'text3'}[st],
-           600 if st == 'current' else 400, maxw=PG.cw)
+    nx = PG.col(i)
+    if st == 'done':               # decision D15: a check before a done phase's name, in its colour; none on the current
+        cy = top + 3 + S2 + LH['caption'] / 2
+        s.path(f'M{nx + 0.75:g} {cy:g} L{nx + 3.75:g} {cy + 3:g} L{nx + 9.75:g} {cy - 3:g}', 'text2', 1.5)
+        nx += CHECK_W + S1
+    s.text(nx, top + 3 + S2, name, 'caption', {'done': 'text2', 'current': 'text1', 'next': 'text3'}[st],
+           600 if st == 'current' else 400, maxw=PG.col(i) + PG.cw - nx)
 y = top + 3 + S2 + LH['caption']
 CT = y + S8                        # the activity card: the state, what is confirmed, what comes next
 C2 = Grid(CARD.x, CARD.w, 2)       # 2 x 396 on the same 816 px content width

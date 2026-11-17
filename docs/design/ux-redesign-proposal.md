@@ -646,10 +646,10 @@ How the three hard cases stay distinct, even in greyscale:
 3. *Phase rail*: one 3 px segment per phase with its name under it: done `text-3` with the name in
    `text-2` after a check mark (the check glyph of 6.5 at caption size, in `text-2`, 4 px before the
    name), current `accent-text` with the name in `text-1` semibold and no check mark, next `surface-3`
-   with the name in `text-3`. The check mark is the one addition to the rail of the revision 5 mockups
-   (decided 2026-11-17); the mockups show done phases without it and are not redrawn for it. The rail
-   shows position only; a recovery does not recolour it. The overall time stays an
-   estimate in words ("12 of about 40 min (estimate)").
+   with the name in `text-3`. The check mark (decision D15, 2026-11-17) is drawn in
+   `run-recovering-after.svg`: 10 px wide, the name 4 px after it, on the done phases only. The rail shows
+   position only; a recovery does not recolour it. The overall time stays an estimate in words ("12 of
+   about 40 min (estimate)").
 
 **Notifications:** tray balloons stay native (Windows decides their position, motion and quiet hours).
 Rule: one balloon per event, starting with what happened, ending with the action. A state that lasts goes
@@ -873,14 +873,16 @@ next to what they act on.
      - *What it gains* (the focal point): the explanation line names the profile, the date and the basis
        ("All in one, saved 2026-10-08. Against stock, 5 minutes each:"), and four outcome metrics follow
        it, one per column: **+1.6 %** speed (5728 → 5820 it/s), **−8 %** power (196 → 180 W), **−11
-       points** fans (73 → 62 %), and the trade-off "+4 °C warmer" (67 → 71 °C; fans aim for 70 °C) in
-       the trade-off style of section 6.8. Numbers: the README's All in one run on the reference RTX
-       4070, which also says why it runs warmer (the fan tune aims for 70 °C on quieter fans); an outcome
-       is shown as measured, not only when it is good. The README gives that run's peak temperatures
-       only, so the mockup uses them as its example; the built metric compares the **average**
-       temperatures (D14, section 13.3) with the same label, value and caption form, and the peaks move
-       to "Show all", which names both as average and peak. A tune saved without averages shows the
-       other three outcomes and no temperature.
+       points** fans (73 → 62 %), and the trade-off **Average temperature** "+4 °C warmer" (64 → 68 °C;
+       fans aim for 70 °C) in the trade-off style of section 6.8. Numbers: speed, power and fans from
+       the README's All in one run on the reference RTX 4070, which also says why it runs warmer (the
+       fan tune aims for 70 °C on quieter fans); an outcome is shown as measured, not only when it is
+       good. The metric compares average temperatures (D14, section 13.3) and its label says so. The
+       README records only that run's peaks (67 → 71 °C), so the averages in the mockup are
+       illustrative, and the mockup says so in a note on the header's caption line (a mockup note, not
+       part of the design). The peaks are secondary: they are shown under "Show all", named as peaks
+       next to the averages. A tune saved without averages shows the other three outcomes and no
+       temperature.
      - *Settings* (below a hairline, the left half): "Settings" with the "Show all" disclosure after it
        (the saved date, the step, the full stock comparison), then undervolt, core offset, memory offset
        and power limit as a key/value list (the key in the first 186 px column, the value from the
@@ -1449,7 +1451,7 @@ saves under that name. Nothing else changes:
 Status on 2026-11-17: every decision is taken. Revision 5 is the approved visual baseline, and the
 decisions it needs are taken as it shows them: D1 (15 px), D2, D3, D4, D5 (curve open, log collapsed, no
 sparklines), D6, D9 and D11. D7 is decided with the conditions of 11.2, D8 and D13 as above, D14 with the
-storage rules of 13.3, and D15 adds the one change to the mockups' look. D10 and D12 are rejected. Motion
-(6.10: functional micro-animation with its timings) and window sizes (6.3) are approved as written there,
-with these conditions: no clipped text, no smaller type, no horizontal scrolling of a normal page, Abort
-and recovery actions immediate, and no added load during measurements.
+storage rules of 13.3, and D15 adds the check mark to the rail, drawn in the run mockup. D10 and D12 are
+rejected. Motion (6.10: functional micro-animation with its timings) and window sizes (6.3) are approved
+as written there, with these conditions: no clipped text, no smaller type, no horizontal scrolling of a
+normal page, Abort and recovery actions immediate, and no added load during measurements.

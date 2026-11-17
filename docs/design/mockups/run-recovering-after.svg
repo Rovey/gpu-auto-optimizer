@@ -36,11 +36,14 @@
 <rect x="962" y="39.0" width="186" height="36" rx="6" fill="#1C2026" stroke="#3D4552" stroke-width="1"/>
 <text x="1055" y="62" font-family="Segoe UI, 'Segoe UI Variable', sans-serif" font-size="15" font-weight="600" fill="#E6E8ED" text-anchor="middle">Abort run</text>
 <rect x="252" y="106" width="160" height="3" rx="1.5" fill="#7A8390"/>
-<text x="252" y="131" font-family="Segoe UI, 'Segoe UI Variable', sans-serif" font-size="13" font-weight="400" fill="#99A3B0" text-anchor="start">Stock, 5 min</text>
+<path d="M252.75 126 L255.75 129 L261.75 123" fill="none" stroke="#99A3B0" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="266" y="131" font-family="Segoe UI, 'Segoe UI Variable', sans-serif" font-size="13" font-weight="400" fill="#99A3B0" text-anchor="start">Stock, 5 min</text>
 <rect x="436" y="106" width="160" height="3" rx="1.5" fill="#7A8390"/>
-<text x="436" y="131" font-family="Segoe UI, 'Segoe UI Variable', sans-serif" font-size="13" font-weight="400" fill="#99A3B0" text-anchor="start">Power limit</text>
+<path d="M436.75 126 L439.75 129 L445.75 123" fill="none" stroke="#99A3B0" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="450" y="131" font-family="Segoe UI, 'Segoe UI Variable', sans-serif" font-size="13" font-weight="400" fill="#99A3B0" text-anchor="start">Power limit</text>
 <rect x="620" y="106" width="160" height="3" rx="1.5" fill="#7A8390"/>
-<text x="620" y="131" font-family="Segoe UI, 'Segoe UI Variable', sans-serif" font-size="13" font-weight="400" fill="#99A3B0" text-anchor="start">Memory</text>
+<path d="M620.75 126 L623.75 129 L629.75 123" fill="none" stroke="#99A3B0" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="634" y="131" font-family="Segoe UI, 'Segoe UI Variable', sans-serif" font-size="13" font-weight="400" fill="#99A3B0" text-anchor="start">Memory</text>
 <rect x="804" y="106" width="160" height="3" rx="1.5" fill="#4A94FF"/>
 <text x="804" y="131" font-family="Segoe UI, 'Segoe UI Variable', sans-serif" font-size="13" font-weight="600" fill="#E6E8ED" text-anchor="start">Core</text>
 <rect x="988" y="106" width="160" height="3" rx="1.5" fill="#242830"/>

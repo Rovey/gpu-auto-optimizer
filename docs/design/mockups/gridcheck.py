@@ -59,7 +59,8 @@ SCREENS = {
 # offsets from a grid line, per kind of element (section 6.3 / 6.6): an edge only counts when its own
 # component explains it, so a coincidence with another component's offset does not pass
 OFFSETS = {
-    'text-start': [(24, 'item lead'), (36, 'item lead after 12 px row padding'), (40 + 12, 'label after a toggle')],
+    'text-start': [(24, 'item lead'), (36, 'item lead after 12 px row padding'), (40 + 12, 'label after a toggle'),
+                   (10 + 4, 'phase name after its 10 px check (D15)')],
     'text-middle': [(NARROW / 2, 'narrow button centre'), (NARROW + 8 + NARROW / 2, 'second narrow button centre'),
                     (BTN / 2, 'button centre'), (BTN + 8 + NARROW / 2, 'narrow button centre after a button'),
                     (-BTN / 2, 'button centre, button at the edge'), (206, 'centre of a pane-wide button')],
