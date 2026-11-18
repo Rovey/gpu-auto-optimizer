@@ -480,9 +480,10 @@ TEST_CASE("a recovery that ends the run stays guarded until the card is back at 
     const auto r = run.go(Preset::BestOfMyGpu);
     CHECK_FALSE(r.ok);
     CHECK(r.stock_restored);
-    // Closed after the way out's reconnect and reset: the last line of the file.
+    // Closed after the way out's reconnect and reset: the last line of the file,
+    // as a recovery that did not get the card back, with the card at stock.
     REQUIRE(!run.card.journal_file.empty());
-    CHECK(run.card.journal_file.back().find("RECOVERED") != std::string::npos);
+    CHECK(run.card.journal_file.back().find("\"RECOVERY FAILED\"") != std::string::npos);
     CHECK(run.card.journal_file.size() == run.card.journal.size() + 2);
     check_journal_rules(run);
 }
@@ -752,6 +753,10 @@ TEST_CASE("a card the driver took away after a reset is reported as unreachable,
     CHECK(run.logged("the GPU could not be reached after a driver reset; restart Windows"));
     CHECK_FALSE(run.logged("restored to stock"));
     CHECK_FALSE(run.logged("run `gao --reset`"));
+    // The recovery's journal entry says how it ended, and still closes it.
+    REQUIRE(!run.card.journal_file.empty());
+    CHECK(run.card.journal_file.back().find("\"GPU UNREACHABLE\"") != std::string::npos);
+    CHECK(run.card.count_file("RECOVERED") == 0);
     check_journal_rules(run);
 }
 
@@ -762,6 +767,9 @@ TEST_CASE("a recovery that gets the card back keeps its own words") {
     CHECK(a.driver_resets == 1);
     CHECK_FALSE(gao::gpu_unreachable(true, a.driver_resets));
     CHECK_FALSE(back.logged("could not be reached"));
+    CHECK(back.card.count_file("\"RECOVERED\"") == 1);
+    CHECK(back.card.count_file("RECOVERY FAILED") == 0);
+    CHECK(back.card.count_file("GPU UNREACHABLE") == 0);
 
     // Stopped while recovering, but the way out got stock back: said as before.
     Run stopped = lost_at_135();
@@ -772,6 +780,9 @@ TEST_CASE("a recovery that gets the card back keeps its own words") {
     CHECK_FALSE(gao::gpu_unreachable(b.stock_restored, b.driver_resets));
     CHECK(stopped.logged("card restored to stock"));
     CHECK_FALSE(stopped.logged("could not be reached"));
+    CHECK(stopped.card.count_file("\"RECOVERY FAILED\"") == 1);
+    CHECK(stopped.card.count_file("RECOVERED") == 0);
+    check_journal_rules(stopped);
 }
 
 TEST_CASE("a reset that fails with no driver reset in the run is not taken for a lost card") {

@@ -267,9 +267,9 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
         recovery_entry = 0;
         return false;
     };
-    auto end_recovery = [&] {
+    auto end_recovery = [&](const char* verdict) {
         if (recovery_entry == 0) return;
-        if (!journal.complete(recovery_entry, "RECOVERED"))
+        if (!journal.complete(recovery_entry, verdict))
             log("warning: the crash journal entry could not be closed; later runs will stay below this candidate");
         recovery_entry = 0;
     };
@@ -302,7 +302,7 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
             log(reconnecting);
             if (reconnect()) r.stock_restored = reset_to_stock();
         }
-        end_recovery();
+        end_recovery(recovery_end_verdict(r.stock_restored));
         r.ok = false;
         r.reason = why;
         log("stopped: " + why + (r.stock_restored                               ? " -- card restored to stock"
@@ -449,7 +449,7 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
             // A baseline that scored nothing gives no bar to measure against:
             // then no health probe counts as healthy.
             if (s.verdict == Verdict::Stable && r.baseline.score > 0 && s.score >= kHealthyScore * r.baseline.score) {
-                end_recovery();
+                end_recovery(kRecovered);
                 return true;
             }
             // Computing, but not back yet (slow, a wrong result, too hot).

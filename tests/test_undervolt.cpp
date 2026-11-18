@@ -858,4 +858,31 @@ TEST_CASE("find_undervolt: a card that stays out of reach after a driver reset i
     CHECK(gao::gpu_unreachable(r.stock_restored, r.driver_resets));
     CHECK(card.logged("the GPU could not be reached after a driver reset; restart Windows"));
     CHECK_FALSE(card.logged("run `gao --reset`"));
+    CHECK(card.count("\"GPU UNREACHABLE\"") == 1);
+    CHECK(card.count("RECOVERED") == 0);
+    CHECK(card.count("\"begin\"") == card.count("\"complete\""));
+}
+
+TEST_CASE("find_undervolt: a recovery that ends the run with the card at stock is closed as RECOVERY FAILED") {
+    UvCard card;
+    card.lost_above_khz = 150000;
+    card.blind_health_probes = 1;   // the health probe after the reset has no telemetry: the card is not back
+    const auto r = card.go();
+    CHECK_FALSE(r.ok);
+    CHECK(r.reason == "the card was not usable when checked after a driver reset");
+    CHECK(r.stock_restored);
+    CHECK(card.count("\"RECOVERY FAILED\"") == 1);
+    CHECK(card.count("RECOVERED") == 0);
+    CHECK(card.count("\"GPU UNREACHABLE\"") == 0);
+    CHECK(card.count("\"begin\"") == card.count("\"complete\""));
+}
+
+TEST_CASE("find_undervolt: a recovery that gets the card back is closed as RECOVERED") {
+    UvCard card;
+    card.lost_above_khz = 150000;
+    const auto r = card.go();
+    REQUIRE(r.ok);
+    CHECK(card.count("\"RECOVERED\"") == 1);
+    CHECK(card.count("RECOVERY FAILED") == 0);
+    CHECK(card.count("GPU UNREACHABLE") == 0);
 }

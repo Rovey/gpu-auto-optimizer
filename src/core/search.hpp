@@ -286,6 +286,14 @@ struct OptimizeResult {
 // brought the card back. A reset that fails with no driver reset in the run is
 // a refused write on a card that still answers, and keeps its own advice.
 inline bool gpu_unreachable(bool stock_restored, int driver_resets) { return !stock_restored && driver_resets > 0; }
+// How a recovery's journal entry (Journal::begin_recovery) is closed. Any
+// verdict closes the entry; the word is for whoever reads the file.
+//   RECOVERED        the health probe passed: the card is back
+//   RECOVERY FAILED  the run ended before that (stopped, aborted, or the
+//                    card was not back) and its way out set the card to stock
+//   GPU UNREACHABLE  as RECOVERY FAILED, but the reset to stock failed too
+inline constexpr const char* kRecovered = "RECOVERED";
+inline const char* recovery_end_verdict(bool stock_restored) { return stock_restored ? "RECOVERY FAILED" : "GPU UNREACHABLE"; }
 // The end of a log line that says so.
 inline constexpr const char* kGpuUnreachableLog =
     " -- reset FAILED: the GPU could not be reached after a driver reset; restart Windows";

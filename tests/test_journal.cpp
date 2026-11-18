@@ -1,5 +1,6 @@
 #include "doctest/doctest.h"
 #include "core/journal.hpp"
+#include "core/search.hpp"
 #include <climits>
 #include <string>
 #include <vector>
@@ -339,3 +340,22 @@ TEST_CASE("memory edges that make no sense are ignored, and a failed write is re
     CHECK(j.note_mem_edge(0));   // nothing to note
 }
 
+// The verdicts a recovery is closed with (core/search.hpp): every one of them
+// closes the entry, so no later run stays below the clocks it names. A build
+// from before them (0.4.9 included) reads any verdict the same way.
+TEST_CASE("a recovery closed as failed or unreachable leaves no ceiling either") {
+    for (const char* verdict : {gao::kRecovered, gao::recovery_end_verdict(true), gao::recovery_end_verdict(false)}) {
+        Sink s;
+        Journal first({}, s.append());
+        first.complete(first.begin(375, 300), "NO TELEMETRY");
+        const int rec = first.begin_recovery();
+        REQUIRE(rec > 0);
+        CHECK(first.complete(rec, verdict));
+        CHECK(s.lines.back().find(std::string("\"verdict\":\"") + verdict + "\"") != std::string::npos);
+        Journal after(s.lines, s.append());
+        CHECK(after.ceilings().core_mhz == INT_MAX);
+        CHECK(after.freezes().empty());
+    }
+    CHECK(std::string(gao::recovery_end_verdict(true)) == "RECOVERY FAILED");
+    CHECK(std::string(gao::recovery_end_verdict(false)) == "GPU UNREACHABLE");
+}
