@@ -305,8 +305,9 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
         end_recovery();
         r.ok = false;
         r.reason = why;
-        log("stopped: " + why + (r.stock_restored ? " -- card restored to stock"
-                                                   : " -- reset FAILED, run `gao --reset`"));
+        log("stopped: " + why + (r.stock_restored                               ? " -- card restored to stock"
+                                 : gpu_unreachable(false, r.driver_resets) ? kGpuUnreachableLog
+                                                                           : " -- reset FAILED, run `gao --reset`"));
         return r;
     };
 

@@ -404,3 +404,63 @@ TEST_CASE("an undervolt that gained nothing against stock is not applied, and sa
           "RESULT: not applied -- no gain against stock: not less power, not cooler, not quieter (score 5000 against 5000 it/s "
           "(+0.0 %)) (card at stock)");
 }
+
+// Hardware check 115: a reset to stock that failed after a driver reset.
+TEST_CASE("a run that lost the card to a driver reset says so, and to restart Windows") {
+    OptimizeOutcome lost;
+    lost.ran = true;
+    lost.result.reason = "could not set the card to stock while recovering";
+    lost.result.stock_restored = false;
+    lost.result.driver_resets = 1;
+    CHECK(gao::app::gpu_unreachable(lost));
+    const auto lines = gao::app::result_lines(lost);
+    CHECK(lines.front() == "RESULT: not applied -- could not set the card to stock while recovering (reset to stock FAILED, the GPU could not be reached)");
+    CHECK(has_line(lines, "could not be restored to stock or confirmed"));
+    CHECK(has_line(lines, "may still run changed clocks"));
+    CHECK(has_line(lines, "restart Windows; `gao --reset` will not help while the driver does not answer"));
+    CHECK(has_line(lines, "Start no other run until the card answers again"));
+    CHECK_FALSE(has_line(lines, "card at stock"));
+    CHECK_FALSE(has_line(lines, "run `gao --reset`"));
+    CHECK(has_line(lines, "driver resets during this run: 1"));
+
+    UndervoltOutcome uv;
+    uv.ran = true;
+    uv.result.reason = "the driver did not come back after a reset";
+    uv.result.stock_restored = false;
+    uv.result.driver_resets = 1;
+    CHECK(gao::app::gpu_unreachable(uv));
+    CHECK(has_line(gao::app::result_lines(uv), "restart Windows"));
+
+    AllInOneOutcome all;
+    all.ran = true;
+    all.overclock = lost;
+    all.error = std::string("the overclock: could not set the card to stock while recovering (its own reset to stock failed; tried again)") +
+                gao::app::kGpuUnreachableEnd;
+    CHECK(gao::app::gpu_unreachable(all));
+    CHECK(has_line(gao::app::result_lines(all), "restart Windows"));
+}
+
+TEST_CASE("a failed reset with no driver reset, and a recovery that got stock back, keep their words") {
+    OptimizeOutcome refused;   // a write the card refused while it still answered
+    refused.ran = true;
+    refused.result.reason = "could not reset to stock";
+    refused.result.stock_restored = false;
+    refused.result.driver_resets = 0;
+    CHECK_FALSE(gao::app::gpu_unreachable(refused));
+    CHECK(gao::app::result_lines(refused) ==
+          std::vector<std::string>{"RESULT: not applied -- could not reset to stock (reset to stock FAILED, run `gao --reset`)"});
+
+    OptimizeOutcome back;   // a driver reset, and the way out got stock back
+    back.ran = true;
+    back.result.reason = "the driver reset twice";
+    back.result.stock_restored = true;
+    back.result.driver_resets = 2;
+    CHECK_FALSE(gao::app::gpu_unreachable(back));
+    CHECK(gao::app::result_lines(back).front() == "RESULT: not applied -- the driver reset twice (card at stock)");
+
+    AllInOneOutcome all;   // its own reset failed, but no step lost the card
+    all.ran = true;
+    all.error = "the fan tune: a write did not verify -- reset to stock FAILED, run `gao --reset`";
+    CHECK_FALSE(gao::app::gpu_unreachable(all));
+    CHECK_FALSE(has_line(gao::app::result_lines(all), "restart Windows"));
+}

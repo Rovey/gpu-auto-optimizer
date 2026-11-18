@@ -47,16 +47,23 @@ void comparison(const StabilityResult& before, const StabilityResult& after, Row
 
 constexpr const char* kStockFailed =
     "Setting the card back to stock FAILED. Click Revert to stock on the Dashboard; if that fails too, restart the PC.";
+// app::gpu_unreachable: the reset failed after a driver reset.
+constexpr const char* kGpuUnreachable =
+    "The graphics card could not be reached after a driver reset. Its settings could not be set back to stock or confirmed, "
+    "so it may still run changed clocks, power limit or fan speed. Restart Windows: Revert to stock will not help while the "
+    "driver does not answer. Start no other run until the card answers again.";
 
 // A run that ended without a result. A stop the user chose (Abort, or not
 // starting next to other programs) is said calmly; anything else in red, with
 // the engine's reason and where its log is. A refusal (app::is_refusal) says
 // so with its reason alone. at_stock: empty when the card was not touched;
-// false when setting it back failed.
-void no_result(bool ran, const std::string& reason, std::optional<bool> at_stock, bool put_back) {
+// false when setting it back failed. unreachable: that failure followed a
+// driver reset (app::gpu_unreachable), which only a restart of Windows mends.
+void no_result(bool ran, const std::string& reason, std::optional<bool> at_stock, bool put_back, bool unreachable = false) {
     if (stopped_by_user(reason)) {
         heading("Stopped");
         if (!ran && !reason.starts_with("aborted")) wrapped(kText, "You did not start the run: nothing on the card was changed.");
+        else if (unreachable) wrapped(kBad, std::string("You stopped the run. ") + kGpuUnreachable);
         else if (put_back) wrapped(kText, "You stopped the run.");
         else if (at_stock.value_or(true))
             wrapped(kText, ran ? "You stopped the run. The card is back at stock." : "You stopped the run before it searched for anything.");
@@ -71,7 +78,8 @@ void no_result(bool ran, const std::string& reason, std::optional<bool> at_stock
     wrapped(kBad, text);
     if (!link.empty()) wrapped(kBad, link);
     if (!ran && app::is_refusal(reason)) return;
-    if (ran && !put_back) wrapped(kText, at_stock.value_or(true) ? "The card is back at stock." : kStockFailed);
+    if (unreachable) wrapped(kBad, kGpuUnreachable);
+    else if (ran && !put_back) wrapped(kText, at_stock.value_or(true) ? "The card is back at stock." : kStockFailed);
     wrapped(kDim, "Nothing was saved. If this looks wrong, send run.log from %ProgramData%\\GpuAutoOptimizer with a problem report.");
 }
 
@@ -82,7 +90,7 @@ bool optimize_result(const app::OptimizeOutcome& o, bool put_back) {
         return false;
     }
     if (!o.result.ok) {
-        no_result(true, o.result.reason, o.result.stock_restored, put_back);
+        no_result(true, o.result.reason, o.result.stock_restored, put_back, app::gpu_unreachable(o));
         return false;
     }
     const OptimizeResult& r = o.result;
@@ -115,7 +123,7 @@ bool undervolt_result(const app::UndervoltOutcome& o, bool put_back) {
         return false;
     }
     if (!o.result.ok) {
-        no_result(true, o.result.reason, o.result.stock_restored, put_back);
+        no_result(true, o.result.reason, o.result.stock_restored, put_back, app::gpu_unreachable(o));
         return false;
     }
     const UndervoltResult& r = o.result;
@@ -166,7 +174,8 @@ bool undervolt_result(const app::UndervoltOutcome& o, bool put_back) {
 bool all_in_one_result(const app::AllInOneOutcome& o, bool put_back) {
     if (!o.ok) {
         // Its reason ends in "-- card at stock" or "-- reset to stock FAILED, ...".
-        no_result(o.ran, o.error, o.ran ? std::optional<bool>(o.error.find("FAILED") == std::string::npos) : std::nullopt, put_back);
+        no_result(o.ran, o.error, o.ran ? std::optional<bool>(o.error.find("FAILED") == std::string::npos) : std::nullopt, put_back,
+                  app::gpu_unreachable(o));
         return false;
     }
     const Profile& p = o.profile;

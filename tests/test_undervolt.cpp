@@ -38,6 +38,7 @@ struct UvCard {
     int abort_at_probe = -1;
     bool aborted_now = false;
     bool with_recover = true;
+    bool recover_fails = false;   // the driver does not come back: the card stays out of reach
     bool with_prepare = false;    // the run offers UndervoltIo::prepare_load
     int prepares = 0;
     int blind_health_probes = 0;  // this many 5 s probes end NO TELEMETRY, the card computing normally
@@ -120,7 +121,7 @@ struct UvCard {
         g.set_mem_offset = [this](int mhz) { if (dead) return false; mem = mhz; return true; };
         g.set_power_limit = [this](int pct) { if (dead) return false; power = pct; return true; };
         if (with_recover)
-            g.recover = [this] { if (recovers == 0) journal_at_first_recover = journal; ++recovers; dead = false; std::fill(raw.begin(), raw.end(), 0); core = mem = 0; power = 100; return true; };
+            g.recover = [this] { if (recovers == 0) journal_at_first_recover = journal; ++recovers; if (recover_fails) return false; dead = false; std::fill(raw.begin(), raw.end(), 0); core = mem = 0; power = 100; return true; };
         return g;
     }
     StabilityResult probe(double seconds, int max_temp = 1000) {
@@ -842,4 +843,19 @@ TEST_CASE("judge_against_stock: a reading the card does not give is not judged")
     // No power reading: cooler or quieter must carry it.
     CHECK_FALSE(judge_against_stock(measured(5000, -1, 70, 60), measured(5000, -1, 70, 60), true).keep);
     CHECK(judge_against_stock(measured(5000, -1, 70, 60), measured(5000, -1, 68, 60), true).keep);
+}
+
+// Hardware check 115: a driver reset that takes the card out of reach for good.
+TEST_CASE("find_undervolt: a card that stays out of reach after a driver reset is reported as unreachable") {
+    UvCard card;
+    card.lost_above_khz = 150000;
+    card.recover_fails = true;
+    const auto r = card.go();
+    CHECK_FALSE(r.ok);
+    CHECK(r.reason == "the driver did not come back after a reset");
+    CHECK(r.driver_resets == 1);
+    CHECK_FALSE(r.stock_restored);
+    CHECK(gao::gpu_unreachable(r.stock_restored, r.driver_resets));
+    CHECK(card.logged("the GPU could not be reached after a driver reset; restart Windows"));
+    CHECK_FALSE(card.logged("run `gao --reset`"));
 }

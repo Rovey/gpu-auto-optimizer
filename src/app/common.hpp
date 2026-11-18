@@ -236,6 +236,22 @@ int driver_resets(const OptimizeOutcome& o);
 int driver_resets(const UndervoltOutcome& o);
 int driver_resets(const AllInOneOutcome& o);
 
+// A run that ended with the reset to stock failed after a driver reset
+// (core/search.hpp: gpu_unreachable): the card may still run changed settings
+// and only a restart of Windows has brought such a card back. All in one:
+// one of its steps lost the card and its own reset to stock failed too.
+bool gpu_unreachable(const OptimizeOutcome& o);
+bool gpu_unreachable(const UndervoltOutcome& o);
+bool gpu_unreachable(const AllInOneOutcome& o);
+// What follows the RESULT line then.
+inline constexpr const char* kGpuUnreachableLines[] = {
+    "  the GPU could not be reached after a driver reset: its settings could not be restored to stock or confirmed, "
+    "and it may still run changed clocks, power limit or fan speed",
+    "  restart Windows; `gao --reset` will not help while the driver does not answer. Start no other run until the card answers again",
+};
+// The end of an All in one reason when that happened.
+inline constexpr const char* kGpuUnreachableEnd = " -- reset to stock FAILED, the GPU could not be reached";
+
 // How a run ended, in words: the RESULT line and the lines under it. The
 // console, the window's log and run.log get the same lines through the run's
 // log, so the end of a run is on disk too (hardware check 99 found run.log

@@ -279,6 +279,17 @@ struct OptimizeResult {
     int driver_resets = 0;
 };
 
+// A reset to stock that failed after a driver reset in the same run: the driver
+// took the card away and no write reaches it. Hardware check 115 (GTX 1060,
+// driver 560.94): a new connection, `gao --reset` of this and of the release
+// before, and a restart of the device all failed; only a restart of Windows
+// brought the card back. A reset that fails with no driver reset in the run is
+// a refused write on a card that still answers, and keeps its own advice.
+inline bool gpu_unreachable(bool stock_restored, int driver_resets) { return !stock_restored && driver_resets > 0; }
+// The end of a log line that says so.
+inline constexpr const char* kGpuUnreachableLog =
+    " -- reset FAILED: the GPU could not be reached after a driver reset; restart Windows";
+
 // The whole tuning run (spec §3): baseline, power, memory, core, soak. Leaves
 // the result applied when ok; any !ok return leaves the card at stock, or
 // says in stock_restored that it could not.

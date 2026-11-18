@@ -69,7 +69,9 @@ UndervoltResult find_undervolt(const GpuControl& gpu, Journal& journal, const Un
         r.stock_restored = to_stock();
         if (!r.stock_restored && gpu.recover && gpu.recover()) r.stock_restored = to_stock();
         end_recovery();
-        log("stopped: " + why + (r.stock_restored ? " -- card restored to stock" : " -- reset FAILED, run `gao --reset`"));
+        log("stopped: " + why + (r.stock_restored                               ? " -- card restored to stock"
+                                 : gpu_unreachable(false, r.driver_resets) ? kGpuUnreachableLog
+                                                                           : " -- reset FAILED, run `gao --reset`"));
         return r;
     };
 

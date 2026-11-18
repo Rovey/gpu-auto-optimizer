@@ -133,7 +133,12 @@ AllInOneOutcome all_in_one_steps(const OptimizeHooks& outer) {
         GuardedGpu hw(kGpu);
         std::string init_error;
         const bool stock = hw.Init(&init_error) && hw.control().reset_to_stock && hw.control().reset_to_stock();
-        return stop(why + (stock ? " -- card at stock" : " -- reset to stock FAILED, run `gao --reset`"));
+        // A step that lost the card to a driver reset (gpu_unreachable): this
+        // reset failing too is the same loss, and gets the same advice.
+        const bool lost = gpu_unreachable(out.overclock) || gpu_unreachable(out.undervolt);
+        return stop(why + (stock  ? " -- card at stock"
+                           : lost ? kGpuUnreachableEnd
+                                  : " -- reset to stock FAILED, run `gao --reset`"));
     };
     if (const std::string gpus = several_gpus_refusal(); !gpus.empty()) return stop(gpus);
     if (const std::string tool = other_tool(); !tool.empty()) return stop(tool);
@@ -173,6 +178,9 @@ AllInOneOutcome all_in_one_steps(const OptimizeHooks& outer) {
     if (oc_mhz > stock_mhz && stock_mhz > 0) how.clock_khz = (stock_mhz + oc_mhz) / 2 * 1000;
     out.undervolt = run_undervolt(hooks, true, how);
     if (aborted()) return end_at_stock("aborted");
+    // A card the driver took away is not tuned on: no fan step on it.
+    if (gpu_unreachable(out.undervolt))
+        return end_at_stock("the undervolt: " + out.undervolt.result.reason + " (its own reset to stock failed; tried again)");
     if (out.undervolt.ran && out.undervolt.result.ok && out.undervolt.saved) {
         out.now = out.undervolt.result.after;
     } else {
