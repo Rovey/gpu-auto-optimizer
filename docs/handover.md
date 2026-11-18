@@ -106,6 +106,8 @@ Set-ExecutionPolicy -Scope Process Bypass
 ```
 
 Expected: one line `N s: PrintWindow WxH` per time and `closed`; the PNGs `out\shots\run-9.png` etc.
+The window needs a signed-in desktop: started over SSH or from a scheduled task (session 0) the program
+ends at once with exit code 1, and the script says so.
 Never take pictures of the whole screen: other windows (mail, chats) end up in them. The UX plan's
 stage 2 adds `--demo=<state>` and `tools/ui-shots.ps1` for every state at every size and scaling.
 

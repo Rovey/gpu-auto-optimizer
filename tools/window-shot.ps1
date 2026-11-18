@@ -46,8 +46,10 @@ if ($dir -and -not (Test-Path $dir)) { New-Item -ItemType Directory -Force $dir 
 $p = Start-Process $Exe -ArgumentList $Mode -PassThru
 $started = Get-Date
 $h = [IntPtr]::Zero
-for ($i = 0; $i -lt 40 -and $h -eq [IntPtr]::Zero; $i++) { Start-Sleep -Milliseconds 250; $p.Refresh(); $h = $p.MainWindowHandle }
-if ($h -eq [IntPtr]::Zero) { "no window"; if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force }; exit 1 }
+for ($i = 0; $i -lt 40 -and $h -eq [IntPtr]::Zero -and -not $p.HasExited; $i++) { Start-Sleep -Milliseconds 250; $p.Refresh(); $h = $p.MainWindowHandle }
+# A process that ended at once (for example in a session without a desktop, such as SSH) has no handle.
+if ($p.HasExited) { "no window: the program ended with exit code $($p.ExitCode)"; exit 1 }
+if ($h -eq [IntPtr]::Zero) { "no window"; Stop-Process -Id $p.Id -Force; exit 1 }
 [void][Shot]::SetWindowPos($h, [IntPtr]::Zero, 0, 0, $Width, $Height, 0x16)   # SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE: size only
 foreach ($t in $At) {
     $wait = $t - ((Get-Date) - $started).TotalSeconds
