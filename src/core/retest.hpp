@@ -51,6 +51,7 @@ struct SteppedRetestResult {
     bool ok = false;            // a step held: c.profile is that step, tested, stamped with `driver`
     bool stepped = false;       // c.profile changed (its step or its failed_step): save c in every case where this is true
     int first_step = 0, final_step = 0;
+    int driver_resets = 0;      // tests and health probes that reset the driver
 };
 
 // retest_saved_tune, then while it fails (not Aborted, and the test ran) and

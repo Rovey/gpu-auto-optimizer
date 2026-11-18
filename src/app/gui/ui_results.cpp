@@ -58,7 +58,7 @@ constexpr const char* kGpuUnreachable =
 // the engine's reason and where its log is. A refusal (app::is_refusal) says
 // so with its reason alone. at_stock: empty when the card was not touched;
 // false when setting it back failed. unreachable: that failure followed a
-// driver reset (app::gpu_unreachable), which only a restart of Windows mends.
+// driver reset (app::gpu_unreachable); in hardware check 115 a restart of Windows mended it.
 void no_result(bool ran, const std::string& reason, std::optional<bool> at_stock, bool put_back, bool unreachable = false) {
     if (stopped_by_user(reason)) {
         heading("Stopped");
@@ -209,7 +209,8 @@ bool retest_result(const app::RetestOutcome& o, bool put_back) {
             heading("Stopped");
             // "aborted -- reset to stock FAILED, ..." (common_retest.cpp) must not read as a calm stop,
             // unless the tune from before the test was put back after all (worker.cpp).
-            if (!put_back && o.error.find("FAILED") != std::string::npos)
+            if (app::gpu_unreachable(o)) wrapped(kBad, std::string("You stopped the test. ") + kGpuUnreachable);
+            else if (!put_back && o.error.find("FAILED") != std::string::npos)
                 wrapped(kBad, std::string("You stopped the test. ") + kStockFailed);
             else wrapped(kText, "You stopped the test.");
             // After a step down the step under test is on the card and saved, not the tune from before the test.
@@ -220,6 +221,7 @@ bool retest_result(const app::RetestOutcome& o, bool put_back) {
         }
         heading("Not applied");
         wrapped(kBad, for_window(o.error));
+        if (app::gpu_unreachable(o)) wrapped(kBad, kGpuUnreachable);
         if (o.result.test.seconds > 0)
             wrapped(kText, "The saved tune is kept as it is and stays off on this driver. Optimize again to find one that holds.");
         return false;

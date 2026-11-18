@@ -464,3 +464,106 @@ TEST_CASE("a failed reset with no driver reset, and a recovery that got stock ba
     CHECK_FALSE(gao::app::gpu_unreachable(all));
     CHECK_FALSE(has_line(gao::app::result_lines(all), "restart Windows"));
 }
+
+// Hardware check 115, the paths after the overclock and the undervolt: the
+// fan step of All in one and the retest end their reasons with stock_end.
+TEST_CASE("a way out to stock says where it left the card, and after a driver reset that the GPU could not be reached") {
+    gao::GpuControl stock, refused, none;
+    stock.reset_to_stock = [] { return true; };
+    refused.reset_to_stock = [] { return false; };
+    using gao::app::reset_and_say;
+    CHECK(reset_and_say(stock, "aborted", false) == "aborted -- card at stock");
+    CHECK(reset_and_say(stock, "aborted", true) == "aborted -- card at stock");
+    CHECK(reset_and_say(refused, "aborted", false) == "aborted -- reset to stock FAILED, run `gao --reset`");
+    CHECK(reset_and_say(refused, "aborted", true) == "aborted -- reset to stock FAILED, the GPU could not be reached");
+    CHECK(reset_and_say(none, "aborted", false) == "aborted -- reset to stock FAILED, run `gao --reset`");
+    CHECK(gao::app::stock_end(false, true) == std::string(gao::app::kGpuUnreachableEnd));
+}
+
+TEST_CASE("All in one: the card lost in the fan step, and the reset to stock failed after it") {
+    gao::GpuControl refused;
+    refused.reset_to_stock = [] { return false; };
+    AllInOneOutcome all;
+    all.ran = true;
+    all.error = gao::app::reset_and_say(refused, "the tune could not be put back after a driver reset in the final test", true);
+    CHECK(gao::app::gpu_unreachable(all));   // the window's words come from this (ui_results.cpp)
+    const auto lines = gao::app::result_lines(all);
+    REQUIRE(lines.size() == 3);
+    CHECK(lines[0] == "RESULT: not applied -- the tune could not be put back after a driver reset in the final test -- reset to stock "
+                      "FAILED, the GPU could not be reached");
+    CHECK(lines[1] == gao::app::kGpuUnreachableLines[0]);
+    CHECK(lines[2] == gao::app::kGpuUnreachableLines[1]);
+    CHECK_FALSE(has_line(lines, "run `gao --reset`"));
+    CHECK_FALSE(has_line(lines, "card at stock"));
+}
+
+TEST_CASE("All in one: the card lost in the fan step and back again keeps its words") {
+    // The final test reset the driver, and the tune went back on: the run ends with its result.
+    AllInOneOutcome back;
+    back.ran = true;
+    back.ok = true;
+    back.profile.power_pct = 100;
+    back.fan_note = "the final test ended DEVICE LOST; the tuned fan curve is not kept";
+    back.stock = measured(5786, 199);
+    back.now = measured(5970, 171);
+    CHECK_FALSE(gao::app::gpu_unreachable(back));
+    const auto lines = gao::app::result_lines(back);
+    CHECK(lines.front().starts_with("RESULT: power 100 %"));
+    CHECK(has_line(lines, "  fans: the final test ended DEVICE LOST; the tuned fan curve is not kept"));
+    CHECK_FALSE(has_line(lines, "FAILED"));
+
+    // A reset in the fan step, then a stop: the reset to stock worked.
+    gao::GpuControl stock;
+    stock.reset_to_stock = [] { return true; };
+    AllInOneOutcome stopped;
+    stopped.ran = true;
+    stopped.error = gao::app::reset_and_say(stock, "aborted", true);
+    CHECK_FALSE(gao::app::gpu_unreachable(stopped));
+    CHECK(gao::app::result_lines(stopped) == std::vector<std::string>{"RESULT: not applied -- aborted -- card at stock"});
+}
+
+TEST_CASE("All in one: a reset to stock the card refused in the fan step, with no driver reset, keeps `gao --reset`") {
+    gao::GpuControl refused;
+    refused.reset_to_stock = [] { return false; };
+    AllInOneOutcome all;
+    all.ran = true;
+    all.error = gao::app::reset_and_say(refused, "access violation while the fans were tuned", false);
+    CHECK_FALSE(gao::app::gpu_unreachable(all));
+    CHECK(gao::app::result_lines(all) ==
+          std::vector<std::string>{"RESULT: not applied -- access violation while the fans were tuned -- reset to stock FAILED, run `gao --reset`"});
+}
+
+TEST_CASE("a retest that lost the card to a driver reset says so, and a failed write without one keeps `gao --reset`") {
+    gao::app::RetestOutcome lost;
+    lost.ran = true;
+    lost.driver = lost.driver_was = "617.14";
+    lost.result.test = measured(5742, 190);
+    lost.result.test.verdict = gao::Verdict::DeviceLost;
+    lost.driver_resets = 1;
+    lost.error = "the tune did not hold on driver 617.14 (DEVICE LOST); optimize again" + gao::app::stock_end(false, true);
+    CHECK(gao::app::gpu_unreachable(lost));
+    auto lines = gao::app::result_lines(lost);
+    REQUIRE(lines.size() == 4);   // the test, RESULT, the two lines of advice
+    CHECK(lines[1] == "RESULT: not applied -- the tune did not hold on driver 617.14 (DEVICE LOST); optimize again -- reset to stock "
+                      "FAILED, the GPU could not be reached");
+    CHECK(lines[2] == gao::app::kGpuUnreachableLines[0]);
+    CHECK(lines[3] == gao::app::kGpuUnreachableLines[1]);
+
+    gao::app::RetestOutcome refused = lost;
+    refused.result.test.verdict = gao::Verdict::WrongResult;
+    refused.driver_resets = 0;
+    refused.error = "the tune did not hold on driver 617.14 (WRONG RESULT); optimize again" + gao::app::stock_end(false, false);
+    CHECK_FALSE(gao::app::gpu_unreachable(refused));
+    lines = gao::app::result_lines(refused);
+    REQUIRE(lines.size() == 2);
+    CHECK(lines[1].ends_with(" -- reset to stock FAILED, run `gao --reset`"));
+
+    gao::app::RetestOutcome back = lost;   // a driver reset, and stock written after it
+    back.error = "the tune did not hold on driver 617.14 (DEVICE LOST); optimize again" + gao::app::stock_end(true, true);
+    CHECK_FALSE(gao::app::gpu_unreachable(back));
+    CHECK(gao::app::result_lines(back).back().ends_with(" -- card at stock"));
+
+    gao::app::RetestOutcome stopped = lost;   // stopped: the GUI shows it as a stop, with the same advice
+    stopped.error = "aborted" + gao::app::stock_end(false, true);
+    CHECK(gao::app::gpu_unreachable(stopped));
+}

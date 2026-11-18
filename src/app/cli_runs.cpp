@@ -104,6 +104,7 @@ static BOOL WINAPI OnConsoleCtrl(DWORD type) {
 
 // --busy-ok, as the last argument of a run: other programs may stay on the card.
 bool g_busy_ok = false;
+bool g_gpu_unreachable = false;
 
 // Other programs use the card: the run says which, and does not start unless
 // it was told that this is fine.
@@ -144,6 +145,7 @@ int optimize(gao::Preset preset, const std::optional<gao::FanCurve>& fan_curve) 
     const auto out = gao::app::run_optimize(preset, hooks, fan_curve);
     // Through the log: on screen and in run.log alike.
     for (const std::string& line : gao::app::result_lines(out)) hooks.log(line);
+    g_gpu_unreachable = gao::app::gpu_unreachable(out);
     if (!out.ran || !out.result.ok) return 1;
     after_tune(out.saved);
     return out.saved ? 0 : 2;   // 2: tuned and applied, but --apply and boot-apply cannot use it
@@ -156,6 +158,7 @@ int undervolt(bool on_overclock) {
     // for --optimize, and afterwards finds the profile this run saved.
     const auto out = gao::app::run_undervolt(hooks, on_overclock);
     for (const std::string& line : gao::app::result_lines(out)) hooks.log(line);
+    g_gpu_unreachable = gao::app::gpu_unreachable(out);
     if (!out.ran || !out.result.ok) return 1;
     after_tune(out.saved);
     return out.saved ? 0 : 2;   // 2: found and applied, but --apply and boot-apply cannot use it
@@ -166,6 +169,7 @@ int retest() {
     const gao::app::OptimizeHooks hooks = cli_hooks();
     const gao::app::RetestOutcome out = gao::app::run_retest(hooks);
     for (const std::string& line : gao::app::result_lines(out)) hooks.log(line);
+    g_gpu_unreachable = gao::app::gpu_unreachable(out);
     // A tune that did not hold ends at stock: a running tray must not put it back
     // (a stop puts back what was on the card instead: putting_back).
     if (gao::app::retest_failed(out)) gao::app::tell_tray(gao::app::TrayNotice::TuneFailedTest);
@@ -180,6 +184,7 @@ int all_in_one() {
     SetConsoleCtrlHandler(OnConsoleCtrl, TRUE);
     const gao::app::AllInOneOutcome out = gao::app::run_all_in_one(hooks);
     for (const std::string& line : gao::app::result_lines(out)) hooks.log(line);
+    g_gpu_unreachable = gao::app::gpu_unreachable(out);
     if (!out.ok) return 1;
     after_tune(true);
     return 0;

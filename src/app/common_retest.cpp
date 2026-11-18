@@ -70,10 +70,11 @@ RetestOutcome run_retest(const OptimizeHooks& hooks) {
         if (fans) fans->release();
     });
     if (hooks.active_gpu) hooks.active_gpu(nullptr);
-    auto to_stock = [&](const std::string& reason) {
-        const bool stock = gpu.reset_to_stock && gpu.reset_to_stock();
-        return fail(reason + (stock ? " -- card at stock" : " -- reset to stock FAILED, run `gao --reset`"));
-    };
+    // After a driver reset in the test, a reset to stock that fails is the
+    // card out of reach (hardware check 115), not a write it refused.
+    out.driver_resets = stepped.driver_resets;
+    const bool after_reset = out.driver_resets > 0;
+    auto to_stock = [&](const std::string& reason) { return fail(reset_and_say(gpu, reason, after_reset)); };
     if (crashed) {
         if (hooks.measuring) hooks.measuring("", 0);
         (void)load.release();   // as in run_optimize: a load that faulted is left alone
@@ -91,6 +92,9 @@ RetestOutcome run_retest(const OptimizeHooks& hooks) {
         bool left_clean = false;
         reapplied = apply_profile(gpu, *cfg.profile, &apply_why, &left_clean);
         if (!reapplied) {
+            // apply_profile's own end (" -- card at stock" or "... run `gao --reset`") gives way to
+            // the one below, which knows about the driver reset.
+            if (after_reset) apply_why = apply_why.substr(0, apply_why.rfind(" -- "));
             back = " (and it could not be applied again: " + apply_why + ")";
             back_at_stock = left_clean;
         }
@@ -117,7 +121,7 @@ RetestOutcome run_retest(const OptimizeHooks& hooks) {
     if (!stepped.ok)
         return fail(out.result.reason + back +
                     (reapplied ? " -- " + step_text(out.final_step) + " is on the card again"
-                               : (back_at_stock ? " -- card at stock" : " -- reset to stock FAILED, run `gao --reset`")));
+                               : stock_end(back_at_stock, after_reset)));
     out.ok = true;
     boot_log(retest_boot_line(out));
     return out;

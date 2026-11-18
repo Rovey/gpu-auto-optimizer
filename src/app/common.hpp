@@ -249,8 +249,15 @@ inline constexpr const char* kGpuUnreachableLines[] = {
     "and it may still run changed clocks, power limit or fan speed",
     "  restart Windows; `gao --reset` will not help while the driver does not answer. Start no other run until the card answers again",
 };
-// The end of an All in one reason when that happened.
+// The end of an All in one or retest reason when that happened.
 inline constexpr const char* kGpuUnreachableEnd = " -- reset to stock FAILED, the GPU could not be reached";
+// The end of a reason whose way out set the card to stock: " -- card at stock";
+// when that failed, kGpuUnreachableEnd if a driver reset came before it in the
+// same step (core/search.hpp: gpu_unreachable), " -- reset to stock FAILED, run
+// `gao --reset`" otherwise: a write the card refused while it still answered.
+std::string stock_end(bool stock, bool after_reset);
+// Sets the card to stock and returns `reason` with stock_end after it.
+std::string reset_and_say(const GpuControl& gpu, const std::string& reason, bool after_reset);
 
 // How a run ended, in words: the RESULT line and the lines under it. The
 // console, the window's log and run.log get the same lines through the run's
@@ -277,6 +284,7 @@ struct RetestOutcome {
     // Stopped after a step down: the step under test (final_step) is on the
     // card again and saved; `profile` is valid.
     bool reapplied = false;
+    int driver_resets = 0;    // in the test and its health checks
 };
 // The fans are as in daily use: on the app's curve when it drives them, with
 // the NVIDIA driver otherwise. A tune that does not pass steps down and is
@@ -296,6 +304,9 @@ std::string retest_stopped_line(const RetestOutcome& o);
 // The test ran and the tune did not hold (not stopped, not refused before it):
 // a running tray must stop keeping it applied.
 bool retest_failed(const RetestOutcome& o);
+// As gpu_unreachable above: the test lost the card to a driver reset, and
+// setting it to stock failed after that.
+bool gpu_unreachable(const RetestOutcome& o);
 
 struct StepOutcome {
     bool ok = false;

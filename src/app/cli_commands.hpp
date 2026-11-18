@@ -36,6 +36,9 @@ int stress_recreate();
 // g_busy_ok for --busy-ok.
 extern std::atomic<bool> g_abort;
 extern bool g_busy_ok;
+// The run lost the card to a driver reset and could not set it to stock
+// after that (app::gpu_unreachable): nothing can be put back on it.
+extern bool g_gpu_unreachable;
 
 
 // A run Ctrl+C stopped, with nothing of it kept (exit 1), puts back the tune
@@ -46,7 +49,7 @@ extern bool g_busy_ok;
 template <class Run> int putting_back(Run run) {
     const auto before = gao::app::tune_before_run();
     const int code = run();
-    if (g_abort && code == 1) {
+    if (g_abort && code == 1 && !g_gpu_unreachable) {
         gao::app::OptimizeHooks hooks;
         // The end of the run that was stopped: no header line of its own.
         hooks.log = gao::app::logged([](const std::string& msg) { std::printf("  %s\n", msg.c_str()); }, false);

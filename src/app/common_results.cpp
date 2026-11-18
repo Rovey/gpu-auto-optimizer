@@ -12,6 +12,17 @@ int driver_resets(const AllInOneOutcome& o) { return driver_resets(o.overclock) 
 bool gpu_unreachable(const OptimizeOutcome& o) { return o.ran && !o.result.ok && gao::gpu_unreachable(o.result.stock_restored, o.result.driver_resets); }
 bool gpu_unreachable(const UndervoltOutcome& o) { return o.ran && !o.result.ok && gao::gpu_unreachable(o.result.stock_restored, o.result.driver_resets); }
 bool gpu_unreachable(const AllInOneOutcome& o) { return !o.ok && o.error.ends_with(kGpuUnreachableEnd); }
+bool gpu_unreachable(const RetestOutcome& o) { return o.ran && !o.ok && o.error.ends_with(kGpuUnreachableEnd); }
+
+std::string stock_end(bool stock, bool after_reset) {
+    return stock                                           ? " -- card at stock"
+           : gao::gpu_unreachable(stock, after_reset ? 1 : 0) ? kGpuUnreachableEnd
+                                                           : " -- reset to stock FAILED, run `gao --reset`";
+}
+
+std::string reset_and_say(const GpuControl& gpu, const std::string& reason, bool after_reset) {
+    return reason + stock_end(gpu.reset_to_stock && gpu.reset_to_stock(), after_reset);
+}
 
 namespace {
 
@@ -137,6 +148,7 @@ std::vector<std::string> result_lines(const RetestOutcome& o) {
                    : step_name(o.first_step) + (o.final_step != o.first_step ? " to " + step_name(o.final_step) : std::string()) +
                          " failed: ";
         lines.push_back("RESULT: not applied -- " + failed + o.error);
+        if (gpu_unreachable(o)) lines.insert(lines.end(), std::begin(kGpuUnreachableLines), std::end(kGpuUnreachableLines));
     } else if (o.final_step != o.first_step) {
         // Every step from the first to the one below the step that held failed.
         const int last_failed = o.final_step - 1;
