@@ -40,6 +40,11 @@ $bin = "$env:ProgramFiles\Microsoft Visual Studio\18\Community\Common7\IDE\Commo
 & "$bin\cmake.exe" --workflow --preset ci      # configure, build Release, run both test suites
 ```
 
+A machine without the IDE can use **Build Tools for Visual Studio 2026** (`https://aka.ms/vs/18/stable/vs_buildtools.exe`,
+workloads `Microsoft.VisualStudio.Workload.VCTools` with the CMake component); its CMake is in
+`${env:ProgramFiles(x86)}\Microsoft Visual Studio\18\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin`.
+The 0.4.10 release candidate was built that way on the test PC (CMake 4.3.1, MSVC 14.52) with the same result.
+
 Expected: the build ends without warnings (everything is `/W4 /WX`), and CTest reports
 `100% tests passed, 0 tests failed out of 2` (`core_tests` and `app_tests`). The executables are in
 `build\Release\`: `gao.exe` (command line) and `GpuAutoOptimizer.exe` (window, tray, watchdog).
@@ -160,7 +165,7 @@ AGENTS.md lists the targeted tests that take minutes instead of a 40-minute run.
   card: Windows Terminal draws with the GPU and can stop updating while the run goes on (#91). Every run
   is also written to `%ProgramData%\GpuAutoOptimizer\run.log`.
 
-## 2. Current project state (2026-11-17)
+## 2. Current project state (2026-11-18)
 
 - **`main`:** `b49d43d` "fix: address hardware validation findings (#93)". Version in
   `src/core/version.hpp`: `0.4.9`.
@@ -169,34 +174,27 @@ AGENTS.md lists the targeted tests that take minutes instead of a 40-minute run.
   `v0.4.10-rc3` is the annotated tag on `1321aba` (branch `release/0.4.10-rc3`): `main` `b49d43d` plus
   the version commit. Releases are built by `.github/workflows/release.yml` from a `v*` tag that matches
   `version.hpp`, into a **draft** release; publishing is manual.
+- **The 0.4.10 release candidate:** branch `release/0.4.10`, draft PR #95 into `main`. It holds `main`
+  `b49d43d`, the merges of `fix/undervolt-hot-card` (the three check 112 fixes and decision D8) and
+  `docs/check112-gtx1080ti`, what check 112 confirmed and left unknown, the version commit `0.4.10`, and
+  check 115 (the release build on a GTX 1060). CI, ASan and the Release workflow's dry run pass on it.
 
 ### 2.1 v0.4.10: what is done and what is left
 
-Done and on `main`: #83 (GTX 10 curve units and 38/3 MHz grid), #84 design and implementation (#86, #87:
-Undervolt judged against stock), #85 (one tray Exit question), #88 (pre-releases are offered their own
-final), #93 (recovery after a driver reset, result lines). Hardware checks 110 (a, b), 111, 113, 114 pass
-(recorded in `docs/hardware-checks.md` on `main`).
+Done on `release/0.4.10`: everything of 0.4.10 on `main` (#83, #84 via #86 and #87, #85, #88, #93), the
+check 112 fixes, the version commit, the final release notes (kept outside the repository, from the body
+of the v0.4.10-rc3 release), hardware checks 110 to 115 recorded.
 
-Left, in order:
+Left, in order, all for the owner:
 
-1. **Check 112 result** — run on a hot GTX 1080 Ti with v0.4.10-rc3. The mechanism passed (the Undervolt
-   profile stopped before the search with `RESULT: not started -- not compared`), but the rule does not
-   judge that card sensibly. Recorded on branch `docs/check112-gtx1080ti` (not merged).
-2. **Decide on the three check 112 findings**, fixed on branch `fix/undervolt-hot-card` (not merged, no PR
-   yet): no second stock measurement after the first stopped at 85 °C with fans at 100 % or not settable;
-   Best and Max offer Undervolt only where it can run (decision D8); the "not compared" refusal no longer
-   says "Nothing was changed". The owner decides whether this goes into 0.4.10. If yes: open a PR from the
-   branch, CI green, merge, and a release candidate or targeted check on a hot card as the owner decides.
-3. **#84:** final comment and close once 1 and 2 are settled.
-4. **Version commit** to `0.4.10` (PR; owner's approval).
-5. **Release notes:** start from the body of the v0.4.10-rc3 release on GitHub, drop its first two
-   paragraphs (the release-candidate banner), fill in the check 112 line under "Verified", and add the
-   hot-card fix if it was merged. Check every number against the release commit.
-6. CI including ASan green on the release commit; local `cmake --workflow --preset ci`.
-7. Smoke test of the built zip: `gao --version`, `gao --status`, `gao --apply`, the tray start,
-   `boot.log`.
-8. Tag `v0.4.10` (owner), let the Release workflow build the draft, publish it as Latest (owner).
-9. After publishing: an installed 0.4.9 is offered 0.4.10 and updates itself (as check 109).
+1. Review and merge PR #95.
+2. Optional, in a signed-in desktop session (the test PC has none): the two GUI items of #82 (Quiet kept
+   across the restart as administrator, the "Stopping..." state) and a sign-in after an update.
+3. Tag `v0.4.10` on the merged commit; the Release workflow builds the draft; publish it as Latest with
+   the final notes.
+4. After publishing: an installed 0.4.9 is offered 0.4.10 and updates itself (as check 109).
+5. #84 stays open for its last criterion: tolerances backed by the scatter of a hot card, which needs a
+   card whose stock measurement completes hot (check 112 could not).
 
 Known and out of scope for 0.4.10 (open issues, see 2.2): #89, #90, #91. Builds from before `97d9bf2`
 (`0.4.10-rc1`, `-rc2`, `0.4.10-check112`) are not offered the final 0.4.10; the notes tell their
@@ -206,8 +204,8 @@ testers to install it once by hand.
 
 | # | Kind | Title (short) | State and next step |
 |---|---|---|---|
-| #82 | issue | v0.4.10 follow-up fixes and validation | The tracking issue for 2.1; two validation items (Quiet across the UAC restart, the "Stopping…" state) not yet seen |
-| #84 | issue | Fair stock-versus-undervolt comparison | Implemented (#86, #87); waits for 2.1 steps 1–3 |
+| #82 | issue | v0.4.10 follow-up fixes and validation | The tracking issue for 2.1; the GUI items need a signed-in desktop (2.1 step 2) |
+| #84 | issue | Fair stock-versus-undervolt comparison | Implemented (#86, #87) and the check 112 fixes on `release/0.4.10`; open for the hot-card scatter (2.1 step 5) |
 | #89 | issue | Curve settle loop allows 8 MHz; a GTX 10 step is 12.67 MHz | Valid, after 0.4.10 |
 | #90 | issue | A fan tool (FanControl) is not recognised at the start of a run | Valid, after 0.4.10 |
 | #91 | issue | Say where a run logs; advise a console that does not draw with the GPU | Valid, after 0.4.10 |
@@ -219,8 +217,9 @@ testers to install it once by hand.
 |---|---|---|---|---|
 | `main` | `b49d43d` | — | The trunk | — |
 | `design/ux-redesign` | `ecf42d5` | no (by design) | The approved UX redesign, revision 5: proposal, mockups, generator, grid check, implementation plan (section 4) | Never merge as a whole; the implementation stages branch from `main` and take the spec from here. Merge the docs only if the owner wants them on `main` |
-| `fix/undervolt-hot-card` | `bcfcd65` (on `b5f90f9`) | no | The three check 112 fixes with tests (`src/core/search.*`, `src/app/common_optimize.cpp`, `tests/test_search_stock.cpp`) and the D8 row in `docs/development.md` | Owner decides (2.1 step 2); then a PR |
-| `docs/check112-gtx1080ti` | `0ea059d` | no | The check 112 row in `docs/hardware-checks.md` with the GTX 1080 Ti results | PR with, or before, the release |
+| `release/0.4.10` | see PR #95 | no | The 0.4.10 release candidate (2, 2.1) | Merge with PR #95, then tag |
+| `fix/undervolt-hot-card` | `bcfcd65` (on `b5f90f9`) | no, merged into `release/0.4.10` | The three check 112 fixes with tests (`src/core/search.*`, `src/app/common_optimize.cpp`, `tests/test_search_stock.cpp`) and the D8 row in `docs/development.md` | May be deleted once PR #95 is merged |
+| `docs/check112-gtx1080ti` | `0ea059d` | no, merged into `release/0.4.10` | The check 112 row in `docs/hardware-checks.md` with the GTX 1080 Ti results | May be deleted once PR #95 is merged |
 | `release/0.4.10-rc3` | `1321aba` | no (version commit only) | The source of the published v0.4.10-rc3 (also tagged) | Keep while 0.4.10 is not final; may be deleted afterwards, the tag keeps the commit |
 | `fix/gui-icon-centre-admin-link` | `65fef8d` | no | PR #80 | See #80 above |
 | `test/check112` | `a1e18d8` | its work yes, squashed in #87 (`17964d2`); only the version commit is not | The source of the private `0.4.10-check112` test build; `docs/hardware-checks.md` check 111 cites build `f2b235e`, which exists only on this branch | Superseded; delete only when that citation no longer needs to resolve |
