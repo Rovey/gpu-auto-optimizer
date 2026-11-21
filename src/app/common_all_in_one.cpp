@@ -46,10 +46,12 @@ FanStepOutcome fan_step(const OptimizeHooks& hooks, int start_pct) {
         const GpuControl& gpu;
         ~FansBack() { if (gpu.set_fan_auto) gpu.set_fan_auto(); }
     } fans_back{gpu};
-    auto to_stock = [&](const std::string& reason) {
-        const bool stock = gpu.reset_to_stock && gpu.reset_to_stock();
-        return fail(reason + (stock ? " -- card at stock" : " -- reset to stock FAILED, run `gao --reset`"));
-    };
+    // A probe of this step that reset the driver (in the fan tune or the
+    // final test): a reset to stock that fails after it is the card out of
+    // reach (hardware check 115), not a write it refused.
+    bool driver_reset = false;
+    auto is_reset = [](Verdict v) { return v == Verdict::DeviceLost || v == Verdict::Stalled || v == Verdict::NoTelemetry; };
+    auto to_stock = [&](const std::string& reason) { return fail(reset_and_say(gpu, reason, driver_reset)); };
     if (!apply_profile(gpu, profile, &why)) return fail("the tune could not be applied for the fan tune: " + why);
 
     const KeepAwake keep_awake;
@@ -60,7 +62,9 @@ FanStepOutcome fan_step(const OptimizeHooks& hooks, int start_pct) {
             if (fans) fans->tick(t.temp_c, t.power_w, std::chrono::steady_clock::now(), t.power_limit_w);
             return t;
         };
-        return run_stability([&] { return load->Batch(); }, read, seconds, max_temp, hooks.aborted, stall_below);
+        const StabilityResult r = run_stability([&] { return load->Batch(); }, read, seconds, max_temp, hooks.aborted, stall_below);
+        if (is_reset(r.verdict)) driver_reset = true;
+        return r;
     };
     FanTuneIo io;
     io.probe = probe;
@@ -97,8 +101,7 @@ FanStepOutcome fan_step(const OptimizeHooks& hooks, int start_pct) {
         out.note = std::string("the final test ended ") + verdict_name(out.final.verdict) + "; the tuned fan curve is not kept";
         log("  " + out.note);
         out.fan.ok = false;
-        const bool lost = out.final.verdict == Verdict::DeviceLost || out.final.verdict == Verdict::Stalled ||
-                          out.final.verdict == Verdict::NoTelemetry;
+        const bool lost = is_reset(out.final.verdict);
         if (lost && !(gpu.recover && gpu.recover() && apply_profile(gpu, profile, &why)))
             return to_stock("the tune could not be put back after a driver reset in the final test");
         return out;
@@ -133,7 +136,10 @@ AllInOneOutcome all_in_one_steps(const OptimizeHooks& outer) {
         GuardedGpu hw(kGpu);
         std::string init_error;
         const bool stock = hw.Init(&init_error) && hw.control().reset_to_stock && hw.control().reset_to_stock();
-        return stop(why + (stock ? " -- card at stock" : " -- reset to stock FAILED, run `gao --reset`"));
+        // A step that lost the card to a driver reset (gpu_unreachable): this
+        // reset failing too is the same loss, and gets the same advice.
+        const bool lost = gpu_unreachable(out.overclock) || gpu_unreachable(out.undervolt);
+        return stop(why + stock_end(stock, lost));
     };
     if (const std::string gpus = several_gpus_refusal(); !gpus.empty()) return stop(gpus);
     if (const std::string tool = other_tool(); !tool.empty()) return stop(tool);
@@ -173,6 +179,9 @@ AllInOneOutcome all_in_one_steps(const OptimizeHooks& outer) {
     if (oc_mhz > stock_mhz && stock_mhz > 0) how.clock_khz = (stock_mhz + oc_mhz) / 2 * 1000;
     out.undervolt = run_undervolt(hooks, true, how);
     if (aborted()) return end_at_stock("aborted");
+    // A card the driver took away is not tuned on: no fan step on it.
+    if (gpu_unreachable(out.undervolt))
+        return end_at_stock("the undervolt: " + out.undervolt.result.reason + " (its own reset to stock failed; tried again)");
     if (out.undervolt.ran && out.undervolt.result.ok && out.undervolt.saved) {
         out.now = out.undervolt.result.after;
     } else {

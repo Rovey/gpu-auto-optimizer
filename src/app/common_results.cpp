@@ -9,10 +9,32 @@ int driver_resets(const OptimizeOutcome& o) { return o.ran ? o.result.driver_res
 int driver_resets(const UndervoltOutcome& o) { return o.ran ? o.result.driver_resets : 0; }
 int driver_resets(const AllInOneOutcome& o) { return driver_resets(o.overclock) + driver_resets(o.undervolt); }
 
+bool gpu_unreachable(const OptimizeOutcome& o) { return o.ran && !o.result.ok && gao::gpu_unreachable(o.result.stock_restored, o.result.driver_resets); }
+bool gpu_unreachable(const UndervoltOutcome& o) { return o.ran && !o.result.ok && gao::gpu_unreachable(o.result.stock_restored, o.result.driver_resets); }
+bool gpu_unreachable(const AllInOneOutcome& o) { return !o.ok && o.error.ends_with(kGpuUnreachableEnd); }
+bool gpu_unreachable(const RetestOutcome& o) { return o.ran && !o.ok && o.error.ends_with(kGpuUnreachableEnd); }
+
+std::string stock_end(bool stock, bool after_reset) {
+    return stock                                           ? " -- card at stock"
+           : gao::gpu_unreachable(stock, after_reset ? 1 : 0) ? kGpuUnreachableEnd
+                                                           : " -- reset to stock FAILED, run `gao --reset`";
+}
+
+std::string reset_and_say(const GpuControl& gpu, const std::string& reason, bool after_reset) {
+    return reason + stock_end(gpu.reset_to_stock && gpu.reset_to_stock(), after_reset);
+}
+
 namespace {
 
-std::string not_applied(const std::string& reason, bool stock_restored) {
-    return "RESULT: not applied -- " + reason + " (" + (stock_restored ? "card at stock" : "reset to stock FAILED, run `gao --reset`") + ")";
+// The RESULT line of a run that ended without a result, and, when the card
+// could not be reached, what to do about it.
+std::vector<std::string> not_applied(const std::string& reason, bool stock_restored, bool unreachable) {
+    if (unreachable) {
+        std::vector<std::string> lines{"RESULT: not applied -- " + reason + " (reset to stock FAILED, the GPU could not be reached)"};
+        lines.insert(lines.end(), std::begin(kGpuUnreachableLines), std::end(kGpuUnreachableLines));
+        return lines;
+    }
+    return {"RESULT: not applied -- " + reason + " (" + (stock_restored ? "card at stock" : "reset to stock FAILED, run `gao --reset`") + ")"};
 }
 
 void add_resets(std::vector<std::string>& lines, int resets) {
@@ -30,7 +52,7 @@ std::vector<std::string> result_lines(const OptimizeOutcome& o) {
     const OptimizeResult& r = o.result;
     std::vector<std::string> lines;
     if (!r.ok) {
-        lines.push_back(not_applied(r.reason, r.stock_restored));
+        lines = not_applied(r.reason, r.stock_restored, gpu_unreachable(o));
         add_resets(lines, driver_resets(o));
         return lines;
     }
@@ -51,7 +73,7 @@ std::vector<std::string> result_lines(const UndervoltOutcome& o) {
     const UndervoltResult& r = o.result;
     std::vector<std::string> lines;
     if (!r.ok) {
-        lines.push_back(not_applied(r.reason, r.stock_restored));
+        lines = not_applied(r.reason, r.stock_restored, gpu_unreachable(o));
         add_resets(lines, driver_resets(o));
         return lines;
     }
@@ -77,6 +99,7 @@ std::vector<std::string> result_lines(const AllInOneOutcome& o) {
     std::vector<std::string> lines;
     if (!o.ok) {
         lines.push_back("RESULT: not applied -- " + o.error);
+        if (gpu_unreachable(o)) lines.insert(lines.end(), std::begin(kGpuUnreachableLines), std::end(kGpuUnreachableLines));
         add_resets(lines, driver_resets(o));
         return lines;
     }
@@ -125,6 +148,7 @@ std::vector<std::string> result_lines(const RetestOutcome& o) {
                    : step_name(o.first_step) + (o.final_step != o.first_step ? " to " + step_name(o.final_step) : std::string()) +
                          " failed: ";
         lines.push_back("RESULT: not applied -- " + failed + o.error);
+        if (gpu_unreachable(o)) lines.insert(lines.end(), std::begin(kGpuUnreachableLines), std::end(kGpuUnreachableLines));
     } else if (o.final_step != o.first_step) {
         // Every step from the first to the one below the step that held failed.
         const int last_failed = o.final_step - 1;

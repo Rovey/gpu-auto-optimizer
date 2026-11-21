@@ -125,7 +125,7 @@ SteppedRetestResult retest_stepping(Config& c, const std::string& driver, const 
         }
     };
     if (s.first_step > 0) name_step(s.first_step);
-    int resets = 0;   // driver resets in this stepped retest: the second ends it, as it ends a tuning run
+    int& resets = s.driver_resets;   // the second ends it, as it ends a tuning run
     for (;;) {
         s.last = retest_saved_tune(c, driver, gpu_id, gpu, step_io);
         if (s.last.ok) {
@@ -180,6 +180,7 @@ SteppedRetestResult retest_stepping(Config& c, const std::string& driver, const 
                     s.last.test.verdict = Verdict::Aborted;
                     return s;
                 case Health::Lost:
+                    ++resets;
                     record_failed(*c.profile, step, s);
                     s.last.reason += "; the driver reset again when the card was checked at stock (" + seen + "); optimize again";
                     return s;

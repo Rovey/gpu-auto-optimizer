@@ -54,6 +54,13 @@ public:
             return outcome ? outcome->ran && outcome->result.ok && outcome->saved
                            : undervolt && undervolt->ran && undervolt->result.ok && undervolt->saved;
         }
+        // It lost the card to a driver reset and could not set it to stock
+        // after that (app::gpu_unreachable): nothing can be put back on it.
+        bool unreachable() const {
+            if (retest) return app::gpu_unreachable(*retest);
+            if (all_in_one) return app::gpu_unreachable(*all_in_one);
+            return outcome ? app::gpu_unreachable(*outcome) : undervolt && app::gpu_unreachable(*undervolt);
+        }
     };
 
     explicit OptimizeWorker(std::function<void()> wake) : wake_(std::move(wake)) {}

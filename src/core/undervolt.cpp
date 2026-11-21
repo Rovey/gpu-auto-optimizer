@@ -57,9 +57,9 @@ UndervoltResult find_undervolt(const GpuControl& gpu, Journal& journal, const Un
     // the search: open from before the reconnect until the card is back, or
     // until the way out has reset it. 0: none open.
     int recovery_entry = 0;
-    auto end_recovery = [&] {
+    auto end_recovery = [&](const char* verdict) {
         if (recovery_entry == 0) return;
-        if (!journal.complete(recovery_entry, "RECOVERED"))
+        if (!journal.complete(recovery_entry, verdict))
             log("warning: the crash journal entry could not be closed; later runs will stay below this candidate");
         recovery_entry = 0;
     };
@@ -68,8 +68,10 @@ UndervoltResult find_undervolt(const GpuControl& gpu, Journal& journal, const Un
         r.reason = why;
         r.stock_restored = to_stock();
         if (!r.stock_restored && gpu.recover && gpu.recover()) r.stock_restored = to_stock();
-        end_recovery();
-        log("stopped: " + why + (r.stock_restored ? " -- card restored to stock" : " -- reset FAILED, run `gao --reset`"));
+        end_recovery(recovery_end_verdict(r.stock_restored));
+        log("stopped: " + why + (r.stock_restored                               ? " -- card restored to stock"
+                                 : gpu_unreachable(false, r.driver_resets) ? kGpuUnreachableLog
+                                                                           : " -- reset FAILED, run `gao --reset`"));
         return r;
     };
 
@@ -241,7 +243,7 @@ UndervoltResult find_undervolt(const GpuControl& gpu, Journal& journal, const Un
             stopped = "the card did not recover after a driver reset";
             return false;
         }
-        end_recovery();
+        end_recovery(kRecovered);
         return true;
     };
 
