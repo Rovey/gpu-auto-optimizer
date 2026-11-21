@@ -47,6 +47,27 @@ void update_line(const UiState& s, const UiActions& act) {
     if (clicked) act.install_update();
 }
 
+// Whether the window has administrator rights. Without them the line is a
+// link that restarts the app elevated, as the Dashboard's button does.
+void admin_line(const UiState& s, const UiActions& act) {
+    const std::string text = ic(kIconShield) + (s.elevated ? "  Administrator" : "  Not administrator");
+    if (s.elevated || !act.restart_elevated) {
+        ImGui::PushStyleColor(ImGuiCol_Text, s.elevated ? kGood : kDim);
+        ImGui::TextUnformatted(text.c_str());
+        ImGui::PopStyleColor();
+        return;
+    }
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    const bool clicked = ImGui::InvisibleButton("##admin", ImGui::CalcTextSize(text.c_str()));   // where the text stands when elevated
+    const bool hovered = ImGui::IsItemHovered();
+    ImGui::GetWindowDrawList()->AddText(p, ImGui::GetColorU32(hovered ? kText : kDim), text.c_str());
+    if (hovered) {
+        ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+        ImGui::SetTooltip("Click to restart as administrator.\nTuning, Apply and the fan curve need it.");
+    }
+    if (clicked) act.restart_elevated(std::nullopt);
+}
+
 void sidebar(UiState& s, const UiActions& act) {
     ImGui::PushStyleColor(ImGuiCol_ChildBg, kNav);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(em() * 0.6f, em() * 0.8f));
@@ -62,9 +83,7 @@ void sidebar(UiState& s, const UiActions& act) {
     ImGui::SetCursorPosY(ImGui::GetWindowHeight() - em() * (update ? 3.9f : 2.2f));
     if (update) update_line(s, act);
     ImGui::SetCursorPosY(ImGui::GetWindowHeight() - em() * 2.2f);
-    ImGui::PushStyleColor(ImGuiCol_Text, s.elevated ? kGood : kDim);
-    ImGui::TextUnformatted((ic(kIconShield) + (s.elevated ? "  Administrator" : "  Not administrator")).c_str());
-    ImGui::PopStyleColor();
+    admin_line(s, act);
     ImGui::EndChild();
 }
 
