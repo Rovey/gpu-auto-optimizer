@@ -1,7 +1,7 @@
 # Handover
 
 Everything a developer or coding agent needs to continue this project on another computer, without the
-previous machine, its local files or any conversation history. State as of **2026-11-17**.
+previous machine, its local files or any conversation history. State as of **2026-11-22**, after the v0.4.10 release.
 
 Read with: [README](../README.md) (the product), [AGENTS.md](../AGENTS.md) (rules for agents),
 [development.md](development.md) (code layout, design decisions, releases),
@@ -165,68 +165,47 @@ AGENTS.md lists the targeted tests that take minutes instead of a 40-minute run.
   card: Windows Terminal draws with the GPU and can stop updating while the run goes on (#91). Every run
   is also written to `%ProgramData%\GpuAutoOptimizer\run.log`.
 
-## 2. Current project state (2026-11-18)
+## 2. Current project state (2026-11-22)
 
-- **`main`:** `b49d43d` "fix: address hardware validation findings (#93)". Version in
-  `src/core/version.hpp`: `0.4.9`.
-- **Latest release:** `v0.4.9` (2026-11-12), marked Latest.
-- **Pre-releases of 0.4.10:** `v0.4.10-rc1`, `v0.4.10-rc2`, `v0.4.10-rc3` (published 2026-11-16).
-  `v0.4.10-rc3` is the annotated tag on `1321aba` (branch `release/0.4.10-rc3`): `main` `b49d43d` plus
-  the version commit. Releases are built by `.github/workflows/release.yml` from a `v*` tag that matches
-  `version.hpp`, into a **draft** release; publishing is manual.
-- **The 0.4.10 release candidate:** branch `release/0.4.10`, draft PR #95 into `main`. It holds `main`
-  `b49d43d`, the merges of `fix/undervolt-hot-card` (the three check 112 fixes and decision D8) and
-  `docs/check112-gtx1080ti`, what check 112 confirmed and left unknown, the version commit `0.4.10`, and
-  check 115 (the release build on a GTX 1060). CI, ASan and the Release workflow's dry run pass on it.
+- **Latest release:** `v0.4.10`, published 2026-11-21: the annotated tag on the merge commit `7124045`
+  "Release 0.4.10 (#95)". Version in `src/core/version.hpp`: `0.4.10`. The executables are unsigned; the
+  release has the zip, its `.sha256` and a build provenance attestation.
+- **Pre-releases of 0.4.10:** `v0.4.10-rc1`, `-rc2` and `-rc3` stay published with their tags.
+- **Releases** are built by `.github/workflows/release.yml` from a `v*` tag that matches `version.hpp`,
+  into a **draft** release; publishing is manual. A release branch with commits that the docs cite by hash
+  is merged with a **merge commit**, as #95 was.
+- **`main` after the release:** `git log --oneline v0.4.10..origin/main` lists what is not in a release yet.
+- **`tools/window-shot.ps1`** (section 1.4) now says so when the program ends at once, as it does in a
+  session without a desktop, instead of waiting for a window.
 
-### 2.1 v0.4.10: what is done and what is left
+### 2.1 What v0.4.10 did not show on hardware
 
-Done on `release/0.4.10`: everything of 0.4.10 on `main` (#83, #84 via #86 and #87, #85, #88, #93), the
-check 112 fixes, the version commit, the final release notes (kept outside the repository, from the body
-of the v0.4.10-rc3 release), hardware checks 110 to 115 recorded.
+The checks are recorded in [hardware-checks.md](hardware-checks.md) (110 to 116 for this release).
+Covered by unit tests and not seen on a real card:
 
-Left, in order, all for the owner:
+- the "GPU could not be reached" advice, the skipped put-back after a stop on such a card, and the crash
+  journal's `RECOVERY FAILED` and `GPU UNREACHABLE` verdicts: no GPU loss was provoked after these changes;
+- the three check 112 fixes on a card that is hot at stock: no such card was available;
+- the final code on the reference RTX 4070 (its six-profile run was with the code from before #93).
 
-1. Review and merge PR #95.
-2. Optional, in a signed-in desktop session (the test PC has none): the two GUI items of #82 (Quiet kept
-   across the restart as administrator, the "Stopping..." state) and a sign-in after an update.
-3. Tag `v0.4.10` on the merged commit; the Release workflow builds the draft; publish it as Latest with
-   the final notes.
-4. After publishing: an installed 0.4.9 is offered 0.4.10 and updates itself (as check 109).
-5. #84 stays open for its last criterion: tolerances backed by the scatter of a hot card, which needs a
-   card whose stock measurement completes hot (check 112 could not).
-
-Known and out of scope for 0.4.10 (open issues, see 2.2): #89, #90, #91. Builds from before `97d9bf2`
-(`0.4.10-rc1`, `-rc2`, `0.4.10-check112`) are not offered the final 0.4.10; the notes tell their
-testers to install it once by hand.
+#84 stays open for its last criterion: tolerances backed by the scatter of a hot card, which needs a card
+whose stock measurement completes hot (check 112 could not). Builds from before `97d9bf2` (`0.4.10-rc1`,
+`-rc2`, `0.4.10-check112`) are not offered the final 0.4.10; their testers install it once by hand.
 
 ### 2.2 Open issues and pull requests
 
-| # | Kind | Title (short) | State and next step |
-|---|---|---|---|
-| #82 | issue | v0.4.10 follow-up fixes and validation | The tracking issue for 2.1; the GUI items need a signed-in desktop (2.1 step 2) |
-| #84 | issue | Fair stock-versus-undervolt comparison | Implemented (#86, #87) and the check 112 fixes on `release/0.4.10`; open for the hot-card scatter (2.1 step 5) |
-| #89 | issue | Curve settle loop allows 8 MHz; a GTX 10 step is 12.67 MHz | Valid, after 0.4.10 |
-| #90 | issue | A fan tool (FanControl) is not recognised at the start of a run | Valid, after 0.4.10 |
-| #91 | issue | Say where a run logs; advise a console that does not draw with the GPU | Valid, after 0.4.10 |
-| #80 | PR | Centre the Detect GPU icon; restart as administrator from the sidebar | Open since 2026-11-12, not part of 0.4.10; the UX redesign redraws the sidebar (stage 3) and the Dashboard (stage 7), so decide whether to merge it first or fold it into those stages |
+`gh issue list` and `gh pr list` are the current lists; this document does not repeat them.
 
-### 2.3 Branches on origin
+### 2.3 Branches that stay on origin
 
-| Branch | Latest commit | Merged into main? | What and why it is kept | Next |
-|---|---|---|---|---|
-| `main` | `b49d43d` | — | The trunk | — |
-| `design/ux-redesign` | `ecf42d5` | no (by design) | The approved UX redesign, revision 5: proposal, mockups, generator, grid check, implementation plan (section 4) | Never merge as a whole; the implementation stages branch from `main` and take the spec from here. Merge the docs only if the owner wants them on `main` |
-| `release/0.4.10` | see PR #95 | no | The 0.4.10 release candidate (2, 2.1) | Merge with PR #95, then tag |
-| `fix/undervolt-hot-card` | `bcfcd65` (on `b5f90f9`) | no, merged into `release/0.4.10` | The three check 112 fixes with tests (`src/core/search.*`, `src/app/common_optimize.cpp`, `tests/test_search_stock.cpp`) and the D8 row in `docs/development.md` | May be deleted once PR #95 is merged |
-| `docs/check112-gtx1080ti` | `0ea059d` | no, merged into `release/0.4.10` | The check 112 row in `docs/hardware-checks.md` with the GTX 1080 Ti results | May be deleted once PR #95 is merged |
-| `release/0.4.10-rc3` | `1321aba` | no (version commit only) | The source of the published v0.4.10-rc3 (also tagged) | Keep while 0.4.10 is not final; may be deleted afterwards, the tag keeps the commit |
-| `fix/gui-icon-centre-admin-link` | `65fef8d` | no | PR #80 | See #80 above |
-| `test/check112` | `a1e18d8` | its work yes, squashed in #87 (`17964d2`); only the version commit is not | The source of the private `0.4.10-check112` test build; `docs/hardware-checks.md` check 111 cites build `f2b235e`, which exists only on this branch | Superseded; delete only when that citation no longer needs to resolve |
-| `docs/handover` | — | no | This document and `tools/window-shot.ps1` | Merge when the owner agrees |
+| Branch | Why it stays | Next |
+|---|---|---|
+| `main` | The trunk | — |
+| `design/ux-redesign` | The approved UX redesign, revision 5: proposal, mockups, generator, grid check, implementation plan (section 4). Documents only | Never merge as a whole; the implementation stages branch from `main` and take the spec from here |
+| `test/check112` | The source of the private `0.4.10-check112` test build; `docs/hardware-checks.md` check 111 cites build `f2b235e`, which exists only on this branch | Keep while that citation needs to resolve |
 
-Every other branch of the past is merged and deleted; the heads of merged PRs stay reachable on GitHub
-as `refs/pull/<n>/head`.
+Release and fix branches are deleted once their content is on `main`; the tags keep the release commits,
+and the heads of merged PRs stay reachable on GitHub as `refs/pull/<n>/head`.
 
 ## 3. Where the history lives
 
@@ -245,8 +224,8 @@ machines and from private test PCs (they contain personal details), and the buil
 - **Revision 5 is approved** (2026-11-17), with every decision taken (D1–D15, see 4.3) and the
   implementation plan approved, including the estimates.
 - **Nothing is built.** The branch holds documents only; `src/` on it equals `main`.
-- **When to start:** after v0.4.10 is final, that is, published as the Latest release (2.1 step 8). Not
-  in a 0.4.10 build, and not before.
+- **When to start:** the condition (v0.4.10 published as the Latest release) is met since 2026-11-21.
+  The build itself starts when the owner says so.
 - **How:** each stage is its own branch and PR from `main`, reviewed and merged on its own. Revision 5
   (the four mockups and sections 6–8 of the proposal) is the specification; a stage that cannot follow it
   stops and asks instead of deviating.
@@ -268,7 +247,7 @@ D1 body text 15 px · D2 no accent-tinted icons on tiles and cards · D3 profile
 collapsed, no sparklines · D6 "not kept" in warning amber (status icon only) · **D7** the engine reporting
 additions of 11.2 (phase, recovery steps, `ResultKind`, measurements of rejected results, crash ceiling) as
 a separate, reporting-only PR (stage 1a); no behaviour change · D8 Undervolt suggested after Best/Max only
-on a hot card where Undervolt can run (built on `fix/undervolt-hot-card`) · D9 the busy-card check shown on
+on a hot card where Undervolt can run (built in `b5f90f9` and `bcfcd65`, on `main`) · D9 the busy-card check shown on
 Choose as information; the definitive check stays at Start · D10 **rejected** (no screen-recording caption)
 · D11 dark theme only · D12 **rejected** (keyboard behaviour as today) · D13 start after 0.4.10 final ·
 **D14** Best, Max and All in one also save `avg_temp_c` (counted-part average); the Dashboard compares
@@ -324,7 +303,5 @@ the old build's, within about 1 %).
 3. `& "$bin\cmake.exe" --workflow --preset ci` (1.2): expect 2 of 2 test suites passed.
 4. `git fetch origin` and look at the branches of 2.3 (`git branch -r`).
 5. For the UX design: `git switch design/ux-redesign`, run the commands of 1.3, expect `PASS`.
-6. For 0.4.10: follow 2.1 from step 1; the check 112 results are on `docs/check112-gtx1080ti`, the fixes on
-   `fix/undervolt-hot-card`.
-7. Only after v0.4.10 is published as Latest: start UX stage 0 (and 1a, 1b, 2 in parallel) on new
-   branches from `main`, per section 4.
+6. When the owner starts the redesign: UX stage 0 (and 1a, 1b, 2 in parallel) on new branches from `main`,
+   per section 4.
