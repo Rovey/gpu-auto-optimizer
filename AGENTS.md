@@ -3,6 +3,7 @@
 Instructions for AI coding agents working in this repository. A native C++20 Windows tool that tunes
 NVIDIA GPUs (power limit, core and memory offsets) through NVML and NVAPI, with a DX11 stress test.
 User-facing overview: `README.md`. Code layout, profiles and release process: `docs/development.md`.
+Setting up another computer, the current state, preserved branches and the UX handover: `docs/handover.md`.
 
 ## Hard requirement: English only
 
