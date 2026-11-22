@@ -204,6 +204,7 @@ Telemetry read_with_fans(const GpuControl& gpu, FanDriver& fans, const OptimizeH
     const FanState now = fans.tick(t.temp_c, t.power_w, std::chrono::steady_clock::now(), t.power_limit_w);
     if (now.mode != before && now.mode == FanMode::Failed && hooks.log) hooks.log("fans: a write did not verify; the driver has them again");
     if (now.mode != before && now.mode == FanMode::Foreign && hooks.log) hooks.log("fans: another program set them; leaving them alone");
+    if (before == FanMode::Failed && now.mode == FanMode::Curve && hooks.log) hooks.log("fans: back on the run's curve after the reconnect");
     return t;
 }
 

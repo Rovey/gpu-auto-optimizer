@@ -103,7 +103,7 @@ enum class FanMode {
     Driver,    // the driver controls the fans (fan-stop zone, no reading, or not started)
     Curve,     // we set a manual speed
     Foreign,   // another program set a manual speed; we stepped aside
-    Failed,    // a write did not verify; handed back and stopped
+    Failed,    // a write did not verify; handed back and stopped until a reconnect
 };
 
 struct FanState {
@@ -148,6 +148,7 @@ private:
     FanState state_;
     std::optional<int> written_;   // the manual speed we set, while it is ours
     std::optional<std::chrono::steady_clock::time_point> written_at_;
+    std::optional<unsigned> failed_on_;   // the connection a fan call failed on; empty: a reconnect does not help
     int min_pct_;
 };
 
