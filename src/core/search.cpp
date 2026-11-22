@@ -180,16 +180,31 @@ std::string undervolt_not_compared(const StabilityResult& stock, bool second_ski
     return s;
 }
 
+// Whether a program with this file name (in lower case) runs; Windows does
+// not care about the case of a file name.
+static bool is_running(const std::vector<std::string>& running, std::string_view exe) {
+    return std::any_of(running.begin(), running.end(), [&](const std::string& name) {
+        return std::equal(name.begin(), name.end(), exe.begin(), exe.end(),
+                          [](char a, char b) { return std::tolower(static_cast<unsigned char>(a)) == b; });
+    });
+}
+
 std::string other_tool_refusal(const std::vector<std::string>& running) {
-    auto runs = [&](std::string_view exe) {
-        return std::any_of(running.begin(), running.end(), [&](const std::string& name) {
-            return std::equal(name.begin(), name.end(), exe.begin(), exe.end(),
-                              [](char a, char b) { return std::tolower(static_cast<unsigned char>(a)) == b; });
-        });
-    };
-    const char* tool = runs("msiafterburner.exe") ? "MSI Afterburner" : runs("rtss.exe") ? "RivaTuner Statistics Server (RTSS)" : nullptr;
+    const char* tool = is_running(running, "msiafterburner.exe") ? "MSI Afterburner"
+                     : is_running(running, "rtss.exe")           ? "RivaTuner Statistics Server (RTSS)"
+                                                                 : nullptr;
     if (!tool) return {};
     return std::string(tool) + kOtherToolRefusalTail;
+}
+
+std::string fan_tool_warning(const std::vector<std::string>& running) {
+    const char* tool = is_running(running, "fancontrol.exe")     ? "FanControl"
+                     : is_running(running, "argusmonitor.exe")   ? "Argus Monitor"
+                                                                 : nullptr;
+    if (!tool) return {};
+    return std::string("fans: ") + tool +
+           " is running and may hold the fans, so this run's numbers can depend on its curve. Close it for a result on the "
+           "card's own fan control";
 }
 
 namespace {

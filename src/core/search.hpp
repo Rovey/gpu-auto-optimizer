@@ -222,6 +222,11 @@ std::string undervolt_not_compared(const StabilityResult& stock, bool second_ski
 // sets clocks and fans itself, and RivaTuner hooks into every program that
 // uses the card, the stress load among them.
 std::string other_tool_refusal(const std::vector<std::string>& running);
+// A warning when a fan tool runs, given the same names; empty when none does.
+// Such a tool does not stop a run, but while it holds the fans the run's
+// numbers depend on its curve, and a run sees that only once it looks at the
+// fans (#90).
+std::string fan_tool_warning(const std::vector<std::string>& running);
 // What follows the tool's name in that refusal.
 inline constexpr const char* kOtherToolRefusalTail =
     " is running. Close it, also its icon in the notification area, and start again: a run cannot share the card with a "
