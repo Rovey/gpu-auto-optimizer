@@ -570,7 +570,8 @@ flowchart LR
 | `gao --stress-recreate` | Runs the stress test, rebuilds its GPU device, runs it again; prints both scores and the rebuild time; changes nothing |
 
 A run (`--optimize`, `--undervolt`, `--retest`) does not start next to other programs that use the card; add `--busy-ok` as
-the last argument to go on anyway. Ctrl+C during `--optimize` restores stock.
+the last argument to go on anyway. Ctrl+C during `--optimize` restores stock. A fan tool (FanControl) does not stop a run,
+but the run warns that its numbers can then depend on that tool's fan curve: close it for a clean result.
 
 Start long runs from the classic console (`conhost.exe`), not from Windows Terminal: Windows Terminal draws with the GPU
 and can stop updating during a run. `run.log` has every line.

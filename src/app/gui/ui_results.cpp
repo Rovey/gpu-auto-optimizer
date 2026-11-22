@@ -37,8 +37,8 @@ void comparison(const StabilityResult& before, const StabilityResult& after, Row
                           "at the end are of the whole run.");
     else if (before.verdict == Verdict::TooHot)
         wrapped(kDim, "The stock run was stopped at " + reading(before.peak_temp_c, " \xC2\xB0""C") + " after " + duration_text(before.seconds) +
-                          ": with the NVIDIA driver's own fan control (fans at " + reading(before.end_fan_pct, " %") +
-                          ") the card gets that hot under full load. From there the run kept the fans on a curve.");
+                          ": with its fans at " + reading(before.end_fan_pct, " %") +
+                          " the card gets that hot under full load.");
     else if (after.seconds > 3 * before.seconds)
         wrapped(kDim, "The stock run lasted " + duration_text(before.seconds) +
                           ", too short to heat the card through: its temperature and fan speed read lower than they would after " +

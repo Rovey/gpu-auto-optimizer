@@ -66,13 +66,11 @@ std::string several_gpus_refusal() {
     return several_gpus(nvml.DeviceCount()) ? kSeveralGpusRefusal : std::string();
 }
 
-// Why no run starts next to another tuning tool (core/search.hpp); empty when
-// none runs. A list of programs that cannot be had reads as none: this check
-// is a courtesy, the run's own verifications are what it relies on.
-std::string other_tool() {
+// The file names of the programs that run now; none when they cannot be had.
+static std::vector<std::string> running_programs() {
     std::vector<std::string> running;
     const HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-    if (snap == INVALID_HANDLE_VALUE) return {};
+    if (snap == INVALID_HANDLE_VALUE) return running;
     PROCESSENTRY32W e{};
     e.dwSize = sizeof(e);
     for (BOOL more = Process32FirstW(snap, &e); more; more = Process32NextW(snap, &e)) {
@@ -81,7 +79,14 @@ std::string other_tool() {
         running.push_back(std::move(name));
     }
     CloseHandle(snap);
-    if (const std::string tool = other_tool_refusal(running); !tool.empty()) return tool;
+    return running;
+}
+
+// Why no run starts next to another tuning tool (core/search.hpp); empty when
+// none runs. A list of programs that cannot be had reads as none: this check
+// is a courtesy, the run's own verifications are what it relies on.
+std::string other_tool() {
+    if (const std::string tool = other_tool_refusal(running_programs()); !tool.empty()) return tool;
     // The NVIDIA app may run; its Automatic Tuning may not be on. Unknown
     // (nothing documents where it is kept) counts as off.
     if (nvidia_auto_tuning().value_or(false)) return kAutoTuningRefusal;
@@ -93,6 +98,8 @@ std::string other_tool() {
 // ask again.
 BusyGate busy_before_run(const OptimizeHooks& hooks) {
     if (hooks.busy_asked) return {};
+    if (hooks.log)
+        if (const std::string fans = fan_tool_warning(running_programs()); !fans.empty()) hooks.log(fans);
     return busy_gate(
         [&] {
             if (hooks.measuring) hooks.measuring("Looking at what else uses the card", kBusyLookS);
@@ -171,11 +178,15 @@ StockOutcome measure_stock(const OptimizeHooks& hooks, const std::optional<FanCu
     // The card reached the limit with the fans it had. What was measured
     // until then is the "before" of a run on the driver's fans; the run goes
     // on, with the fans on a curve from here. On the run's own curve it is
-    // only the ceiling's measurement (run_undervolt).
+    // only the ceiling's measurement (run_undervolt). The fans of another
+    // program are neither the driver's nor taken over by a curve (#90).
+    const bool other_fans = !out.on_curve && ((fans && fans->state().mode == FanMode::Foreign) ||
+                                              !fan_tool_warning(running_programs()).empty());
     log("  the card reached " + std::to_string(out.result.peak_temp_c) + " C at stock " +
-        (out.on_curve ? "with the fans on the run's curve" : "with the driver's own fan control") + " (fans at " +
-        reading(out.result.end_fan_pct, " %") + "): the measurement stopped there, after " +
-        std::to_string(static_cast<int>(out.result.seconds)) + " s." + (out.on_curve ? "" : " The run goes on with the fans on a curve."));
+        (out.on_curve ? "with the fans on the run's curve" : other_fans ? "with another fan program running" : "with the driver's own fan control") +
+        " (fans at " + reading(out.result.end_fan_pct, " %") + "): the measurement stopped there, after " +
+        std::to_string(static_cast<int>(out.result.seconds)) + " s." +
+        (out.on_curve || other_fans ? "" : " The run goes on with the fans on a curve."));
     if (hooks.measuring) hooks.measuring("Letting the card cool down", kCoolDownMaxS);
     for (int i = 0; i < kCoolDownMaxS * 4 && !(hooks.aborted && hooks.aborted()); ++i) {
         const Telemetry t = fans ? read_with_fans(gpu, *fans, hooks) : gpu.read();

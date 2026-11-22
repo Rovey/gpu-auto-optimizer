@@ -45,6 +45,16 @@ TEST_CASE("a run does not start while MSI Afterburner or RivaTuner runs") {
     CHECK(other_tool_refusal({"RTSS.exe", "MSIAfterburner.exe"}).find("MSI Afterburner") == 0);
 }
 
+TEST_CASE("a fan tool does not stop a run, and the run says that it may hold the fans") {
+    CHECK(fan_tool_warning({"explorer.exe", "FanControl.exe"}) ==
+          "fans: FanControl is running and may hold the fans, so this run's numbers can depend on its curve. Close it for a "
+          "result on the card's own fan control");
+    CHECK_FALSE(fan_tool_warning({"fancontrol.EXE"}).empty());   // Windows does not care about the case
+    CHECK(other_tool_refusal({"FanControl.exe"}).empty());
+    CHECK(fan_tool_warning({}).empty());
+    CHECK(fan_tool_warning({"explorer.exe", "MSIAfterburner.exe", "NotFanControl.exe", "FanControl.exe.bak"}).empty());
+}
+
 TEST_CASE("a run starts when neither runs, whatever else does") {
     CHECK(other_tool_refusal({}).empty());
     CHECK(other_tool_refusal({"explorer.exe", "Discord.exe", "GpuAutoOptimizer.exe", "gao.exe"}).empty());
