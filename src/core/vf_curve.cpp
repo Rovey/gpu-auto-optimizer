@@ -252,13 +252,17 @@ VfApplyResult apply_flat_top(const GpuControl& gpu, int anchor_index, int freq_k
             // The anchor must be on the target; a point above it only must
             // not run more (lower is harmless: the card then simply has no
             // use for that voltage). In the last round a point one clock
-            // step off, with its offset stored as written, is the read-out
-            // moving with temperature (#89: a hot GTX 1080 Ti read one step
-            // over the target in every round).
+            // step over the target, with its offset stored as written, is
+            // the read-out moving with temperature (#89: a hot GTX 1080 Ti).
+            // Only over: an offset that lands a step low would run a clock
+            // the tune was not found at. Only with the lowering still to
+            // come, whose read-back checks the top again.
             const bool stored = std::abs(is->raw_offset - o.raw) <= kVfToleranceKhz;
-            const int tol_khz = r.passes == kVfPasses && stored ? kVfToleranceKhz + grid_khz : kVfToleranceKhz;
+            const int over_khz = r.passes == kVfPasses && stored && tail_drop_khz > 0
+                                     ? std::max(kVfToleranceKhz, grid_khz * 3 / 2 + 1000)   // one step, not two
+                                     : kVfToleranceKhz;
             const int error = is->freq_khz - freq_khz;
-            if (o.index == anchor_index ? std::abs(error) > tol_khz : error > tol_khz) reached = false;
+            if (o.index == anchor_index ? error < -kVfToleranceKhz || error > over_khz : error > over_khz) reached = false;
         }
         // Untouched means: still without an offset. Their frequencies are not
         // compared: the built-in curve itself moves with temperature (45 MHz
