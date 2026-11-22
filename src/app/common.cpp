@@ -96,11 +96,17 @@ std::function<void(const std::string&)> logged_to(const std::filesystem::path& f
         std::snprintf(stamp, sizeof(stamp), "%04d-%02d-%02d %02d:%02d:%02d  ", t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond);
         append_line_durable(file, stamp + line);
     };
-    if (header) write("=== " + std::string(kProductName) + " " + std::string(kVersion));
-    return [write, show = std::move(show)](const std::string& line) {
+    auto log = [write, show = std::move(show)](const std::string& line) {
         write(line);   // on disk before anything acts on it
         if (show) show(line);
     };
+    if (header) {
+        write("=== " + std::string(kProductName) + " " + std::string(kVersion));
+        // A console that draws with the GPU can stop updating during a run (#91).
+        const std::u8string where = file.u8string();
+        log("this run is logged to " + std::string(where.begin(), where.end()));
+    }
+    return log;
 }
 
 std::function<void(const std::string&)> logged(std::function<void(const std::string&)> show, bool header) {

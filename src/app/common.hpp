@@ -36,7 +36,8 @@ void boot_log(const std::string& msg);
 // left. Elevated only (the folder is the administrators'); otherwise `show`
 // is returned as it is.
 // header: the file gets a `=== <product> <version>` line first, which marks the
-// start of a run; false for lines that belong to the run before it.
+// start of a run, and the run says where it logs; false for lines that belong
+// to the run before it.
 std::function<void(const std::string&)> logged(std::function<void(const std::string&)> show, bool header = true);
 // The same, to a file of the caller's choosing. A file over kRunLogMaxBytes
 // is moved aside first (one older file is kept, as <file>.old).
