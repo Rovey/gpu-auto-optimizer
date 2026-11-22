@@ -379,6 +379,7 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
         }
         if (!guard_recovery()) { stopped = "could not write the journal"; return false; }
         log("the driver was reset; reconnecting");
+        step("The driver was reset: reconnecting", 0);   // can take half a minute; the window would still show the old step
         if (!reconnect()) {
             stop("the driver did not come back after a reset");
             return false;

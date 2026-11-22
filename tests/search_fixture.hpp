@@ -406,6 +406,7 @@ inline void check_journal_rules(const Run& run) {
 // and count as a second reset event.
 inline void check_reconnected_up_front(const Run& run) {
     CHECK(run.logged("the driver was reset; reconnecting"));
+    CHECK(std::find(run.steps.begin(), run.steps.end(), std::make_pair(std::string("The driver was reset: reconnecting"), 0.0)) != run.steps.end());
     CHECK_FALSE(run.logged("trying once more"));
     CHECK(run.card.count("SET FAILED") == 0);
 }

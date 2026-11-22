@@ -163,6 +163,7 @@ struct UndervoltOutcome {
     bool ran = false;          // false: stopped before the search; `error` says why
     std::string error;
     UndervoltResult result;    // valid when ran
+    bool not_kept = false;     // the search found a result; the comparison with stock did not keep it (result.reason)
     // The Undervolt profile's result against stock, as it was judged (#84):
     // the two whole measurements, both with the fans on the run's curve. The
     // judgement used their counted part (StabilityResult::counted); whoever

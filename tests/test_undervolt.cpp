@@ -286,6 +286,18 @@ TEST_CASE("find_undervolt: a driver reset ends the descent; the card must prove 
     CHECK(card.rests == 1);
     CHECK(card.logged("the driver was reset; reconnecting"));
     CHECK(card.logged("health:"));
+    // The window names each part of the recovery, and nothing of it stays up afterwards.
+    const auto shown = [&](const std::string& what) { return std::find(card.measuring.begin(), card.measuring.end(), what); };
+    const auto reconnecting = shown("The driver was reset: reconnecting|0");
+    const auto resting = shown("The driver was reset: resting before the card is loaded again|" + std::to_string(static_cast<int>(kRestAfterResetS)));
+    const auto checking = shown("Checking that the card is back|" + std::to_string(static_cast<int>(kHealthProbeS)));
+    REQUIRE(reconnecting != card.measuring.end());
+    REQUIRE(resting != card.measuring.end());
+    REQUIRE(checking != card.measuring.end());
+    CHECK(reconnecting < resting);
+    CHECK(resting < checking);
+    REQUIRE(checking + 1 != card.measuring.end());
+    CHECK(*(checking + 1) == "|0");
     // Nothing above the lost raise afterwards, and the confirm probe keeps
     // its distance from it.
     const auto lost = std::find_if(card.probe_raise_mhz.begin(), card.probe_raise_mhz.end(), [](int v) { return v > 150; });

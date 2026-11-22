@@ -386,6 +386,7 @@ UndervoltOutcome run_undervolt(const OptimizeHooks& hooks, bool on_saved_tune, c
             log("against stock: " + judged.why);
             const bool stock = gpu.reset_to_stock && gpu.reset_to_stock();
             out.result.ok = false;
+            out.not_kept = true;
             out.result.reason = judged.why;
             out.result.stock_restored = stock;
             return out;

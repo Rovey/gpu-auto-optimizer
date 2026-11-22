@@ -53,6 +53,22 @@ constexpr const char* kGpuUnreachable =
     "so it may still run changed clocks, power limit or fan speed. Restart Windows: Revert to stock will not help while the "
     "driver does not answer. Start no other run until the card answers again.";
 
+std::string sentence(std::string text) {
+    if (!text.empty()) text[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(text[0])));
+    return text;
+}
+
+// An undervolt the comparison with stock did not keep. The run did its work,
+// so this is no error: no red, and no request for a problem report.
+void not_kept(const app::UndervoltOutcome& o, bool put_back) {
+    heading("Not kept");
+    wrapped(kWarn, sentence(for_window(o.result.reason)) + ".");
+    wrapped(kDim, "A result is kept only when it is about as fast as stock and uses less power, runs cooler or is quieter.");
+    if (app::gpu_unreachable(o)) wrapped(kBad, kGpuUnreachable);
+    else if (!put_back) wrapped(o.result.stock_restored ? kText : kBad, o.result.stock_restored ? "The card is back at stock." : kStockFailed);
+    wrapped(kText, "Nothing was saved.");
+}
+
 // A run that ended without a result. A stop the user chose (Abort, or not
 // starting next to other programs) is said calmly; anything else in red, with
 // the engine's reason and where its log is. A refusal (app::is_refusal) says
@@ -72,9 +88,7 @@ void no_result(bool ran, const std::string& reason, std::optional<bool> at_stock
         return;
     }
     heading(ran ? "Not applied" : "Not started");
-    std::string said = for_window(reason);
-    if (!said.empty()) said[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(said[0])));
-    const auto [text, link] = split_link(said);
+    const auto [text, link] = split_link(sentence(for_window(reason)));
     wrapped(kBad, text);
     if (!link.empty()) wrapped(kBad, link);
     if (!ran && app::is_refusal(reason)) return;
@@ -123,7 +137,8 @@ bool undervolt_result(const app::UndervoltOutcome& o, bool put_back) {
         return false;
     }
     if (!o.result.ok) {
-        no_result(true, o.result.reason, o.result.stock_restored, put_back, app::gpu_unreachable(o));
+        if (o.not_kept) not_kept(o, put_back);
+        else no_result(true, o.result.reason, o.result.stock_restored, put_back, app::gpu_unreachable(o));
         return false;
     }
     const UndervoltResult& r = o.result;
