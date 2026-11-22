@@ -683,6 +683,80 @@ TEST_CASE("a read-out that drifts a step between the flat top and the lowering i
     for (std::size_t i = 9; i < 16; ++i) CHECK(card.raw[i] < card.raw[8]);   // the tail is stored lower
 }
 
+namespace {
+// A card whose built-in curve moves `step` between two writes, as a hot one's
+// does: higher after an even number of writes, or after an odd one.
+GpuControl moving_read(FakeCurve& card, int step, bool high_on_even) {
+    GpuControl gpu = card.gpu();
+    const auto read = gpu.read_vf_curve;
+    gpu.read_vf_curve = [&card, read, step, high_on_even]() -> std::optional<std::vector<VfPoint>> {
+        card.drift_khz = (card.writes % 2 == 0) == high_on_even ? step : 0;
+        return read();
+    };
+    return gpu;
+}
+}
+
+TEST_CASE("a read-out that ends a step over the target after every correction is accepted in the last round") {
+    // #89: a GTX 1080 Ti at 82 to 84 C read its anchor one clock step over the
+    // target after each correction, so the four rounds ended without settling
+    // and the search stopped early, with the offsets on the card as written.
+    FakeCurve card;
+    card.bin_khz = 15000;
+    GpuControl gpu = moving_read(card, 15000, true);
+    const auto r = apply_flat_top(gpu, 8, 2700000);
+    REQUIRE(r.ok);
+    CHECK(r.passes == kVfPasses);                                            // it did not settle before the last round
+    CHECK(std::abs(card.freq(8) - 2700000) <= kVfToleranceKhz + 2 * 15000);
+    CHECK(card.runs_at() == 8);                                              // the anchor is still the top
+    for (std::size_t i = 9; i < 16; ++i) CHECK(card.raw[i] < card.raw[8]);   // the tail is stored lower
+}
+
+TEST_CASE("a read-out that ends a step under the target does not settle: that offset would run a clock nobody tested") {
+    FakeCurve card;
+    card.bin_khz = 15000;
+    const auto r = apply_flat_top(moving_read(card, 15000, false), 8, 2700000);
+    CHECK_FALSE(r.ok);
+    CHECK(r.why.find("the curve did not settle on the target (the anchor reads 2685 MHz, the target is 2700)") == 0);
+    CHECK(r.at_stock);
+    CHECK(card.at_stock());
+}
+
+TEST_CASE("the last round allows one clock step: two steps of a fine grid do not settle") {
+    FakeCurve card;
+    card.bin_khz = 7500;
+    const auto r = apply_flat_top(moving_read(card, 15000, true), 8, 2700000);
+    CHECK_FALSE(r.ok);
+    CHECK(r.why.find("the curve did not settle on the target") == 0);
+    CHECK(card.at_stock());
+}
+
+TEST_CASE("a flat top with no lowering to follow gets no allowance") {
+    FakeCurve card;
+    card.bin_khz = 15000;
+    const auto r = apply_flat_top(moving_read(card, 15000, true), 8, 2700000, 0);
+    CHECK_FALSE(r.ok);
+    CHECK(r.why.find("the curve did not settle on the target") == 0);
+    CHECK(card.at_stock());
+}
+
+TEST_CASE("a point a step off because the card stored another offset than was written still does not settle") {
+    FakeCurve card;
+    card.bin_khz = 15000;
+    GpuControl gpu = card.gpu();
+    const auto write = gpu.write_vf_offsets;
+    gpu.write_vf_offsets = [&](const std::vector<VfOffset>& offsets) {
+        const bool ok = write(offsets);
+        if (offsets.size() == 8) card.raw[8] += 15000;   // the writes of the flat top, not the levelling
+        return ok;
+    };
+    const auto r = apply_flat_top(gpu, 8, 2700000);
+    CHECK_FALSE(r.ok);
+    CHECK(r.why.find("the curve did not settle on the target (the anchor reads 2715 MHz, the target is 2700)") == 0);
+    CHECK(r.at_stock);
+    CHECK(card.at_stock());
+}
+
 TEST_CASE("a read-out that is really off after the lowering is refused, with the numbers in it") {
     FakeCurve card;
     card.bin_khz = 15000;
