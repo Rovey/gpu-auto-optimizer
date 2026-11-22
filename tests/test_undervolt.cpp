@@ -38,6 +38,11 @@ struct UvCard {
     int abort_at_probe = -1;
     bool aborted_now = false;
     bool with_recover = true;
+    bool recover_fails = false;   // the driver does not come back: the card stays out of reach
+    bool with_prepare = false;    // the run offers UndervoltIo::prepare_load
+    int prepares = 0;
+    int blind_health_probes = 0;  // this many 5 s probes end NO TELEMETRY, the card computing normally
+    std::vector<std::string> journal_at_first_recover;   // the file as it was when recover() was first called
 
     int probes = 0, recovers = 0, resets_to_stock = 0, rests = 0;
     std::vector<double> probe_seconds;
@@ -116,7 +121,7 @@ struct UvCard {
         g.set_mem_offset = [this](int mhz) { if (dead) return false; mem = mhz; return true; };
         g.set_power_limit = [this](int pct) { if (dead) return false; power = pct; return true; };
         if (with_recover)
-            g.recover = [this] { ++recovers; dead = false; std::fill(raw.begin(), raw.end(), 0); core = mem = 0; power = 100; return true; };
+            g.recover = [this] { if (recovers == 0) journal_at_first_recover = journal; ++recovers; if (recover_fails) return false; dead = false; std::fill(raw.begin(), raw.end(), 0); core = mem = 0; power = 100; return true; };
         return g;
     }
     StabilityResult probe(double seconds, int max_temp = 1000) {
@@ -126,6 +131,7 @@ struct UvCard {
         StabilityResult s;
         s.seconds = seconds;
         if (probes == abort_at_probe) { aborted_now = true; s.verdict = Verdict::Aborted; return s; }
+        if (seconds == 5 && blind_health_probes > 0) { --blind_health_probes; s.score = 5700; s.verdict = Verdict::NoTelemetry; return s; }
         const std::size_t op = operating_point();
         // At stock the power limit holds the clock between two points of the curve.
         const bool cold = cold_load && seconds < 30;
@@ -160,6 +166,7 @@ struct UvCard {
         io.aborted = [this] { return aborted_now; };
         io.log = [this](const std::string& m) { log.push_back(m); };
         io.rest = [this](double) { ++rests; return true; };
+        if (with_prepare) io.prepare_load = [this] { ++prepares; return true; };
         io.measuring = [this](const std::string& what, double seconds) {
             measuring.push_back(what + "|" + std::to_string(static_cast<int>(seconds)));
         };
@@ -287,6 +294,22 @@ TEST_CASE("find_undervolt: a driver reset ends the descent; the card must prove 
     CHECK(card.count("\"begin\"") == card.count("\"complete\""));
 }
 
+TEST_CASE("find_undervolt: a machine that goes down while the driver recovers leaves the raise that reset as a ceiling") {
+    UvCard card;
+    card.lost_above_khz = 150000;
+    const auto r = card.go();
+    REQUIRE(r.ok);
+    const auto lost = std::find_if(card.probe_raise_mhz.begin(), card.probe_raise_mhz.end(), [](int v) { return v > 150; });
+    REQUIRE(lost != card.probe_raise_mhz.end());
+    Journal down(card.journal_at_first_recover, [](const std::string&) { return true; });
+    CHECK(down.ceilings().uv_mhz == *lost);
+    REQUIRE(down.freezes().size() == 1);
+    CHECK(down.freezes()[0].find("while the driver recovered from a reset there") != std::string::npos);
+    Journal after(card.journal, [](const std::string&) { return true; });   // the recovery ended
+    CHECK(after.freezes().empty());
+    CHECK(card.count("RECOVERED") == 1);
+}
+
 TEST_CASE("find_undervolt: a second driver reset ends the run at stock, nothing applied") {
     UvCard card;
     card.lost_above_khz = 150000;    // the first, in the descent
@@ -297,6 +320,34 @@ TEST_CASE("find_undervolt: a second driver reset ends the run at stock, nothing 
     CHECK(r.reason == "the driver reset twice");
     CHECK(card.at_stock());
     CHECK(card.count("\"begin\"") == card.count("\"complete\""));
+}
+
+// GTX 1060, driver 560.94: rebuilding the stress load after a reset reset the
+// driver once more; the health probe then had no telemetry while the card computed.
+TEST_CASE("find_undervolt: a blind health probe right after the load was rebuilt gets a new connection and one more probe") {
+    UvCard card;
+    card.lost_above_khz = 150000;
+    card.with_prepare = true;
+    card.blind_health_probes = 1;
+    const auto r = card.go();
+    REQUIRE(r.ok);
+    CHECK(card.recovers == 2);
+    CHECK(card.rests == 2);
+    CHECK(card.prepares == 1);
+    CHECK(card.logged("the telemetry dropped after the stress load was rebuilt; reconnecting"));
+    CHECK(card.count("\"begin\"") == card.count("\"complete\""));
+}
+
+TEST_CASE("find_undervolt: a second blind health probe after the load was rebuilt ends the run at stock") {
+    UvCard card;
+    card.lost_above_khz = 150000;
+    card.with_prepare = true;
+    card.blind_health_probes = 2;
+    const auto r = card.go();
+    CHECK_FALSE(r.ok);
+    CHECK(r.reason == "the card was not usable when checked after a driver reset");
+    CHECK(card.recovers == 2);
+    CHECK(card.at_stock());
 }
 
 TEST_CASE("find_undervolt: a reset without a way to reconnect ends the run") {
@@ -710,4 +761,128 @@ TEST_CASE("find_undervolt: a card that fails while the load warms up starts no s
     const auto s2 = stopped.go();
     CHECK_FALSE(s2.ok);
     CHECK(s2.reason == "aborted");
+}
+
+namespace {
+// A measurement that ran its full length, with its counted part.
+StabilityResult measured(double score, int power_w, int temp_c, int fan_pct) {
+    StabilityResult r;
+    r.verdict = Verdict::Stable;
+    r.seconds = 300;
+    r.score = score;
+    r.peak_temp_c = temp_c + 1;
+    r.counted = {150, score, power_w, 2790, 10500, temp_c, fan_pct};
+    return r;
+}
+}
+
+TEST_CASE("judge_against_stock: the reference RTX 4070's undervolt is kept for its power") {
+    // Check 75, step 3: 5725 it/s on 172 W against 5641 it/s on 194 W at stock.
+    const StockJudgement j = judge_against_stock(measured(5641, 194, 66, 60), measured(5725, 172, 63, 58), true);
+    CHECK(j.keep);
+    CHECK(j.why.find("power 172 against 194 W (-11.3 %)") != std::string::npos);
+}
+
+TEST_CASE("judge_against_stock: a measurement at stock that the temperature stopped compares with nothing") {
+    // The GTX 1080 Ti of rc1: stock stopped after 119 s at 86 C.
+    StabilityResult stock;
+    stock.verdict = Verdict::TooHot;
+    stock.seconds = 119;
+    stock.score = 2696;
+    stock.peak_temp_c = 86;
+    const StockJudgement j = judge_against_stock(stock, measured(2610, 197, 84, 89), true);
+    CHECK_FALSE(j.keep);
+    CHECK(j.why == "not compared: the measurement at stock did not run its full length (TOO HOT at 86 C after 119 s)");
+}
+
+TEST_CASE("judge_against_stock: the soak without a counted part, or other fan control, compares with nothing") {
+    StabilityResult soak = measured(5725, 172, 63, 58);
+    soak.counted = {};
+    CHECK(judge_against_stock(measured(5641, 194, 66, 60), soak, true).why == "not compared: the result's soak did not run its full length");
+    const StockJudgement j = judge_against_stock(measured(5641, 194, 66, 60), measured(5725, 172, 63, 58), false);
+    CHECK_FALSE(j.keep);
+    CHECK(j.why == "not compared: the fans were not under the same control at stock and with the result");
+}
+
+TEST_CASE("judge_against_stock: slower than 99 % of stock is not kept, whatever it saves") {
+    const StockJudgement j = judge_against_stock(measured(5000, 200, 70, 60), measured(4940, 150, 60, 40), true);
+    CHECK_FALSE(j.keep);
+    CHECK(j.why.starts_with("slower than stock (score 4940 against 5000 it/s (-1.2 %)"));
+    CHECK(judge_against_stock(measured(5000, 200, 70, 60), measured(4950, 150, 70, 60), true).keep);   // exactly 99 %
+}
+
+TEST_CASE("judge_against_stock: warmer without being quieter, or louder without being cooler, is a regression") {
+    const StabilityResult stock = measured(5000, 200, 70, 60);
+    CHECK(judge_against_stock(stock, measured(5000, 180, 73, 58), true).why.starts_with("warmer than stock, with the fans no slower"));
+    CHECK(judge_against_stock(stock, measured(5000, 180, 70, 66), true).why.starts_with("louder than stock, with the card no cooler"));
+    CHECK(judge_against_stock(stock, measured(5000, 180, 72, 60), true).keep);   // 2 C warmer is within the tolerance
+    CHECK(judge_against_stock(stock, measured(5000, 180, 70, 65), true).keep);   // 5 points louder too
+    // Warmer and quieter by enough, or louder and cooler by enough: a trade, not a regression.
+    CHECK(judge_against_stock(stock, measured(5000, 210, 74, 55), true).keep);
+    CHECK(judge_against_stock(stock, measured(5000, 210, 68, 70), true).keep);
+}
+
+TEST_CASE("judge_against_stock: more power alone does not discard a result that is cooler or quieter") {
+    CHECK(judge_against_stock(measured(5000, 200, 70, 60), measured(5000, 210, 67, 60), true).keep);
+    CHECK(judge_against_stock(measured(5000, 200, 70, 60), measured(5000, 210, 70, 55), true).keep);
+}
+
+TEST_CASE("judge_against_stock: finishing the soak keeps nothing that gained nothing") {
+    const StabilityResult stock = measured(5000, 200, 70, 60);
+    const StockJudgement j = judge_against_stock(stock, measured(5000, 195, 69, 57), true);   // -2.5 %, 1 C, 3 points
+    CHECK_FALSE(j.keep);
+    CHECK(j.why == "no gain against stock: not less power, not cooler, not quieter (score 5000 against 5000 it/s (+0.0 %), "
+                   "power 195 against 200 W (-2.5 %), 69 against 70 C, fans 57 against 60 %, over the last 150 s)");
+    CHECK(judge_against_stock(stock, measured(5000, 194, 70, 60), true).keep);   // exactly 97 % of the power
+}
+
+TEST_CASE("judge_against_stock: a reading the card does not give is not judged") {
+    // No fan speed on either side: only power and temperature count.
+    CHECK(judge_against_stock(measured(5000, 200, 70, -1), measured(5000, 180, 70, -1), true).keep);
+    CHECK_FALSE(judge_against_stock(measured(5000, 200, 70, -1), measured(5000, 199, 73, -1), true).keep);
+    // No power reading: cooler or quieter must carry it.
+    CHECK_FALSE(judge_against_stock(measured(5000, -1, 70, 60), measured(5000, -1, 70, 60), true).keep);
+    CHECK(judge_against_stock(measured(5000, -1, 70, 60), measured(5000, -1, 68, 60), true).keep);
+}
+
+// Hardware check 115: a driver reset that takes the card out of reach for good.
+TEST_CASE("find_undervolt: a card that stays out of reach after a driver reset is reported as unreachable") {
+    UvCard card;
+    card.lost_above_khz = 150000;
+    card.recover_fails = true;
+    const auto r = card.go();
+    CHECK_FALSE(r.ok);
+    CHECK(r.reason == "the driver did not come back after a reset");
+    CHECK(r.driver_resets == 1);
+    CHECK_FALSE(r.stock_restored);
+    CHECK(gao::gpu_unreachable(r.stock_restored, r.driver_resets));
+    CHECK(card.logged("the GPU could not be reached after a driver reset; restart Windows"));
+    CHECK_FALSE(card.logged("run `gao --reset`"));
+    CHECK(card.count("\"GPU UNREACHABLE\"") == 1);
+    CHECK(card.count("RECOVERED") == 0);
+    CHECK(card.count("\"begin\"") == card.count("\"complete\""));
+}
+
+TEST_CASE("find_undervolt: a recovery that ends the run with the card at stock is closed as RECOVERY FAILED") {
+    UvCard card;
+    card.lost_above_khz = 150000;
+    card.blind_health_probes = 1;   // the health probe after the reset has no telemetry: the card is not back
+    const auto r = card.go();
+    CHECK_FALSE(r.ok);
+    CHECK(r.reason == "the card was not usable when checked after a driver reset");
+    CHECK(r.stock_restored);
+    CHECK(card.count("\"RECOVERY FAILED\"") == 1);
+    CHECK(card.count("RECOVERED") == 0);
+    CHECK(card.count("\"GPU UNREACHABLE\"") == 0);
+    CHECK(card.count("\"begin\"") == card.count("\"complete\""));
+}
+
+TEST_CASE("find_undervolt: a recovery that gets the card back is closed as RECOVERED") {
+    UvCard card;
+    card.lost_above_khz = 150000;
+    const auto r = card.go();
+    REQUIRE(r.ok);
+    CHECK(card.count("\"RECOVERED\"") == 1);
+    CHECK(card.count("RECOVERY FAILED") == 0);
+    CHECK(card.count("GPU UNREACHABLE") == 0);
 }

@@ -53,12 +53,25 @@ UndervoltResult find_undervolt(const GpuControl& gpu, Journal& journal, const Un
     };
     // Every way out that is not a success: the card goes back to stock, with
     // one reconnect if the plain reset does not get through.
+    // The journal entry that guards a recovery (Journal::begin_recovery), as in
+    // the search: open from before the reconnect until the card is back, or
+    // until the way out has reset it. 0: none open.
+    int recovery_entry = 0;
+    auto end_recovery = [&](const char* verdict) {
+        if (recovery_entry == 0) return;
+        if (!journal.complete(recovery_entry, verdict))
+            log("warning: the crash journal entry could not be closed; later runs will stay below this candidate");
+        recovery_entry = 0;
+    };
     auto finish_fail = [&](const std::string& why) {
         r.ok = false;
         r.reason = why;
         r.stock_restored = to_stock();
         if (!r.stock_restored && gpu.recover && gpu.recover()) r.stock_restored = to_stock();
-        log("stopped: " + why + (r.stock_restored ? " -- card restored to stock" : " -- reset FAILED, run `gao --reset`"));
+        end_recovery(recovery_end_verdict(r.stock_restored));
+        log("stopped: " + why + (r.stock_restored                               ? " -- card restored to stock"
+                                 : gpu_unreachable(false, r.driver_resets) ? kGpuUnreachableLog
+                                                                           : " -- reset FAILED, run `gao --reset`"));
         return r;
     };
 
@@ -195,23 +208,42 @@ UndervoltResult find_undervolt(const GpuControl& gpu, Journal& journal, const Un
     // short probe that must compute normally again. False: `stopped` says why the run ends.
     auto recovered = [&]() -> bool {
         if (++r.driver_resets >= 2) { stopped = "the driver reset twice"; return false; }
+        // Reconnect, stock, the overclock again, rest.
+        auto reconnect_and_rest = [&]() -> bool {
+            if (!gpu.recover || !gpu.recover()) { stopped = "the driver did not come back after a reset"; return false; }
+            if (!to_stock()) { stopped = "could not set the card to stock while recovering"; return false; }
+            if (!set_base()) { stopped = "could not set the overclock again after a driver reset"; return false; }
+            if (io.rest) {
+                log("resting " + std::to_string(static_cast<int>(kRestAfterResetS)) + " s before the card is loaded again");
+                if (!io.rest(kRestAfterResetS)) { stopped = "aborted"; return false; }
+            }
+            return true;
+        };
+        recovery_entry = journal.begin_recovery();
+        if (recovery_entry < 0) { recovery_entry = 0; stopped = "could not write the journal"; return false; }
         log("the driver was reset; reconnecting");
-        if (!gpu.recover || !gpu.recover()) { stopped = "the driver did not come back after a reset"; return false; }
-        if (!to_stock()) { stopped = "could not set the card to stock while recovering"; return false; }
-        if (!set_base()) { stopped = "could not set the overclock again after a driver reset"; return false; }
-        if (io.rest) {
-            log("resting " + std::to_string(static_cast<int>(kRestAfterResetS)) + " s before the card is loaded again");
-            if (!io.rest(kRestAfterResetS)) { stopped = "aborted"; return false; }
-        }
+        if (!reconnect_and_rest()) return false;
         if (io.prepare_load && !io.prepare_load()) { stopped = "the stress load could not be rebuilt after a driver reset"; return false; }
-        const StabilityResult health = io.probe(kHealthProbeS, limit_c, 0.0);
+        StabilityResult health = io.probe(kHealthProbeS, limit_c, 0.0);
         log("health: " + describe(verdict_name(health.verdict), health));
+        // As in the search (GTX 1060, driver 560.94): rebuilding the load can
+        // reset the driver once more, and the probe then has no telemetry
+        // while the card computes. Counted, then one new connection and one
+        // more probe; the load itself stays.
+        if (io.prepare_load && health.verdict == Verdict::NoTelemetry) {
+            ++r.driver_resets;
+            log("the telemetry dropped after the stress load was rebuilt; reconnecting");
+            if (!reconnect_and_rest()) return false;
+            health = io.probe(kHealthProbeS, limit_c, 0.0);
+            log("health: " + describe(verdict_name(health.verdict), health));
+        }
         if (health.verdict == Verdict::Aborted) { stopped = "aborted"; return false; }
         if (is_reset_verdict(health.verdict)) { ++r.driver_resets; stopped = "the card was not usable when checked after a driver reset"; return false; }
         if (health.verdict != Verdict::Stable || health.score < kHealthyScore * r.baseline.score) {
             stopped = "the card did not recover after a driver reset";
             return false;
         }
+        end_recovery(kRecovered);
         return true;
     };
 
@@ -280,6 +312,53 @@ UndervoltResult find_undervolt(const GpuControl& gpu, Journal& journal, const Un
         applied = std::min(applied + (step == Step::Reset ? kResetBackoffSteps : 2), top_pos);
     }
     return finish_fail("the soak failed");
+}
+
+namespace {
+
+// "score 2610 against 2696 it/s (-3.2 %), power 197 against 178 W (+10.7 %),
+// 84 against 83 C, fans 89 against 79 %": the counted parts, after first.
+std::string compared_text(const StabilityResult::Counted& s, const StabilityResult::Counted& a) {
+    char buf[300];
+    int n = std::snprintf(buf, sizeof(buf), "score %.0f against %.0f it/s (%+.1f %%)", a.score, s.score, (a.score / s.score - 1) * 100);
+    auto more = [&](const char* fmt, auto... v) {
+        if (n > 0 && n < static_cast<int>(sizeof(buf))) n += std::snprintf(buf + n, sizeof(buf) - n, fmt, v...);
+    };
+    if (a.avg_power_w >= 0 && s.avg_power_w > 0)
+        more(", power %d against %d W (%+.1f %%)", a.avg_power_w, s.avg_power_w, (double(a.avg_power_w) / s.avg_power_w - 1) * 100);
+    if (a.avg_temp_c >= 0 && s.avg_temp_c >= 0) more(", %d against %d C", a.avg_temp_c, s.avg_temp_c);
+    if (a.avg_fan_pct >= 0 && s.avg_fan_pct >= 0) more(", fans %d against %d %%", a.avg_fan_pct, s.avg_fan_pct);
+    return buf;
+}
+
+}
+
+StockJudgement judge_against_stock(const StabilityResult& stock, const StabilityResult& after, bool same_fans) {
+    const auto not_compared = [](const std::string& why) { return StockJudgement{false, "not compared: " + why}; };
+    if (stock.verdict != Verdict::Stable || stock.counted.seconds <= 0 || stock.counted.score <= 0) {
+        char buf[200];
+        std::snprintf(buf, sizeof(buf), "the measurement at stock did not run its full length (%s at %d C after %.0f s)",
+                      verdict_name(stock.verdict), stock.peak_temp_c, stock.seconds);
+        return not_compared(buf);
+    }
+    if (after.verdict != Verdict::Stable || after.counted.seconds <= 0 || after.counted.score <= 0)
+        return not_compared("the result's soak did not run its full length");
+    if (!same_fans) return not_compared("the fans were not under the same control at stock and with the result");
+
+    const StabilityResult::Counted& s = stock.counted;
+    const StabilityResult::Counted& a = after.counted;
+    const std::string numbers = " (" + compared_text(s, a) + ", over the last " + std::to_string(static_cast<int>(a.seconds + 0.5)) + " s)";
+    if (a.score < kNotSlowerScore * s.score) return {false, "slower than stock" + numbers};
+
+    const bool temps = a.avg_temp_c >= 0 && s.avg_temp_c >= 0, fans = a.avg_fan_pct >= 0 && s.avg_fan_pct >= 0;
+    const int warmer = temps ? a.avg_temp_c - s.avg_temp_c : 0, louder = fans ? a.avg_fan_pct - s.avg_fan_pct : 0;
+    const bool cooler = temps && warmer <= -kKeepCoolerC, quieter = fans && louder <= -kKeepQuieterPts;
+    if (temps && warmer > kKeepCoolerC && !quieter) return {false, "warmer than stock, with the fans no slower" + numbers};
+    if (fans && louder > kKeepQuieterPts && !cooler) return {false, "louder than stock, with the card no cooler" + numbers};
+
+    const bool less_power = a.avg_power_w >= 0 && s.avg_power_w > 0 && a.avg_power_w <= kKeepPowerShare * s.avg_power_w + 1e-9;
+    if (!less_power && !cooler && !quieter) return {false, "no gain against stock: not less power, not cooler, not quieter" + numbers};
+    return {true, compared_text(s, a)};
 }
 
 }

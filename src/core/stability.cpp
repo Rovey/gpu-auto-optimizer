@@ -27,6 +27,11 @@ StabilityResult run_stability(const std::function<StressBatch()>& batch,
     StabilityResult r;
     long long iterations = 0;
     Avg power, core, mem;
+    // The counted part (StabilityResult::counted): the batches that begin in
+    // the last kCountedShare of the asked-for length.
+    const double counted_from = seconds * (1 - kCountedShare);
+    long long counted_its = 0;
+    Avg c_power, c_core, c_mem, c_temp, c_fan;
     struct Recent { long long iterations; double seconds; };
     std::deque<Recent> recent;   // the batches covering the last kStallWindowS
     long long recent_its = 0;
@@ -36,6 +41,7 @@ StabilityResult run_stability(const std::function<StressBatch()>& batch,
         // A batch that claims no time would never advance the loop; count it
         // as 1 ms so a broken timer ends the run instead of hanging it.
         const double batch_s = std::max(b.elapsed_ms, 1.0) / 1000.0;
+        const bool counts = r.seconds >= counted_from;
         r.seconds += batch_s;
         // Device lost first: after a TDR the error counter is garbage.
         if (b.device_lost) { r.verdict = Verdict::DeviceLost; break; }
@@ -49,6 +55,15 @@ StabilityResult run_stability(const std::function<StressBatch()>& batch,
         power.add(t.power_w, batch_s);
         core.add(t.core_mhz, batch_s);
         mem.add(t.mem_mhz, batch_s);
+        if (counts) {
+            r.counted.seconds += batch_s;
+            counted_its += b.iterations;
+            c_power.add(t.power_w, batch_s);
+            c_core.add(t.core_mhz, batch_s);
+            c_mem.add(t.mem_mhz, batch_s);
+            c_temp.add(t.temp_c, batch_s);
+            c_fan.add(t.fan_pct, batch_s);
+        }
         if (t.temp_c > max_temp_c) { r.verdict = Verdict::TooHot; break; }
         recent.push_back({b.iterations, batch_s});
         recent_its += b.iterations;
@@ -69,6 +84,16 @@ StabilityResult run_stability(const std::function<StressBatch()>& batch,
     r.avg_power_w = power.get();
     r.avg_core_mhz = core.get();
     r.avg_mem_mhz = mem.get();
+    if (r.verdict == Verdict::Stable && r.counted.seconds > 0) {
+        r.counted.score = static_cast<double>(counted_its) / r.counted.seconds;
+        r.counted.avg_power_w = c_power.get();
+        r.counted.avg_core_mhz = c_core.get();
+        r.counted.avg_mem_mhz = c_mem.get();
+        r.counted.avg_temp_c = c_temp.get();
+        r.counted.avg_fan_pct = c_fan.get();
+    } else {
+        r.counted = {};
+    }
     return r;
 }
 
@@ -91,6 +116,17 @@ std::string measured_line(const char* name, const StabilityResult& s, bool with_
     char line[256];
     std::snprintf(line, sizeof(line), "  %s score=%.0f it/s  core=%d MHz%s  peak=%d C  fan=%s  power=%d W  (%.0f s)", name, s.score,
                   s.avg_core_mhz, mem, s.peak_temp_c, reading(s.end_fan_pct, " %").c_str(), s.avg_power_w, s.seconds);
+    return line;
+}
+
+std::string counted_line(const char* name, const StabilityResult& s) {
+    const StabilityResult::Counted& c = s.counted;
+    char line[320];
+    std::snprintf(line, sizeof(line),
+                  "  %s averages of the last %.0f s: score=%.0f it/s  core=%d MHz  power=%d W  temp=%s  fan=%s;  whole %.0f s: peak=%d C  "
+                  "fan at the end=%s",
+                  name, c.seconds, c.score, c.avg_core_mhz, c.avg_power_w, reading(c.avg_temp_c, " C").c_str(),
+                  reading(c.avg_fan_pct, " %").c_str(), s.seconds, s.peak_temp_c, reading(s.end_fan_pct, " %").c_str());
     return line;
 }
 

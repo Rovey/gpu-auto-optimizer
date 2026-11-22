@@ -167,7 +167,7 @@ UpdateCheck check_for_update() {
     if (!body) return out;
     auto release = parse_latest_release(*body);
     if (!release) { out.error = "the answer did not describe a release"; return out; }
-    if (*version_number(release->version) > kVersionNumber) out.release = std::move(release);
+    if (release_is_newer(release->version, kVersion)) out.release = std::move(release);
     return out;
 }
 

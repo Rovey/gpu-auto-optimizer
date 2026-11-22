@@ -34,7 +34,10 @@ bool at_stock(const std::vector<VfPoint>& curve) {
 
 }
 
-std::vector<VfPoint> parse_vf_curve(const unsigned char* mask, const unsigned char* status, const unsigned char* control) {
+int vf_units_per_khz(unsigned architecture) { return architecture == kVfArchPascal ? 2 : 1; }
+
+std::vector<VfPoint> parse_vf_curve(const unsigned char* mask, const unsigned char* status, const unsigned char* control,
+                                    int units_per_khz) {
     std::vector<VfPoint> points;
     for (int i = 0; i < kVfSlots; ++i) {
         const std::size_t slot = static_cast<std::size_t>(i);
@@ -45,9 +48,9 @@ std::vector<VfPoint> parse_vf_curve(const unsigned char* mask, const unsigned ch
         if (get_u32(mask, m) != kVfDomainGraphics || mask[m + 4] == 0) continue;
         VfPoint p;
         p.index = i;
-        p.freq_khz = static_cast<int>(get_u32(status, s + 4));
+        p.freq_khz = static_cast<int>(get_u32(status, s + 4) / static_cast<unsigned>(units_per_khz));
         p.volt_uv = static_cast<int>(get_u32(status, s + 8));
-        p.raw_offset = get_i32(control, c + kVfControlOffset);
+        p.raw_offset = get_i32(control, c + kVfControlOffset) / units_per_khz;
         if (p.freq_khz <= 0 || p.volt_uv <= 0) continue;   // an enabled slot the card does not use
         points.push_back(p);
     }
@@ -55,7 +58,8 @@ std::vector<VfPoint> parse_vf_curve(const unsigned char* mask, const unsigned ch
     return points;
 }
 
-void put_vf_raw_offset(unsigned char* control, int index, int raw) {
+void put_vf_raw_offset(unsigned char* control, int index, int raw, int units_per_khz) {
+    raw *= units_per_khz;
     std::memcpy(control + kVfEntries + static_cast<std::size_t>(index) * kVfControlEntry + kVfControlOffset, &raw, sizeof(raw));
 }
 
@@ -109,6 +113,14 @@ int clock_grid_khz(const std::vector<VfPoint>& curve) {
     if (!curve.empty())
         for (int grid : {15000, 7500, 5000, 2500})
             if (fits(grid)) return grid;
+    // A GTX 10 card steps in 38/3 MHz and reads out in half MHz, so its steps
+    // read 12.5 or 13 MHz: every step between two points is a whole number of
+    // 38/3 MHz to within half a MHz (counted in thirds of a kHz).
+    const bool pascal = curve.size() > 1 && std::adjacent_find(curve.begin(), curve.end(), [](const VfPoint& a, const VfPoint& b) {
+                            const long long d3 = 3LL * std::abs(b.freq_khz - a.freq_khz);
+                            return std::llabs(d3 - (d3 + 19000) / 38000 * 38000) > 1500;
+                        }) == curve.end();
+    if (pascal) return 12667;
     int grid = 0;
     for (std::size_t i = 1; i < curve.size(); ++i) grid = std::gcd(grid, std::abs(curve[i].freq_khz - curve[i - 1].freq_khz));
     return grid > 0 ? grid : 1;

@@ -35,7 +35,7 @@ struct VfPoint {
     int index = 0;        // the slot in the driver's tables; what a write addresses
     int volt_uv = 0;
     int freq_khz = 0;     // what the card runs at this voltage now: its built-in curve plus the offset
-    int raw_offset = 0;   // the offset as the driver stores it (see core/vf_curve.hpp for the units)
+    int raw_offset = 0;   // the offset the driver stores, in kHz (see core/vf_curve.hpp for the units)
 };
 struct VfOffset {
     int index = 0;

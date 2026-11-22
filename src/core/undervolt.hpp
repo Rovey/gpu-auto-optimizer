@@ -111,4 +111,31 @@ struct UndervoltResult {
 UndervoltResult find_undervolt(const GpuControl& gpu, Journal& journal, const UndervoltIo& io, int max_temp_c, float perf_push,
                                const UndervoltBase& base = {});
 
+// Whether the Undervolt profile keeps its result, judged against the card at
+// stock over the counted part of both measurements (StabilityResult::counted),
+// on three things apart: the score, the power, and the temperature together
+// with the fan speed (docs/planned.md, "A fair before and after", #84). The
+// tolerances are provisional, about twice the scatter seen so far, until a
+// measurement of that scatter sets them (hardware check in that design).
+// Not slower: the share kNotSlowerScore (core/search.hpp) of the stock score.
+// A benefit: at least one of these.
+inline constexpr double kKeepPowerShare = 0.97;   // power at most this share of stock's
+inline constexpr int kKeepCoolerC = 2;            // or at least this much cooler
+inline constexpr int kKeepQuieterPts = 5;         // or the fans at least this many points slower
+// A thermal regression: more than kKeepCoolerC warmer without being
+// kKeepQuieterPts quieter, or more than kKeepQuieterPts louder without being
+// kKeepCoolerC cooler.
+
+struct StockJudgement {
+    bool keep = false;
+    std::string why;   // the reason it is not kept, or what it gained; for the log
+};
+
+// same_fans: both measurements ran under the same fan control (both on the
+// same curve, or both on the driver because the app cannot set the fans).
+// A comparison that is not valid keeps nothing: both measurements must have
+// run their full length, with the same fan control. Higher power alone never
+// discards a result, and finishing the soak alone never keeps one.
+StockJudgement judge_against_stock(const StabilityResult& stock, const StabilityResult& after, bool same_fans);
+
 }

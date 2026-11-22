@@ -76,6 +76,7 @@ struct App {
     UINT tray_notice = 0;
     bool visible = false;
     bool exit_requested = false;
+    bool exit_question = false;   // the tray's "Stop it and exit?" is open
     // --demo: the window plays a run (OptimizeWorker::start_demo) and nothing
     // else. It stands next to the copy in the tray, without a tray icon of
     // its own, and closing it ends it. --demo=run: without the question about
@@ -466,6 +467,13 @@ template <class Act> void from_tray(Act act) {
 }
 
 void tray_menu(int x, int y) {
+    // The Exit question below is modal but keeps messages flowing, so a click
+    // on the tray icon lands here again while it is open: bring that question
+    // forward instead of a menu whose Exit would ask a second one.
+    if (g.exit_question) {
+        SetForegroundWindow(GetLastActivePopup(g.hwnd));
+        return;
+    }
     const bool busy = g.worker->running() || gao::app::tuning_in_progress();
     HMENU menu = CreatePopupMenu();
     AppendMenuW(menu, MF_STRING, kMenuOpen, L"Open");
@@ -497,12 +505,16 @@ void tray_menu(int x, int y) {
         case kMenuStepUp: from_tray([] { act_step(1); }); break;
         case kMenuRevert: from_tray(act_revert); break;
         case kMenuExit:
-            if (g.worker->running() &&
-                MessageBoxW(g.hwnd,
-                            L"An optimize run is in progress. Stop it and exit?\n\nThe card goes back to stock, or to your saved "
-                            L"tune if it was on before.",
-                            L"GPU Auto Optimizer", MB_YESNO | MB_ICONWARNING | MB_SETFOREGROUND) != IDYES)
-                break;
+            if (g.worker->running()) {
+                g.exit_question = true;
+                const int answer = MessageBoxW(
+                    g.hwnd,
+                    L"An optimize run is in progress. Stop it and exit?\n\nThe card goes back to stock, or to your saved "
+                    L"tune if it was on before.",
+                    L"GPU Auto Optimizer", MB_YESNO | MB_ICONWARNING | MB_SETFOREGROUND);
+                g.exit_question = false;
+                if (answer != IDYES) break;
+            }
             g.exit_requested = true;
             if (g.worker->running()) g.worker->abort();   // it restores stock, then we exit
             break;

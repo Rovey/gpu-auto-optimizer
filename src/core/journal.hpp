@@ -64,6 +64,17 @@ public:
     // uv: the raise of an undervolt candidate, in MHz.
     int begin(std::optional<int> core, std::optional<int> mem, std::optional<int> uv = std::nullopt);
     bool complete(int id, const std::string& verdict);
+    // Called before reconnecting after a driver reset. When the entry closed
+    // last is a candidate whose probe reset the driver (DEVICE LOST, STALLED,
+    // NO TELEMETRY) with a clock above stock, it opens an entry with that
+    // candidate's clocks, which the caller closes once the recovery is over.
+    // The machine can go down while the driver recovers (a GTX 1060 with
+    // driver 560.94 did, twice: a BSOD 0x133 after a DEVICE LOST at core
+    // +375); the entry left open then makes those clocks a ceiling like any
+    // freeze. Returns its id; 0 when there is nothing to guard (a failed
+    // write, a reset at stock clocks, or a recovery already opened for this
+    // reset); -1 when the line could not be written.
+    int begin_recovery();
 
 private:
     bool write(const std::string& line);
@@ -80,6 +91,11 @@ private:
     std::vector<Freeze> freeze_entries_;
     int next_id_ = 1;
     int open_id_ = -1;
+    struct Clocks {
+        std::optional<int> core, mem, uv;
+    };
+    Clocks open_clocks_;            // of the entry begin() opened last
+    std::optional<Clocks> reset_;   // the entry closed last, when its probe reset the driver
 };
 
 }

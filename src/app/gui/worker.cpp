@@ -83,7 +83,8 @@ bool OptimizeWorker::launch(bool retest, bool puts_back, std::function<void(cons
         const std::optional<Profile> before = puts_back ? app::tune_before_run() : std::nullopt;
         job(hooks);
         bool as_before = false;
-        if (abort_.load() && !snapshot().kept() && app::put_back_after_stop(before, hooks, &as_before)) {
+        const Snapshot ended = snapshot();
+        if (abort_.load() && !ended.kept() && !ended.unreachable() && app::put_back_after_stop(before, hooks, &as_before)) {
             std::lock_guard lock(mu_);
             put_back_ = true;
             put_back_as_before_ = as_before;

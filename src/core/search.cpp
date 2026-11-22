@@ -161,6 +161,25 @@ std::string stock_refusal(const StabilityResult& stock) {
            " s at stock; let it cool down and start again";
 }
 
+bool hot_at_stock_at_full_fans(const StabilityResult& stock, bool fans_settable) {
+    return stock.verdict == Verdict::TooHot && (!fans_settable || stock.end_fan_pct >= 100);
+}
+
+bool measure_stock_again(int stock_ceiling, int profile_limit_c, const StabilityResult& first, bool fans_settable) {
+    return stock_ceiling > profile_limit_c && !hot_at_stock_at_full_fans(first, fans_settable);
+}
+
+std::string undervolt_not_compared(const StabilityResult& stock, bool second_skipped, bool saved_tune) {
+    std::string s = "not compared: the measurement at stock stopped at " + std::to_string(stock.peak_temp_c) + " C after " +
+                    std::to_string(static_cast<int>(stock.seconds)) + " s";
+    if (second_skipped)
+        s += std::string(stock.end_fan_pct >= 100 ? " with the fans at 100 %" : " with fans the app cannot set") +
+             ", and a second measurement would stop as well";
+    s += ", so there is nothing to judge an undervolt against. The card was set to stock for the measurement and is at stock now";
+    if (saved_tune) s += "; the saved tune is unchanged and can be applied";
+    return s;
+}
+
 std::string other_tool_refusal(const std::vector<std::string>& running) {
     auto runs = [&](std::string_view exe) {
         return std::any_of(running.begin(), running.end(), [&](const std::string& name) {
@@ -226,15 +245,34 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
     bool power_ctl = gpu.set_power_limit && gpu.power_limit_range_pct;   // false once skipped
 
     // The only caller of gpu.recover, which can take half a minute, fail,
-    // crash or hang. Rule: never call this while a journal entry is open, or a
-    // crash in it would leave a ceiling for a candidate that never ran.
-    // Callers check gpu.recover first.
+    // crash or hang. Rule: never call this while a candidate's journal entry
+    // is open, or a crash in it would leave a ceiling for a candidate that
+    // never ran. The entry guard_recovery opens is the exception on purpose:
+    // it names a candidate that did run and reset the driver. Callers check
+    // gpu.recover first.
     auto reconnect = [&]() -> bool {
         if (gpu.recover()) return true;
         reconnect_futile = true;
         return false;
     };
     auto reset_to_stock = [&]() -> bool { return gpu.reset_to_stock && gpu.reset_to_stock(); };
+    // The journal entry that guards a recovery (Journal::begin_recovery): open
+    // from before the first reconnect after a probe reset the driver until the
+    // card is back, or until the way out has reset it. 0: none open.
+    int recovery_entry = 0;
+    auto guard_recovery = [&]() -> bool {
+        if (recovery_entry != 0) return true;
+        recovery_entry = journal.begin_recovery();
+        if (recovery_entry >= 0) return true;
+        recovery_entry = 0;
+        return false;
+    };
+    auto end_recovery = [&](const char* verdict) {
+        if (recovery_entry == 0) return;
+        if (!journal.complete(recovery_entry, verdict))
+            log("warning: the crash journal entry could not be closed; later runs will stay below this candidate");
+        recovery_entry = 0;
+    };
     // Ends the run because a write, a reconnect or the recovery after a driver
     // reset failed. A stop request that arrived meanwhile is the more useful
     // reason of the two.
@@ -255,6 +293,7 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
         // The reconnect can take half a minute: say so before it starts.
         const char* const reconnecting = "reconnecting to the driver to restore stock";
         if (reconnected) {
+            guard_recovery();   // on the way out: a journal that cannot be written does not stop the reset
             log(reconnecting);
             reconnect();
         }
@@ -263,10 +302,12 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
             log(reconnecting);
             if (reconnect()) r.stock_restored = reset_to_stock();
         }
+        end_recovery(recovery_end_verdict(r.stock_restored));
         r.ok = false;
         r.reason = why;
-        log("stopped: " + why + (r.stock_restored ? " -- card restored to stock"
-                                                   : " -- reset FAILED, run `gao --reset`"));
+        log("stopped: " + why + (r.stock_restored                               ? " -- card restored to stock"
+                                 : gpu_unreachable(false, r.driver_resets) ? kGpuUnreachableLog
+                                                                           : " -- reset FAILED, run `gao --reset`"));
         return r;
     };
 
@@ -316,7 +357,8 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
     // nothing in here ever leaves an entry behind. False: `stopped` is set and
     // the run must end. On a run that is already stopped it does nothing.
     // Nothing in here starts another recovery: a reset verdict in the health
-    // probe ends the run.
+    // probe ends the run, except a probe without telemetry right after the
+    // load was rebuilt, which reconnects once more (see below).
     auto ensure_hw = [&]() -> bool {
         if (!stopped.empty()) return false;
         if (!hw_suspect) return true;
@@ -324,14 +366,29 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
             hw_suspect = false;
             return true;
         }
+        if (!guard_recovery()) { stopped = "could not write the journal"; return false; }
         log("the driver was reset; reconnecting");
         if (!reconnect()) {
             stop("the driver did not come back after a reset");
             return false;
         }
-        // Stock first, so no candidate stays applied while the card rests. On
-        // failure hw_suspect stays set: the way out makes its one reconnect.
-        if (!reset_to_stock()) {
+        // Stock first, so no candidate stays applied while the card rests. A
+        // driver that is still coming back can refuse the write: on a GTX 1060
+        // (driver 560.94) two resets right after the reconnect failed, and one
+        // ninety seconds after the fault held. So a refused write gets a rest,
+        // a new connection and another try, kHealthTries in all. On failure
+        // hw_suspect stays set: the way out makes its one reconnect.
+        bool at_stock = reset_to_stock();
+        for (int t = 1; !at_stock && t < kHealthTries; ++t) {
+            log("the card did not take stock yet");
+            if (!rest()) { stopped = "aborted"; return false; }
+            if (!reconnect()) {
+                stop("the driver did not come back after a reset");
+                return false;
+            }
+            at_stock = reset_to_stock();
+        }
+        if (!at_stock) {
             stop("could not set the card to stock while recovering");
             return false;
         }
@@ -341,9 +398,10 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
             if (!rest()) { stopped = "aborted"; return false; }
             // Once per recovery: a failed preparation is tried again after the
             // next rest and is no reset event; a prepared load stays prepared.
+            bool rebuilt = false;   // the load was prepared in this pass
             if (!load_ready) {
                 log("preparing the stress load");
-                load_ready = io.prepare_load();
+                load_ready = rebuilt = io.prepare_load();
                 if (io.aborted && io.aborted()) { stopped = "aborted"; return false; }
                 if (!load_ready) { log("the stress load is not ready yet"); continue; }
             }
@@ -356,6 +414,27 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
             if (s.verdict == Verdict::Stable && s.score < kStalledScore * r.baseline.score) s.verdict = Verdict::Stalled;
             log("health: " + describe(s));
             if (s.verdict == Verdict::Aborted) { stopped = "aborted"; return false; }
+            // GTX 1060, driver 560.94: building the load again reset the driver
+            // once more, 3 to 4 s later, after a rest of 20 s and of 60 s alike;
+            // the probe then had no telemetry while the card computed at 85 %
+            // of stock. That is the recovery still settling, so it is counted
+            // but gets a new connection, stock and one more probe. The load
+            // itself stays: the reconnect does not touch it.
+            if (rebuilt && s.verdict == Verdict::NoTelemetry) {
+                ++r.driver_resets;
+                log("the telemetry dropped after the stress load was rebuilt; reconnecting");
+                hw_suspect = true;   // until stock holds again: the way out reconnects once
+                if (!reconnect()) {
+                    stop("the driver did not come back after a reset");
+                    return false;
+                }
+                if (!reset_to_stock()) {
+                    stop("could not set the card to stock while recovering");
+                    return false;
+                }
+                hw_suspect = false;
+                continue;
+            }
             // The health probe is a load and can reset the driver itself. That
             // is counted, and the card is not loaded again in this run. The
             // connections may be dead again: the way out reconnects once.
@@ -369,7 +448,10 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
             }
             // A baseline that scored nothing gives no bar to measure against:
             // then no health probe counts as healthy.
-            if (s.verdict == Verdict::Stable && r.baseline.score > 0 && s.score >= kHealthyScore * r.baseline.score) return true;
+            if (s.verdict == Verdict::Stable && r.baseline.score > 0 && s.score >= kHealthyScore * r.baseline.score) {
+                end_recovery(kRecovered);
+                return true;
+            }
             // Computing, but not back yet (slow, a wrong result, too hot).
         }
         stop("the card did not recover after a driver reset");
@@ -818,14 +900,24 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
             // be a lie about what the profile is for.
             if (obj.faster_than_stock && stock && stock->score > 0 && s->score < kNotSlowerScore * stock->score) {
                 char why[400];
-                std::snprintf(why, sizeof(why), "the result is slower than stock: %.0f it/s against %.0f (%+.1f %%). %s Nothing was saved or applied. "
-                              "If the card runs warm, the Undervolt profile is the one that helps: the same speed on less power",
+                std::snprintf(why, sizeof(why), "the result is slower than stock: %.0f it/s against %.0f (%+.1f %%). %s Nothing was saved or applied. ",
                               s->score, stock->score, (s->score / stock->score - 1) * 100,
                               r.power_pct < 100
                                   ? ("To stay under " + std::to_string(obj.max_temp_c) + " C the power limit went down to " +
                                      std::to_string(r.power_pct) + " %, and that costs more speed than the clocks win back.").c_str()
                                   : "The clocks this card holds do not make it faster.");
-                return finish_fail(why);
+                // The Undervolt profile only where it can run (decision D8): not on a
+                // card that stopped the measurement at stock with nothing left to cool
+                // it with, where its own measurement at stock would stop too.
+                const bool settable = static_cast<bool>(gpu.set_fan_pct);
+                const std::string next =
+                    !hot_at_stock_at_full_fans(*stock, settable)
+                        ? "If the card runs warm, the Undervolt profile may help: it aims for the same speed on less power, and only its "
+                          "own run shows whether it does on this card"
+                        : "The card reached " + std::to_string(stock->peak_temp_c) + " C at stock " +
+                              (settable ? "with its fans at 100 %" : "with fans the app cannot set") +
+                              ": the Undervolt profile would stop at its own measurement at stock as well";
+                return finish_fail(why + next);
             }
             r.ok = true;
             if (gpu.recover && r.driver_resets > 0) log("the driver reset during this run; the search stopped exploring there");

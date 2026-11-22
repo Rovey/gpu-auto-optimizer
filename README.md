@@ -79,7 +79,7 @@ service.
 |---|---|
 | All in one (default) | About 40 minutes (31 on the reference card) |
 | Best of my GPU, Cool & efficient, Quiet, Max performance | About 15 minutes |
-| Undervolt | About 13 minutes |
+| Undervolt | About 13 minutes, up to 5 more on a card that runs hotter than 75 °C at stock |
 | Test the tune after a driver update | 5 minutes |
 
 The card is under full load all that time, and the fans get loud.
@@ -256,8 +256,8 @@ five-minute soak before it was saved. The whole run took 12 minutes. The log of 
 |---|---|---|---|
 | **All in one** (default) | More speed than stock on less power: the overclock below, an undervolt on top of it at a clock half-way back to stock, and the quietest fan curve that holds the temperature | 75 °C | power, core, memory, the voltage/frequency curve, fans |
 | **Best of my GPU** | Highest confirmed clocks with a safety margin, most power the card allows | 75 °C | power, core, memory |
-| **Cool & efficient** | Lowest power limit that costs under 2 % speed; clocks stay stock | 65 °C | power |
-| **Quiet** | Milder clocks and the lowest power limit that costs under 2 % speed | 80 °C | power, core, memory |
+| **Cool & efficient** | The highest power limit that stays under 65 °C, then the lowest one below it that costs under 2 % speed against it; clocks stay stock | 65 °C | power |
+| **Quiet** | Milder clocks; the highest power limit that stays under 80 °C, then the lowest one below it that costs under 2 % speed against it | 80 °C | power, core, memory |
 | **Max performance** | Highest confirmed clocks minus one step, highest power limit | 83 °C | power, core, memory |
 | **Undervolt** | The clock the card runs under load at stock, on the lowest stable voltage plus the same margin; clocks and power limit stay stock | 75 °C, or what the card reached at stock if that was more (see below) | the voltage/frequency curve |
 
@@ -267,10 +267,19 @@ five-minute soak before it was saved. The whole run took 12 minutes. The log of 
   was at stock (within 1 %, the scatter of two five-minute runs). A card that runs warmer at stock than the profile allows
   has to have its power limit lowered to meet the temperature, and that can cost more than the clocks win back. The run then
   says so, saves nothing, and leaves the card at stock. **Undervolt** is the profile for such a card. Quiet and Cool &
-  efficient give a little speed away on purpose and are not judged this way.
+  efficient give speed away on purpose and are not judged this way. Their temperature limit comes first: on a card that
+  runs hotter than the limit at stock, the power limit goes as low as it takes, and that can cost far more than 2 %
+  (Cool & efficient on a GTX 1060 that reaches 83 °C at stock: power 50 %, 20 % slower, 49 instead of 96 W, 59 °C).
+- **Undervolt keeps a result only when it gains something.** The card is measured at stock with the fans on the same
+  curve as the result, five minutes each, and the last half of each is compared. The result has to be as fast as stock
+  (within 1 %), must not be warmer without being quieter or louder without being cooler, and has to draw at least 3 % less
+  power, run at least 2 °C cooler or with the fans at least 5 points slower. Otherwise the run says why, saves nothing and
+  leaves the card at stock. A measurement at stock that the temperature stopped compares with nothing, and the run
+  stops there.
 - **Undervolt on a hot card:** when the card ran hotter than 75 °C at stock, the run uses that temperature as its limit
   instead. It goes no higher than the card's own temperature target, or 85 °C when the card reports none. The fan curve
-  moves up by the same amount, so the fans do not run at full speed to reach a temperature the card never had.
+  moves up by the same amount, so the fans do not run at full speed to reach a temperature the card never had. The card is
+  then measured at stock a second time on the moved curve, and the result is compared with that.
 - **The Undervolt profile replaces a saved overclock.** On the card, a core offset and the curve are one table. All in one
   saves both as one shape, and so does `gao --undervolt --on-overclock`.
 - **The card's built-in curve moves with temperature,** so the points above the one the card runs on are stored a little
@@ -297,7 +306,9 @@ What it cannot do: promise that every card stays stable in every game, or keep a
 - **You see what it does.** During a run the window draws the card's voltage/frequency curve as the run writes it, over the
   card's own curve. It says which step the run is at and counts every long step down.
 - **You keep seeing what it gave.** The dashboard shows the saved tune against the card at stock, as measured when the tune
-  was made: speed, power, fan speed under load and peak temperature.
+  was made: speed, power, fan speed under load and peak temperature. For an Undervolt tune those are the averages of the
+  last half of each measurement, the numbers the run judged it on, with the average temperature and fan speed and the
+  peak temperature of the whole run apart.
 - **Fan curves:** the measured one, Silent, Normal, Cool or Aggressive, or your own. The fans stop at idle without cycling
   on and off. The app learns the lowest speed your fans can actually hold. The fans go back to the driver on exit, sleep,
   logoff and crashes.

@@ -39,11 +39,16 @@ public:
     // The voltage/frequency curve of the graphics clock (core/vf_curve.hpp),
     // through three more undocumented calls. Reading may need administrator
     // rights. nullopt when a call fails or the card reports no points.
+    // Frequencies and offsets are in kHz on every card.
     std::optional<std::vector<VfPoint>> ReadVfCurve(unsigned gpu);
-    // Sets the raw offsets of the named slots and leaves the others as they
+    // Sets the offsets (kHz) of the named slots and leaves the others as they
     // are. True when the driver accepted the call; what the card did with it
     // is for the caller to read back (apply_flat_top does).
     bool WriteVfRawOffsets(unsigned gpu, const std::vector<VfOffset>& offsets);
+    // How many of the units the card counts its curve in make a kHz
+    // (vf_units_per_khz): 2 on a GTX 10 card, else 1. Asks the driver for the
+    // card's architecture once; 1 while that cannot be read.
+    int VfUnitsPerKhz(unsigned gpu);
 
     // The default of the card's temperature target (parse_thermal_policy_default):
     // what the target is when no tool has set it. A read; needs no
@@ -73,6 +78,7 @@ private:
     void* lib_ = nullptr;
     void* query_ = nullptr;
     std::vector<void*> gpus_;
+    std::vector<int> vf_units_;   // per GPU, as VfUnitsPerKhz answered; 0: not asked yet
     bool inited_ = false;
     std::string error_;
 };

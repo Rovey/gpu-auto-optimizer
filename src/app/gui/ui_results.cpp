@@ -11,14 +11,17 @@ namespace {
 // The two runs it compares differ in length, and it says so: a card is not
 // heated through after half a minute, so the temperature and the fan speed
 // of the short run read lower than they would on a warm card.
+// on_curve: both sides ran with the fans on the app's curve and were judged
+// on the averages of their counted part (app::UndervoltOutcome::before); the
+// headers and the note say so.
 template <typename Rows>
-void comparison(const StabilityResult& before, const StabilityResult& after, Rows rows) {
+void comparison(const StabilityResult& before, const StabilityResult& after, Rows rows, bool on_curve = false) {
     if (!ImGui::BeginTable("cmp", 3, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_BordersOuter |
                                          ImGuiTableFlags_SizingStretchSame | ImGuiTableFlags_PadOuterX))
         return;
     ImGui::TableSetupColumn("");
-    ImGui::TableSetupColumn(("Before (stock, " + duration_text(before.seconds) + ")").c_str());
-    ImGui::TableSetupColumn(("After (" + duration_text(after.seconds) + ")").c_str());
+    ImGui::TableSetupColumn(on_curve ? "Before (stock, fans on the app's curve)" : ("Before (stock, " + duration_text(before.seconds) + ")").c_str());
+    ImGui::TableSetupColumn(on_curve ? "After (fans on the app's curve)" : ("After (" + duration_text(after.seconds) + ")").c_str());
     ImGui::TableHeadersRow();
     rows([](const char* name, const std::string& a, const std::string& b) {
         ImGui::TableNextRow(ImGuiTableRowFlags_None, em() * 1.6f);
@@ -27,7 +30,12 @@ void comparison(const StabilityResult& before, const StabilityResult& after, Row
         ImGui::TableNextColumn(); ImGui::TextUnformatted(b.c_str());
     });
     ImGui::EndTable();
-    if (before.verdict == Verdict::TooHot)
+    if (on_curve)
+        wrapped(kDim, "Both ran five minutes with the fans on the app's curve. The averages are of the last " +
+                          std::to_string(static_cast<int>(after.counted.seconds + 0.5)) + " s" +
+                          " of each, when the card was warm: the result was judged on them. The peak temperature and the fan speed "
+                          "at the end are of the whole run.");
+    else if (before.verdict == Verdict::TooHot)
         wrapped(kDim, "The stock run was stopped at " + reading(before.peak_temp_c, " \xC2\xB0""C") + " after " + duration_text(before.seconds) +
                           ": with the NVIDIA driver's own fan control (fans at " + reading(before.end_fan_pct, " %") +
                           ") the card gets that hot under full load. From there the run kept the fans on a curve.");
@@ -39,16 +47,23 @@ void comparison(const StabilityResult& before, const StabilityResult& after, Row
 
 constexpr const char* kStockFailed =
     "Setting the card back to stock FAILED. Click Revert to stock on the Dashboard; if that fails too, restart the PC.";
+// app::gpu_unreachable: the reset failed after a driver reset.
+constexpr const char* kGpuUnreachable =
+    "The graphics card could not be reached after a driver reset. Its settings could not be set back to stock or confirmed, "
+    "so it may still run changed clocks, power limit or fan speed. Restart Windows: Revert to stock will not help while the "
+    "driver does not answer. Start no other run until the card answers again.";
 
 // A run that ended without a result. A stop the user chose (Abort, or not
 // starting next to other programs) is said calmly; anything else in red, with
 // the engine's reason and where its log is. A refusal (app::is_refusal) says
 // so with its reason alone. at_stock: empty when the card was not touched;
-// false when setting it back failed.
-void no_result(bool ran, const std::string& reason, std::optional<bool> at_stock, bool put_back) {
+// false when setting it back failed. unreachable: that failure followed a
+// driver reset (app::gpu_unreachable); in hardware check 115 a restart of Windows mended it.
+void no_result(bool ran, const std::string& reason, std::optional<bool> at_stock, bool put_back, bool unreachable = false) {
     if (stopped_by_user(reason)) {
         heading("Stopped");
         if (!ran && !reason.starts_with("aborted")) wrapped(kText, "You did not start the run: nothing on the card was changed.");
+        else if (unreachable) wrapped(kBad, std::string("You stopped the run. ") + kGpuUnreachable);
         else if (put_back) wrapped(kText, "You stopped the run.");
         else if (at_stock.value_or(true))
             wrapped(kText, ran ? "You stopped the run. The card is back at stock." : "You stopped the run before it searched for anything.");
@@ -63,7 +78,8 @@ void no_result(bool ran, const std::string& reason, std::optional<bool> at_stock
     wrapped(kBad, text);
     if (!link.empty()) wrapped(kBad, link);
     if (!ran && app::is_refusal(reason)) return;
-    if (ran && !put_back) wrapped(kText, at_stock.value_or(true) ? "The card is back at stock." : kStockFailed);
+    if (unreachable) wrapped(kBad, kGpuUnreachable);
+    else if (ran && !put_back) wrapped(kText, at_stock.value_or(true) ? "The card is back at stock." : kStockFailed);
     wrapped(kDim, "Nothing was saved. If this looks wrong, send run.log from %ProgramData%\\GpuAutoOptimizer with a problem report.");
 }
 
@@ -74,7 +90,7 @@ bool optimize_result(const app::OptimizeOutcome& o, bool put_back) {
         return false;
     }
     if (!o.result.ok) {
-        no_result(true, o.result.reason, o.result.stock_restored, put_back);
+        no_result(true, o.result.reason, o.result.stock_restored, put_back, app::gpu_unreachable(o));
         return false;
     }
     const OptimizeResult& r = o.result;
@@ -107,11 +123,16 @@ bool undervolt_result(const app::UndervoltOutcome& o, bool put_back) {
         return false;
     }
     if (!o.result.ok) {
-        no_result(true, o.result.reason, o.result.stock_restored, put_back);
+        no_result(true, o.result.reason, o.result.stock_restored, put_back, app::gpu_unreachable(o));
         return false;
     }
     const UndervoltResult& r = o.result;
-    heading(done_heading(r.baseline, r.after).c_str());
+    const bool judged = o.before && o.after;   // against stock, on the same fan curve, over the counted part
+    const StabilityResult& before = judged ? *o.before : r.baseline;
+    const StabilityResult& after = judged ? *o.after : r.after;
+    heading((judged ? done_heading(before.counted.score, after.counted.score, before.counted.avg_power_w, after.counted.avg_power_w)
+                    : done_heading(before, after))
+                .c_str());
     char line[200];
     std::snprintf(line, sizeof(line), "Applied: %d MHz at %d mV instead of %d mV", r.freq_khz / 1000, r.applied_uv / 1000,
                   r.stock_uv / 1000);
@@ -121,15 +142,30 @@ bool undervolt_result(const app::UndervoltOutcome& o, bool put_back) {
                   r.edge_uv / 1000, r.confirmed_uv / 1000);
     wrapped(kDim, line);
     ImGui::Spacing();
-    comparison(r.baseline, r.after, [&](auto row) {
-        row("Speed (stress test)", score_text(r.baseline.score), against(r.baseline.score, r.after.score, "it/s"));
-        row("Core clock", reading(r.baseline.avg_core_mhz, " MHz"), reading(r.after.avg_core_mhz, " MHz"));
+    if (judged) {
+        const StabilityResult::Counted &b = before.counted, &a = after.counted;
+        comparison(before, after, [&](auto row) {
+            row("Speed (stress test), average", score_text(b.score), against(b.score, a.score, "it/s"));
+            row("Core clock, average", reading(b.avg_core_mhz, " MHz"), reading(a.avg_core_mhz, " MHz"));
+            row("Voltage for that clock", std::to_string(r.stock_uv / 1000) + " mV", std::to_string(r.applied_uv / 1000) + " mV");
+            row("Power, average", reading(b.avg_power_w, " W"),
+                b.avg_power_w > 0 && a.avg_power_w >= 0 ? against(b.avg_power_w, a.avg_power_w, "W") : reading(a.avg_power_w, " W"));
+            row("Temperature, average", reading(b.avg_temp_c, " \xC2\xB0""C"), reading(a.avg_temp_c, " \xC2\xB0""C"));
+            row("Fan speed, average", reading(b.avg_fan_pct, " %"), reading(a.avg_fan_pct, " %"));
+            row("Peak temperature, whole run", reading(before.peak_temp_c, " \xC2\xB0""C"), reading(after.peak_temp_c, " \xC2\xB0""C"));
+            row("Fan speed at the end", reading(before.end_fan_pct, " %"), reading(after.end_fan_pct, " %"));
+        }, true);
+        return true;
+    }
+    comparison(before, after, [&](auto row) {
+        row("Speed (stress test)", score_text(before.score), against(before.score, after.score, "it/s"));
+        row("Core clock", reading(before.avg_core_mhz, " MHz"), reading(after.avg_core_mhz, " MHz"));
         row("Voltage for that clock", std::to_string(r.stock_uv / 1000) + " mV", std::to_string(r.applied_uv / 1000) + " mV");
-        row("Peak temperature", reading(r.baseline.peak_temp_c, " \xC2\xB0""C"), reading(r.after.peak_temp_c, " \xC2\xB0""C"));
-        row("Fan speed at the end", reading(r.baseline.end_fan_pct, " %"), reading(r.after.end_fan_pct, " %"));
-        row("Power", reading(r.baseline.avg_power_w, " W"),
-            r.baseline.avg_power_w > 0 && r.after.avg_power_w >= 0 ? against(r.baseline.avg_power_w, r.after.avg_power_w, "W")
-                                                                   : reading(r.after.avg_power_w, " W"));
+        row("Peak temperature", reading(before.peak_temp_c, " \xC2\xB0""C"), reading(after.peak_temp_c, " \xC2\xB0""C"));
+        row("Fan speed at the end", reading(before.end_fan_pct, " %"), reading(after.end_fan_pct, " %"));
+        row("Power", reading(before.avg_power_w, " W"),
+            before.avg_power_w > 0 && after.avg_power_w >= 0 ? against(before.avg_power_w, after.avg_power_w, "W")
+                                                             : reading(after.avg_power_w, " W"));
     });
     return true;
 }
@@ -138,7 +174,8 @@ bool undervolt_result(const app::UndervoltOutcome& o, bool put_back) {
 bool all_in_one_result(const app::AllInOneOutcome& o, bool put_back) {
     if (!o.ok) {
         // Its reason ends in "-- card at stock" or "-- reset to stock FAILED, ...".
-        no_result(o.ran, o.error, o.ran ? std::optional<bool>(o.error.find("FAILED") == std::string::npos) : std::nullopt, put_back);
+        no_result(o.ran, o.error, o.ran ? std::optional<bool>(o.error.find("FAILED") == std::string::npos) : std::nullopt, put_back,
+                  app::gpu_unreachable(o));
         return false;
     }
     const Profile& p = o.profile;
@@ -172,7 +209,8 @@ bool retest_result(const app::RetestOutcome& o, bool put_back) {
             heading("Stopped");
             // "aborted -- reset to stock FAILED, ..." (common_retest.cpp) must not read as a calm stop,
             // unless the tune from before the test was put back after all (worker.cpp).
-            if (!put_back && o.error.find("FAILED") != std::string::npos)
+            if (app::gpu_unreachable(o)) wrapped(kBad, std::string("You stopped the test. ") + kGpuUnreachable);
+            else if (!put_back && o.error.find("FAILED") != std::string::npos)
                 wrapped(kBad, std::string("You stopped the test. ") + kStockFailed);
             else wrapped(kText, "You stopped the test.");
             // After a step down the step under test is on the card and saved, not the tune from before the test.
@@ -183,6 +221,7 @@ bool retest_result(const app::RetestOutcome& o, bool put_back) {
         }
         heading("Not applied");
         wrapped(kBad, for_window(o.error));
+        if (app::gpu_unreachable(o)) wrapped(kBad, kGpuUnreachable);
         if (o.result.test.seconds > 0)
             wrapped(kText, "The saved tune is kept as it is and stays off on this driver. Optimize again to find one that holds.");
         return false;

@@ -101,6 +101,7 @@ bool Nvapi::Init() {
 
     gpus_.assign(handles, handles + count);
     if (gpus_.empty()) { error_ = "NvAPI_EnumPhysicalGPUs returned no GPUs"; return false; }
+    vf_units_.assign(gpus_.size(), 0);
 
     return true;
 }
@@ -191,6 +192,13 @@ constexpr unsigned kGetVfpCurveId = 0x21537AD4;
 constexpr unsigned kGetClockBoostTableId = 0x23F1B133;
 constexpr unsigned kSetClockBoostTableId = 0x0733E009;
 constexpr unsigned VfVersion(std::size_t size) { return static_cast<unsigned>(size) | (1u << 16); }
+// NvAPI_GPU_GetArchInfo, a public call of nvapi.h. NV_GPU_ARCH_INFO, version
+// 2: four words, the version, the architecture, the implementation and the
+// revision.
+constexpr unsigned kGetArchInfoId = 0xD8265D24;
+constexpr std::size_t kArchInfoSize = 16;
+constexpr unsigned kArchInfoVersion = static_cast<unsigned>(kArchInfoSize) | (2u << 16);
+constexpr int kArchInfoArchitecture = 4;   // byte offset
 }
 
 bool Nvapi::VfCall(unsigned gpu, unsigned id, const char* name, unsigned char* buf) {
@@ -226,6 +234,19 @@ std::optional<int> Nvapi::TempTargetDefaultC(unsigned gpu) {
     return parse_thermal_policy_default(buf, sizeof(buf));
 }
 
+int Nvapi::VfUnitsPerKhz(unsigned gpu) {
+    if (gpu < vf_units_.size() && vf_units_[gpu] != 0) return vf_units_[gpu];
+    unsigned char info[kArchInfoSize] = {};
+    PutU32(info, 0, kArchInfoVersion);
+    // An architecture that cannot be read is taken for one that counts in
+    // kHz, as every card was before this call was made, and asked again at
+    // the next read.
+    if (!VfCall(gpu, kGetArchInfoId, "GetArchInfo", info)) return 1;
+    const int units = vf_units_per_khz(static_cast<unsigned>(GetI32(info, kArchInfoArchitecture)));
+    if (gpu < vf_units_.size()) vf_units_[gpu] = units;
+    return units;
+}
+
 bool Nvapi::ReadVfBuffers(unsigned gpu, bool fill_mask, unsigned char* mask, unsigned char* status, unsigned char* control) {
     std::memset(mask, 0, kVfMaskSize);
     PutU32(mask, 0, VfVersion(kVfMaskSize));
@@ -246,9 +267,10 @@ bool Nvapi::ReadVfBuffers(unsigned gpu, bool fill_mask, unsigned char* mask, uns
 std::optional<std::vector<VfPoint>> Nvapi::ReadVfCurve(unsigned gpu) {
     // Off the stack: 22 kB together.
     std::vector<unsigned char> mask(kVfMaskSize), status(kVfStatusSize), control(kVfControlSize);
+    const int units = VfUnitsPerKhz(gpu);
     for (const bool fill_mask : {false, true}) {   // some drivers only answer when asked for every slot
         if (!ReadVfBuffers(gpu, fill_mask, mask.data(), status.data(), control.data())) continue;
-        auto points = parse_vf_curve(mask.data(), status.data(), control.data());
+        auto points = parse_vf_curve(mask.data(), status.data(), control.data(), units);
         if (!points.empty()) return points;
         error_ = "the driver reported no curve points";
     }
@@ -264,9 +286,10 @@ bool Nvapi::WriteVfRawOffsets(unsigned gpu, const std::vector<VfOffset>& offsets
     }
     if (!read) { if (error_.empty()) error_ = "the curve could not be read before the write"; return false; }
     // The table as it is now, with only the named slots changed.
+    const int units = VfUnitsPerKhz(gpu);
     for (const VfOffset& o : offsets) {
         if (o.index < 0 || o.index >= kVfSlots) { error_ = "curve slot out of range"; return false; }
-        put_vf_raw_offset(control.data(), o.index, o.raw);
+        put_vf_raw_offset(control.data(), o.index, o.raw, units);
     }
     PutU32(control.data(), 0, VfVersion(kVfControlSize));
     if (!VfCall(gpu, kSetClockBoostTableId, "SetClockBoostTable", control.data())) return false;
