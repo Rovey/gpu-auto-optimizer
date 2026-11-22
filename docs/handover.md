@@ -162,7 +162,7 @@ AGENTS.md lists the targeted tests that take minutes instead of a 40-minute run.
 - **Commit before applying a temporary test patch.** Undoing the patch with `git checkout -- <file>` also
   wipes uncommitted work in the same file.
 - **Run the CLI from the classic console (`conhost`), not Windows Terminal,** for long runs on a weak
-  card: Windows Terminal draws with the GPU and can stop updating while the run goes on (#91). Every run
+  card: Windows Terminal draws with the GPU and can stop updating during a run (#91). Every run
   is also written to `%ProgramData%\GpuAutoOptimizer\run.log`.
 
 ## 2. Current project state (2026-11-22)
@@ -180,7 +180,7 @@ AGENTS.md lists the targeted tests that take minutes instead of a 40-minute run.
 
 ### 2.1 What v0.4.10 did not show on hardware
 
-The checks are recorded in [hardware-checks.md](hardware-checks.md) (110 to 116 for this release).
+The checks are recorded in [hardware-checks.md](hardware-checks.md) (110 to 117 for this release; 118 and 119 for the fixes after it).
 Covered by unit tests and not seen on a real card:
 
 - the "GPU could not be reached" advice, the skipped put-back after a stop on such a card, and the crash
