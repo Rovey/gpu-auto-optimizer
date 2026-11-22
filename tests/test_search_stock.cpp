@@ -49,9 +49,8 @@ TEST_CASE("a fan tool does not stop a run, and the run says that it may hold the
     CHECK(fan_tool_warning({"explorer.exe", "FanControl.exe"}) ==
           "fans: FanControl is running and may hold the fans, so this run's numbers can depend on its curve. Close it for a "
           "result on the card's own fan control");
-    CHECK(fan_tool_warning({"ArgusMonitor.exe"}).find("fans: Argus Monitor is running") == 0);
     CHECK_FALSE(fan_tool_warning({"fancontrol.EXE"}).empty());   // Windows does not care about the case
-    CHECK(other_tool_refusal({"FanControl.exe", "ArgusMonitor.exe"}).empty());
+    CHECK(other_tool_refusal({"FanControl.exe"}).empty());
     CHECK(fan_tool_warning({}).empty());
     CHECK(fan_tool_warning({"explorer.exe", "MSIAfterburner.exe", "NotFanControl.exe", "FanControl.exe.bak"}).empty());
 }

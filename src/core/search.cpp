@@ -198,13 +198,9 @@ std::string other_tool_refusal(const std::vector<std::string>& running) {
 }
 
 std::string fan_tool_warning(const std::vector<std::string>& running) {
-    const char* tool = is_running(running, "fancontrol.exe")     ? "FanControl"
-                     : is_running(running, "argusmonitor.exe")   ? "Argus Monitor"
-                                                                 : nullptr;
-    if (!tool) return {};
-    return std::string("fans: ") + tool +
-           " is running and may hold the fans, so this run's numbers can depend on its curve. Close it for a result on the "
-           "card's own fan control";
+    if (!is_running(running, "fancontrol.exe")) return {};
+    return "fans: FanControl is running and may hold the fans, so this run's numbers can depend on its curve. Close it for a "
+           "result on the card's own fan control";
 }
 
 namespace {
