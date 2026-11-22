@@ -208,13 +208,21 @@ UndervoltResult find_undervolt(const GpuControl& gpu, Journal& journal, const Un
     // short probe that must compute normally again. False: `stopped` says why the run ends.
     auto recovered = [&]() -> bool {
         if (++r.driver_resets >= 2) { stopped = "the driver reset twice"; return false; }
+        // What the window shows meanwhile; the short probes after it announce nothing, so it is cleared on every way out.
+        const auto announce = [&](const char* what, double seconds) { if (io.measuring) io.measuring(what, seconds); };
+        struct Cleared {
+            const decltype(io.measuring)& measuring;
+            ~Cleared() { if (measuring) measuring("", 0); }
+        } cleared{io.measuring};
         // Reconnect, stock, the overclock again, rest.
         auto reconnect_and_rest = [&]() -> bool {
+            announce("The driver was reset: reconnecting", 0);
             if (!gpu.recover || !gpu.recover()) { stopped = "the driver did not come back after a reset"; return false; }
             if (!to_stock()) { stopped = "could not set the card to stock while recovering"; return false; }
             if (!set_base()) { stopped = "could not set the overclock again after a driver reset"; return false; }
             if (io.rest) {
                 log("resting " + std::to_string(static_cast<int>(kRestAfterResetS)) + " s before the card is loaded again");
+                announce("The driver was reset: resting before the card is loaded again", kRestAfterResetS);
                 if (!io.rest(kRestAfterResetS)) { stopped = "aborted"; return false; }
             }
             return true;
@@ -224,6 +232,7 @@ UndervoltResult find_undervolt(const GpuControl& gpu, Journal& journal, const Un
         log("the driver was reset; reconnecting");
         if (!reconnect_and_rest()) return false;
         if (io.prepare_load && !io.prepare_load()) { stopped = "the stress load could not be rebuilt after a driver reset"; return false; }
+        announce("Checking that the card is back", kHealthProbeS);
         StabilityResult health = io.probe(kHealthProbeS, limit_c, 0.0);
         log("health: " + describe(verdict_name(health.verdict), health));
         // As in the search (GTX 1060, driver 560.94): rebuilding the load can
@@ -234,6 +243,7 @@ UndervoltResult find_undervolt(const GpuControl& gpu, Journal& journal, const Un
             ++r.driver_resets;
             log("the telemetry dropped after the stress load was rebuilt; reconnecting");
             if (!reconnect_and_rest()) return false;
+            announce("Checking that the card is back", kHealthProbeS);
             health = io.probe(kHealthProbeS, limit_c, 0.0);
             log("health: " + describe(verdict_name(health.verdict), health));
         }
