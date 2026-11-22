@@ -190,3 +190,88 @@ TEST_CASE("the fan curve moves by what the card's own target leaves, not by a fi
     // No target reported: ten degrees, as in the step before this one.
     CHECK(shifted_curve(normal, temp_ceiling(75, 86) - 75) == FanCurve{50, {{50, 35}, {70, 45}, {80, 65}, {85, 100}}});
 }
+
+// Hardware check 112: a GTX 1080 Ti that reached 86 C at stock.
+static StabilityResult hot_stock(int end_fan_pct) {
+    StabilityResult s = stock_run(Verdict::TooHot, 182, 86);
+    s.end_fan_pct = end_fan_pct;
+    return s;
+}
+
+TEST_CASE("a card at 85 C at stock with its fans at 100 %, or with fans the app cannot set, cannot be cooled more") {
+    CHECK(hot_at_stock_at_full_fans(hot_stock(100), true));
+    CHECK(hot_at_stock_at_full_fans(hot_stock(78), false));    // the fans are not the app's to raise
+    CHECK(hot_at_stock_at_full_fans(hot_stock(-1), false));
+    CHECK_FALSE(hot_at_stock_at_full_fans(hot_stock(78), true));   // the driver's 78 %: a curve can still raise them
+    CHECK_FALSE(hot_at_stock_at_full_fans(hot_stock(-1), true));   // no reading: not known to be at 100 %
+    StabilityResult cool = stock_run(Verdict::Stable, 300, 80);
+    cool.end_fan_pct = 100;
+    CHECK_FALSE(hot_at_stock_at_full_fans(cool, true));        // loud, but it held
+    CHECK_FALSE(hot_at_stock_at_full_fans(cool, false));
+}
+
+TEST_CASE("the Undervolt profile does not measure stock again when the fans were already at 100 %") {
+    // Check 112: 86 C with the fans at 100 % on the run's curve; the second
+    // measurement, on the curve moved up to 84 C, stopped after 30 s.
+    CHECK_FALSE(measure_stock_again(84, 75, hot_stock(100), true));
+    CHECK_FALSE(measure_stock_again(84, 75, hot_stock(70), false));
+    // Fans that can still go up: measured again, as before.
+    CHECK(measure_stock_again(84, 75, hot_stock(78), true));
+    CHECK(measure_stock_again(80, 75, stock_run(Verdict::Stable, 300, 80), true));
+    // A ceiling at the profile's limit never had a second measurement.
+    CHECK_FALSE(measure_stock_again(75, 75, stock_run(Verdict::Stable, 300, 70), true));
+    CHECK_FALSE(measure_stock_again(75, 75, hot_stock(78), true));
+}
+
+TEST_CASE("an undervolt that is not compared says the card is at stock, not that nothing changed") {
+    const std::string skipped = undervolt_not_compared(hot_stock(100), true, true);
+    CHECK(skipped.rfind("not compared: the measurement at stock stopped at 86 C after 182 s with the fans at 100 %, and a "
+                        "second measurement would stop as well, so there is nothing to judge an undervolt against",
+                        0) == 0);
+    // measure_stock set the card to stock whatever was on it (check 112 read a tune's +60 MHz just before).
+    CHECK(skipped.find("Nothing was changed") == std::string::npos);
+    CHECK(skipped.find("The card was set to stock for the measurement and is at stock now") != std::string::npos);
+    CHECK(skipped.find("the saved tune is unchanged") != std::string::npos);
+    CHECK(undervolt_not_compared(hot_stock(-1), true, false).find("with fans the app cannot set") != std::string::npos);
+    // Measured twice: the second measurement's numbers, as before; without a saved tune nothing is said about one.
+    const std::string twice = undervolt_not_compared(stock_run(Verdict::TooHot, 30, 86), false, false);
+    CHECK(twice == "not compared: the measurement at stock stopped at 86 C after 30 s, so there is nothing to judge an undervolt "
+                   "against. The card was set to stock for the measurement and is at stock now");
+}
+
+TEST_CASE("best and max suggest the Undervolt profile only where it can run (decision D8)") {
+    // Check 112: Best and Max ended slower than stock on a card at 86 C, then
+    // pointed to Undervolt, which refused on the same card.
+    auto run_with = [](int end_fan_pct, bool settable) {
+        Run run = warm_card(1000);
+        run.stock->verdict = Verdict::TooHot;
+        run.stock->seconds = 182;
+        run.stock->peak_temp_c = 86;
+        run.stock->end_fan_pct = end_fan_pct;
+        GpuControl gpu = run.card.gpu();
+        if (settable) gpu.set_fan_pct = [](int) { return true; };
+        return run.go(Preset::BestOfMyGpu, gpu);
+    };
+    // The driver's fans at 78 %: a curve can raise them, so Undervolt may run. It is offered, without a promise.
+    const auto may = run_with(78, true);
+    CAPTURE(may.reason);
+    REQUIRE_FALSE(may.ok);
+    CHECK(may.reason.find("slower than stock") != std::string::npos);
+    CHECK(may.reason.find("the Undervolt profile may help") != std::string::npos);
+    CHECK(may.reason.find("only its own run shows whether it does on this card") != std::string::npos);
+    CHECK(may.reason.find("is the one that helps") == std::string::npos);
+    // Already at 100 %, or fans the app cannot set: no suggestion, the fact instead.
+    const auto full = run_with(100, true);
+    CAPTURE(full.reason);
+    REQUIRE_FALSE(full.ok);
+    CHECK(full.reason.find("may help") == std::string::npos);
+    CHECK(full.reason.find("The card reached 86 C at stock with its fans at 100 %: the Undervolt profile would stop at its own "
+                           "measurement at stock as well") != std::string::npos);
+    const auto unset = run_with(70, false);
+    CHECK(unset.reason.find("may help") == std::string::npos);
+    CHECK(unset.reason.find("with fans the app cannot set") != std::string::npos);
+    // A card that held at stock keeps the suggestion, whatever its fans did.
+    Run held = warm_card(1000);
+    held.stock->end_fan_pct = 100;
+    CHECK(held.go(Preset::BestOfMyGpu).reason.find("the Undervolt profile may help") != std::string::npos);
+}

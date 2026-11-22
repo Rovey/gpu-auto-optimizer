@@ -516,3 +516,32 @@ TEST_CASE("a health probe that computes almost nothing counts as the second rese
     CHECK(r.last.reason.ends_with("; optimize again"));
     CHECK(card.recovers == 2);
 }
+
+// Hardware check 115: after a driver reset, a reset to stock that fails is
+// the card out of reach. The app tells the two apart by this count.
+TEST_CASE("a stepped retest counts the driver resets of its tests and health probes") {
+    {
+        Card card;
+        card.script = {Verdict::WrongResult};   // no reset: steps down, step 1 holds
+        Config c = card.saved();
+        CHECK(retest_stepping(c, "617.42", "GPU-1", card.gpu(), card.io(), 7500).driver_resets == 0);
+    }
+    {
+        Card card;
+        card.script = {Verdict::DeviceLost};   // step 1 resets, step 2 holds
+        Config c = card.saved_at(1);
+        const SteppedRetestResult r = retest_stepping(c, "617.42", "GPU-1", card.gpu(), card.io(), 7500);
+        CHECK(r.ok);
+        CHECK(r.driver_resets == 1);
+    }
+    {
+        Card card;
+        card.script = {Verdict::DeviceLost, Verdict::DeviceLost};   // step 1, then the health probe
+        card.reset_ok = false;
+        Config c = card.saved_at(1);
+        const SteppedRetestResult r = retest_stepping(c, "617.42", "GPU-1", card.gpu(), card.io(), 7500);
+        CHECK_FALSE(r.ok);
+        CHECK(r.driver_resets == 2);
+        CHECK_FALSE(r.last.at_stock);
+    }
+}

@@ -480,9 +480,10 @@ TEST_CASE("a recovery that ends the run stays guarded until the card is back at 
     const auto r = run.go(Preset::BestOfMyGpu);
     CHECK_FALSE(r.ok);
     CHECK(r.stock_restored);
-    // Closed after the way out's reconnect and reset: the last line of the file.
+    // Closed after the way out's reconnect and reset: the last line of the file,
+    // as a recovery that did not get the card back, with the card at stock.
     REQUIRE(!run.card.journal_file.empty());
-    CHECK(run.card.journal_file.back().find("RECOVERED") != std::string::npos);
+    CHECK(run.card.journal_file.back().find("\"RECOVERY FAILED\"") != std::string::npos);
     CHECK(run.card.journal_file.size() == run.card.journal.size() + 2);
     check_journal_rules(run);
 }
@@ -735,4 +736,64 @@ TEST_CASE("a stop request while the card cools after such a confirm probe ends t
     CHECK(r.reason == "aborted");
     CHECK(r.stock_restored);
     CHECK(core_confirms(run.card) == std::vector<int>{60});
+}
+
+// Hardware check 115 (GTX 1060, driver 560.94): after a driver reset in Max no
+// write reached the card again, through new connections and `gao --reset`
+// alike; only a restart of Windows brought it back.
+TEST_CASE("a card the driver took away after a reset is reported as unreachable, with a restart as the advice") {
+    Run run = lost_at_135();
+    run.card.stock_write_fails_after_recover = 100;   // every reset to stock after a reconnect fails
+    const auto r = run.go(Preset::BestOfMyGpu);
+    CHECK_FALSE(r.ok);
+    CHECK(r.reason == "could not set the card to stock while recovering");
+    CHECK(r.driver_resets == 1);
+    CHECK_FALSE(r.stock_restored);
+    CHECK(gao::gpu_unreachable(r.stock_restored, r.driver_resets));
+    CHECK(run.logged("the GPU could not be reached after a driver reset; restart Windows"));
+    CHECK_FALSE(run.logged("restored to stock"));
+    CHECK_FALSE(run.logged("run `gao --reset`"));
+    // The recovery's journal entry says how it ended, and still closes it.
+    REQUIRE(!run.card.journal_file.empty());
+    CHECK(run.card.journal_file.back().find("\"GPU UNREACHABLE\"") != std::string::npos);
+    CHECK(run.card.count_file("RECOVERED") == 0);
+    check_journal_rules(run);
+}
+
+TEST_CASE("a recovery that gets the card back keeps its own words") {
+    Run back = lost_at_135();
+    const auto a = back.go(Preset::BestOfMyGpu);
+    REQUIRE(a.ok);
+    CHECK(a.driver_resets == 1);
+    CHECK_FALSE(gao::gpu_unreachable(true, a.driver_resets));
+    CHECK_FALSE(back.logged("could not be reached"));
+    CHECK(back.card.count_file("\"RECOVERED\"") == 1);
+    CHECK(back.card.count_file("RECOVERY FAILED") == 0);
+    CHECK(back.card.count_file("GPU UNREACHABLE") == 0);
+
+    // Stopped while recovering, but the way out got stock back: said as before.
+    Run stopped = lost_at_135();
+    stopped.card.stock_write_fails_after_recover = gao::kHealthTries;
+    const auto b = stopped.go(Preset::BestOfMyGpu);
+    CHECK_FALSE(b.ok);
+    CHECK(b.stock_restored);
+    CHECK_FALSE(gao::gpu_unreachable(b.stock_restored, b.driver_resets));
+    CHECK(stopped.logged("card restored to stock"));
+    CHECK_FALSE(stopped.logged("could not be reached"));
+    CHECK(stopped.card.count_file("\"RECOVERY FAILED\"") == 1);
+    CHECK(stopped.card.count_file("RECOVERED") == 0);
+    check_journal_rules(stopped);
+}
+
+TEST_CASE("a reset that fails with no driver reset in the run is not taken for a lost card") {
+    Run stuck;   // the reconnect works, the reset keeps failing, from the start
+    stuck.card.with_recover = true;
+    stuck.card.reset_fails_from = 0;
+    const auto r = stuck.go(Preset::BestOfMyGpu);
+    CHECK_FALSE(r.ok);
+    CHECK_FALSE(r.stock_restored);
+    CHECK(r.driver_resets == 0);
+    CHECK_FALSE(gao::gpu_unreachable(r.stock_restored, r.driver_resets));
+    CHECK(stuck.logged("reset FAILED, run `gao --reset`"));
+    CHECK_FALSE(stuck.logged("could not be reached"));
 }

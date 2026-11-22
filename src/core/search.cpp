@@ -161,6 +161,25 @@ std::string stock_refusal(const StabilityResult& stock) {
            " s at stock; let it cool down and start again";
 }
 
+bool hot_at_stock_at_full_fans(const StabilityResult& stock, bool fans_settable) {
+    return stock.verdict == Verdict::TooHot && (!fans_settable || stock.end_fan_pct >= 100);
+}
+
+bool measure_stock_again(int stock_ceiling, int profile_limit_c, const StabilityResult& first, bool fans_settable) {
+    return stock_ceiling > profile_limit_c && !hot_at_stock_at_full_fans(first, fans_settable);
+}
+
+std::string undervolt_not_compared(const StabilityResult& stock, bool second_skipped, bool saved_tune) {
+    std::string s = "not compared: the measurement at stock stopped at " + std::to_string(stock.peak_temp_c) + " C after " +
+                    std::to_string(static_cast<int>(stock.seconds)) + " s";
+    if (second_skipped)
+        s += std::string(stock.end_fan_pct >= 100 ? " with the fans at 100 %" : " with fans the app cannot set") +
+             ", and a second measurement would stop as well";
+    s += ", so there is nothing to judge an undervolt against. The card was set to stock for the measurement and is at stock now";
+    if (saved_tune) s += "; the saved tune is unchanged and can be applied";
+    return s;
+}
+
 std::string other_tool_refusal(const std::vector<std::string>& running) {
     auto runs = [&](std::string_view exe) {
         return std::any_of(running.begin(), running.end(), [&](const std::string& name) {
@@ -248,9 +267,9 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
         recovery_entry = 0;
         return false;
     };
-    auto end_recovery = [&] {
+    auto end_recovery = [&](const char* verdict) {
         if (recovery_entry == 0) return;
-        if (!journal.complete(recovery_entry, "RECOVERED"))
+        if (!journal.complete(recovery_entry, verdict))
             log("warning: the crash journal entry could not be closed; later runs will stay below this candidate");
         recovery_entry = 0;
     };
@@ -283,11 +302,12 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
             log(reconnecting);
             if (reconnect()) r.stock_restored = reset_to_stock();
         }
-        end_recovery();
+        end_recovery(recovery_end_verdict(r.stock_restored));
         r.ok = false;
         r.reason = why;
-        log("stopped: " + why + (r.stock_restored ? " -- card restored to stock"
-                                                   : " -- reset FAILED, run `gao --reset`"));
+        log("stopped: " + why + (r.stock_restored                               ? " -- card restored to stock"
+                                 : gpu_unreachable(false, r.driver_resets) ? kGpuUnreachableLog
+                                                                           : " -- reset FAILED, run `gao --reset`"));
         return r;
     };
 
@@ -429,7 +449,7 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
             // A baseline that scored nothing gives no bar to measure against:
             // then no health probe counts as healthy.
             if (s.verdict == Verdict::Stable && r.baseline.score > 0 && s.score >= kHealthyScore * r.baseline.score) {
-                end_recovery();
+                end_recovery(kRecovered);
                 return true;
             }
             // Computing, but not back yet (slow, a wrong result, too hot).
@@ -880,14 +900,24 @@ OptimizeResult optimize(const GpuControl& gpu, const Objectives& obj, Journal& j
             // be a lie about what the profile is for.
             if (obj.faster_than_stock && stock && stock->score > 0 && s->score < kNotSlowerScore * stock->score) {
                 char why[400];
-                std::snprintf(why, sizeof(why), "the result is slower than stock: %.0f it/s against %.0f (%+.1f %%). %s Nothing was saved or applied. "
-                              "If the card runs warm, the Undervolt profile is the one that helps: the same speed on less power",
+                std::snprintf(why, sizeof(why), "the result is slower than stock: %.0f it/s against %.0f (%+.1f %%). %s Nothing was saved or applied. ",
                               s->score, stock->score, (s->score / stock->score - 1) * 100,
                               r.power_pct < 100
                                   ? ("To stay under " + std::to_string(obj.max_temp_c) + " C the power limit went down to " +
                                      std::to_string(r.power_pct) + " %, and that costs more speed than the clocks win back.").c_str()
                                   : "The clocks this card holds do not make it faster.");
-                return finish_fail(why);
+                // The Undervolt profile only where it can run (decision D8): not on a
+                // card that stopped the measurement at stock with nothing left to cool
+                // it with, where its own measurement at stock would stop too.
+                const bool settable = static_cast<bool>(gpu.set_fan_pct);
+                const std::string next =
+                    !hot_at_stock_at_full_fans(*stock, settable)
+                        ? "If the card runs warm, the Undervolt profile may help: it aims for the same speed on less power, and only its "
+                          "own run shows whether it does on this card"
+                        : "The card reached " + std::to_string(stock->peak_temp_c) + " C at stock " +
+                              (settable ? "with its fans at 100 %" : "with fans the app cannot set") +
+                              ": the Undervolt profile would stop at its own measurement at stock as well";
+                return finish_fail(why + next);
             }
             r.ok = true;
             if (gpu.recover && r.driver_resets > 0) log("the driver reset during this run; the search stopped exploring there");

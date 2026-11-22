@@ -198,6 +198,25 @@ inline constexpr double kStockMinS = 30;   // stopped sooner than this, it measu
 // What was measured until then is the "before", and the run goes on with the
 // fans on a curve, which is what keeps the card below the profile's limit.
 std::string stock_refusal(const StabilityResult& stock);
+// The measurement at stock stopped at kStockTempC with nothing left to cool
+// the card with: its fans at 100 % at the end, or fans the app cannot set
+// (fans_settable false: no fan control, or a curve that could not drive them).
+// Another measurement at stock under the same load stops as well, on any
+// curve, and so does the Undervolt profile's own, after which it refuses
+// (hardware check 112: a GTX 1080 Ti at 86 C with its fans at 100 %). Near
+// certain, not certain: a cooler room can change it.
+bool hot_at_stock_at_full_fans(const StabilityResult& stock, bool fans_settable);
+// Whether the Undervolt profile measures the card at stock a second time, on
+// the curve moved up to stock_ceiling: only when the ceiling is above the
+// profile's limit, and not when the first measurement already stopped at
+// kStockTempC with full fans: the second, with less fan, would only cost time.
+bool measure_stock_again(int stock_ceiling, int profile_limit_c, const StabilityResult& first, bool fans_settable);
+// Why the Undervolt profile does not search: its measurement at stock did not
+// end stable, so there is nothing to judge an undervolt against. The card was
+// set to stock for that measurement and stays there. second_skipped: the
+// second measurement was not run (measure_stock_again). saved_tune: a tune is
+// saved; the run did not touch it.
+std::string undervolt_not_compared(const StabilityResult& stock, bool second_skipped, bool saved_tune);
 // Why no run starts next to another tuning tool, given the file names of the
 // programs that run now; empty when none of them is one. MSI Afterburner
 // sets clocks and fans itself, and RivaTuner hooks into every program that
@@ -259,6 +278,25 @@ struct OptimizeResult {
     // it, so this is 0 to 3.
     int driver_resets = 0;
 };
+
+// A reset to stock that failed after a driver reset in the same run: the driver
+// took the card away and no write reaches it. Hardware check 115 (GTX 1060,
+// driver 560.94): a new connection, `gao --reset` of this and of the release
+// before, and a restart of the device all failed; only a restart of Windows
+// brought the card back. A reset that fails with no driver reset in the run is
+// a refused write on a card that still answers, and keeps its own advice.
+inline bool gpu_unreachable(bool stock_restored, int driver_resets) { return !stock_restored && driver_resets > 0; }
+// How a recovery's journal entry (Journal::begin_recovery) is closed. Any
+// verdict closes the entry; the word is for whoever reads the file.
+//   RECOVERED        the health probe passed: the card is back
+//   RECOVERY FAILED  the run ended before that (stopped, aborted, or the
+//                    card was not back) and its way out set the card to stock
+//   GPU UNREACHABLE  as RECOVERY FAILED, but the reset to stock failed too
+inline constexpr const char* kRecovered = "RECOVERED";
+inline const char* recovery_end_verdict(bool stock_restored) { return stock_restored ? "RECOVERY FAILED" : "GPU UNREACHABLE"; }
+// The end of a log line that says so.
+inline constexpr const char* kGpuUnreachableLog =
+    " -- reset FAILED: the GPU could not be reached after a driver reset; restart Windows";
 
 // The whole tuning run (spec §3): baseline, power, memory, core, soak. Leaves
 // the result applied when ok; any !ok return leaves the card at stock, or

@@ -188,6 +188,12 @@ struct FakeCard {
         for (const auto& l : journal) n += l.find(what) != std::string::npos;
         return n;
     }
+    // As count, over every line of the file, the recovery's own lines included.
+    int count_file(const std::string& what) const {
+        int n = 0;
+        for (const auto& l : journal_file) n += l.find(what) != std::string::npos;
+        return n;
+    }
     Probe probe() {
         return [this](double seconds, int max_temp, double stall_below) {
             ++probes;
@@ -264,7 +270,9 @@ struct Run {
             if (l.find("\"complete\"") != std::string::npos && card.completes_ok >= 0 && card.completes_ok-- == 0)
                 return false;
             card.journal_file.push_back(l);
-            if (l.find("\"recovering\"") != std::string::npos || l.find("RECOVERED") != std::string::npos) return true;
+            if (l.find("\"recovering\"") != std::string::npos || l.find("RECOVERED") != std::string::npos ||
+                l.find("RECOVERY FAILED") != std::string::npos || l.find("GPU UNREACHABLE") != std::string::npos)
+                return true;
             if (l.find("\"begin\"") != std::string::npos) card.events.push_back("begin");
             card.journal.push_back(l);
             return true;
