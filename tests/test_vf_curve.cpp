@@ -683,6 +683,43 @@ TEST_CASE("a read-out that drifts a step between the flat top and the lowering i
     for (std::size_t i = 9; i < 16; ++i) CHECK(card.raw[i] < card.raw[8]);   // the tail is stored lower
 }
 
+TEST_CASE("a read-out that moves a step after every correction is accepted in the last round") {
+    // #89: a GTX 1080 Ti at 82 to 84 C read its anchor one clock step over the
+    // target after each correction, so the four rounds ended without settling
+    // and the search stopped early, with the offsets on the card as written.
+    FakeCurve card;
+    card.bin_khz = 15000;
+    GpuControl gpu = card.gpu();
+    const auto read = gpu.read_vf_curve;
+    gpu.read_vf_curve = [&]() -> std::optional<std::vector<VfPoint>> {
+        card.drift_khz = card.writes % 2 ? 15000 : 0;   // the built-in curve moves between two writes
+        return read();
+    };
+    const auto r = apply_flat_top(gpu, 8, 2700000);
+    REQUIRE(r.ok);
+    CHECK(r.passes == kVfPasses);                                            // it did not settle before the last round
+    CHECK(std::abs(card.freq(8) - 2700000) <= kVfToleranceKhz + 2 * 15000);
+    CHECK(card.runs_at() == 8);                                              // the anchor is still the top
+    for (std::size_t i = 9; i < 16; ++i) CHECK(card.raw[i] < card.raw[8]);   // the tail is stored lower
+}
+
+TEST_CASE("a point a step off because the card stored another offset than was written still does not settle") {
+    FakeCurve card;
+    card.bin_khz = 15000;
+    GpuControl gpu = card.gpu();
+    const auto write = gpu.write_vf_offsets;
+    gpu.write_vf_offsets = [&](const std::vector<VfOffset>& offsets) {
+        const bool ok = write(offsets);
+        if (offsets.size() == 8) card.raw[8] += 15000;   // the writes of the flat top, not the levelling
+        return ok;
+    };
+    const auto r = apply_flat_top(gpu, 8, 2700000);
+    CHECK_FALSE(r.ok);
+    CHECK(r.why.find("the curve did not settle on the target (the anchor reads 2715 MHz, the target is 2700)") == 0);
+    CHECK(r.at_stock);
+    CHECK(card.at_stock());
+}
+
 TEST_CASE("a read-out that is really off after the lowering is refused, with the numbers in it") {
     FakeCurve card;
     card.bin_khz = 15000;
