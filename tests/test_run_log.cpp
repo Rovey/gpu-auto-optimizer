@@ -24,6 +24,12 @@ struct TempDir {
     }
 };
 
+// The line a run starts with: the path in UTF-8, as the log writes it.
+std::string where_line(const std::filesystem::path& file) {
+    const std::u8string path = file.u8string();
+    return "this run is logged to " + std::string(path.begin(), path.end());
+}
+
 }
 
 TEST_CASE("every line of a run is on disk before it is shown") {
@@ -40,14 +46,26 @@ TEST_CASE("every line of a run is on disk before it is shown") {
     });
     log("baseline: 30 s at stock");
     log("core +0 / mem +50: STABLE  score=4547 it/s");
-    CHECK(shown == std::vector<std::string>{"baseline: 30 s at stock", "core +0 / mem +50: STABLE  score=4547 it/s"});
+    CHECK(shown == std::vector<std::string>{where_line(file), "baseline: 30 s at stock",
+                                            "core +0 / mem +50: STABLE  score=4547 it/s"});
     const auto lines = gao::read_lines(file);
     REQUIRE(lines);
-    REQUIRE(lines->size() == 3);
-    // Which build wrote it, then the lines, each with the time it was written.
+    REQUIRE(lines->size() == 4);
+    // Which build wrote it, where it is, then the lines, each with the time it was written.
     CHECK((*lines)[0].find("=== " + std::string(gao::kProductName) + " " + std::string(gao::kVersion)) != std::string::npos);
-    CHECK((*lines)[1].find("  baseline: 30 s at stock") == std::string("2026-10-11 14:00:00").size());
-    CHECK((*lines)[2].find("core +0 / mem +50: STABLE") != std::string::npos);
+    CHECK((*lines)[1].find("  " + where_line(file)) == std::string("2026-10-11 14:00:00").size());
+    CHECK((*lines)[2].find("  baseline: 30 s at stock") == std::string("2026-10-11 14:00:00").size());
+    CHECK((*lines)[3].find("core +0 / mem +50: STABLE") != std::string::npos);
+}
+
+TEST_CASE("a run says where it logs at its start, and what belongs to the run before it does not say it again") {
+    const TempDir dir;
+    const auto file = dir.path / "run.log";
+    std::vector<std::string> shown;
+    const auto show = [&](const std::string& line) { shown.push_back(line); };
+    gao::app::logged_to(file, show)("stock: ABORTED");
+    gao::app::logged_to(file, show, false)("stopped: the tune is back");
+    CHECK(shown == std::vector<std::string>{where_line(file), "stock: ABORTED", "stopped: the tune is back"});
 }
 
 TEST_CASE("a second run adds to the log of the first") {
@@ -57,7 +75,7 @@ TEST_CASE("a second run adds to the log of the first") {
     gao::app::logged_to(file, {})("the second run");
     const auto lines = gao::read_lines(file);
     REQUIRE(lines);
-    CHECK(lines->size() == 4);   // two headers, two lines
+    CHECK(lines->size() == 6);   // two headers, where each run logs, two lines
 }
 
 TEST_CASE("what a stopped run does afterwards is part of that run in the log, under no header of its own") {
@@ -67,8 +85,8 @@ TEST_CASE("what a stopped run does afterwards is part of that run in the log, un
     gao::app::logged_to(file, {}, false)("stopped: the tune that was on the card before the run is back");
     const auto lines = gao::read_lines(file);
     REQUIRE(lines);
-    REQUIRE(lines->size() == 3);   // one header, two lines
-    CHECK((*lines)[2].find("stopped: the tune") != std::string::npos);
+    REQUIRE(lines->size() == 4);   // one header, where the run logs, two lines
+    CHECK((*lines)[3].find("stopped: the tune") != std::string::npos);
 }
 
 TEST_CASE("a run log that has grown large is moved aside, and one older file is kept") {
@@ -81,5 +99,5 @@ TEST_CASE("a run log that has grown large is moved aside, and one older file is 
     CHECK(std::filesystem::file_size(old) > gao::app::kRunLogMaxBytes);   // the large one replaced the older one
     const auto lines = gao::read_lines(file);
     REQUIRE(lines);
-    CHECK(lines->size() == 2);
+    CHECK(lines->size() == 3);
 }
