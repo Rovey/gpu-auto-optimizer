@@ -1,7 +1,7 @@
 # Handover
 
 Everything a developer or coding agent needs to continue this project on another computer, without the
-previous machine, its local files or any conversation history. State as of **2026-11-22**, after the v0.4.10 release.
+previous machine, its local files or any conversation history. State as of **2026-11-22**, after the v0.4.11 release.
 
 Read with: [README](../README.md) (the product), [AGENTS.md](../AGENTS.md) (rules for agents),
 [development.md](development.md) (code layout, design decisions, releases),
@@ -63,8 +63,8 @@ CI runs the `ci` workflow preset and the ASan job on `windows-2025` for every PR
 
 ### 1.3 Design mockups and the grid check
 
-The approved UX design lives on branch `design/ux-redesign` (section 4). Its mockups are generated, not
-drawn:
+The UX proposal, kept for reference, lives on branch `design/ux-redesign` (section 4). Its mockups are
+generated, not drawn:
 
 ```powershell
 git switch design/ux-redesign
@@ -167,30 +167,38 @@ AGENTS.md lists the targeted tests that take minutes instead of a 40-minute run.
 
 ## 2. Current project state (2026-11-22)
 
-- **Latest release:** `v0.4.10`, published 2026-11-21: the annotated tag on the merge commit `7124045`
-  "Release 0.4.10 (#95)". Version in `src/core/version.hpp`: `0.4.10`. The executables are unsigned; the
-  release has the zip, its `.sha256` and a build provenance attestation.
+- **Latest release:** `v0.4.11`, published 2026-11-22: the annotated tag on `9dde3dc` "Release 0.4.11
+  (#100)". Version in `src/core/version.hpp`: `0.4.11`. The executables are unsigned; the release has the
+  zip, its `.sha256` and a build provenance attestation.
+- **Previous release:** `v0.4.10`, published 2026-11-21, the tag on the merge commit `7124045`.
 - **Pre-releases of 0.4.10:** `v0.4.10-rc1`, `-rc2` and `-rc3` stay published with their tags.
 - **Releases** are built by `.github/workflows/release.yml` from a `v*` tag that matches `version.hpp`,
   into a **draft** release; publishing is manual. A release branch with commits that the docs cite by hash
   is merged with a **merge commit**, as #95 was.
-- **`main` after the release:** `git log --oneline v0.4.10..origin/main` lists what is not in a release yet.
+- **`main` after the release:** `git log --oneline v0.4.11..origin/main` lists what is not in a release yet.
 - **`tools/window-shot.ps1`** (section 1.4) now says so when the program ends at once, as it does in a
   session without a desktop, instead of waiting for a window.
 
-### 2.1 What v0.4.10 did not show on hardware
+### 2.1 What v0.4.10 and v0.4.11 did not show on hardware
 
-The checks are recorded in [hardware-checks.md](hardware-checks.md) (110 to 117 for this release; 118 and 119 for the fixes after it).
+The checks are recorded in [hardware-checks.md](hardware-checks.md) (110 to 117 for v0.4.10; 118 and 119 for v0.4.11).
 Covered by unit tests and not seen on a real card:
 
 - the "GPU could not be reached" advice, the skipped put-back after a stop on such a card, and the crash
   journal's `RECOVERY FAILED` and `GPU UNREACHABLE` verdicts: no GPU loss was provoked after these changes;
 - the three check 112 fixes on a card that is hot at stock: no such card was available;
-- the final code on the reference RTX 4070 (its six-profile run was with the code from before #93).
+- the v0.4.10 code on the reference RTX 4070 (its six-profile run was with the code from before #93);
+- in v0.4.11, the last-round allowance of #97: no run in check 118 needed it, and no hot GTX 10 card was
+  available.
+
+Also not seen for v0.4.11: the real FanControl holding the fans (check 119 used a harmless program with its
+name), the wording for a card too hot at stock with another fan program, and a run or a GPU write with the
+release zip itself (it was started on the test PC with `--version` and `--status` only).
 
 #84 stays open for its last criterion: tolerances backed by the scatter of a hot card, which needs a card
 whose stock measurement completes hot (check 112 could not). Builds from before `97d9bf2` (`0.4.10-rc1`,
-`-rc2`, `0.4.10-check112`) are not offered the final 0.4.10; their testers install it once by hand.
+`-rc2`, `0.4.10-check112`) were not offered the final 0.4.10; v0.4.11 has a higher number, so they are
+offered that.
 
 ### 2.2 Open issues and pull requests
 
@@ -201,7 +209,7 @@ whose stock measurement completes hot (check 112 could not). Builds from before 
 | Branch | Why it stays | Next |
 |---|---|---|
 | `main` | The trunk | — |
-| `design/ux-redesign` | The approved UX redesign, revision 5: proposal, mockups, generator, grid check, implementation plan (section 4). Documents only | Never merge as a whole; the implementation stages branch from `main` and take the spec from here |
+| `design/ux-redesign` | The UX proposal, revision 5: proposal, mockups, generator, grid check, implementation plan (section 4). Documents only. The visual rebuild was dropped on 2026-11-22 | Never merge; reference for the three additions of 4.1 |
 | `test/check112` | The source of the private `0.4.10-check112` test build; `docs/hardware-checks.md` check 111 cites build `f2b235e`, which exists only on this branch | Keep while that citation needs to resolve |
 
 Release and fix branches are deleted once their content is on `main`; the tags keep the release commits,
@@ -221,14 +229,15 @@ machines and from private test PCs (they contain personal details), and the buil
 
 ### 4.1 Status
 
-- **Revision 5 is approved** (2026-11-17), with every decision taken (D1–D15, see 4.3) and the
-  implementation plan approved, including the estimates.
-- **Nothing is built.** The branch holds documents only; `src/` on it equals `main`.
-- **When to start:** the condition (v0.4.10 published as the Latest release) is met since 2026-11-21.
-  The build itself starts when the owner says so.
-- **How:** each stage is its own branch and PR from `main`, reviewed and merged on its own. Revision 5
-  (the four mockups and sections 6–8 of the proposal) is the specification; a stage that cannot follow it
-  stops and asks instead of deviating.
+- **The visual rebuild is dropped** (owner's decision, 2026-11-22): the new layout, design system, sidebar
+  and motion were not enough of an improvement over the current window for their size and risk. This
+  replaces the approval of revision 5 (2026-11-17).
+- **Three additions stay, inside the current layout:** (1) a clear verdict on a result: kept, not kept,
+  failed or stopped, with what decided it; (2) a driver reset during a run shown as such; (3) one goal line
+  per profile.
+- **Nothing is built yet.** The branch holds documents only.
+- **How:** each addition is its own branch and PR from `main`. Sections 4.2 to 4.5 describe the full plan
+  and are kept for reference only: take from them what an addition needs, not the stages.
 
 ### 4.2 Files on `design/ux-redesign`
 
@@ -302,6 +311,5 @@ the old build's, within about 1 %).
 2. `git clone https://github.com/Rovey/gpu-auto-optimizer.git` and `cd gpu-auto-optimizer`.
 3. `& "$bin\cmake.exe" --workflow --preset ci` (1.2): expect 2 of 2 test suites passed.
 4. `git fetch origin` and look at the branches of 2.3 (`git branch -r`).
-5. For the UX design: `git switch design/ux-redesign`, run the commands of 1.3, expect `PASS`.
-6. When the owner starts the redesign: UX stage 0 (and 1a, 1b, 2 in parallel) on new branches from `main`,
-   per section 4.
+5. To look at the UX proposal: `git switch design/ux-redesign`, run the commands of 1.3, expect `PASS`.
+6. For the three UX additions of 4.1: new branches from `main`.
