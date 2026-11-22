@@ -46,6 +46,10 @@ service.
 > - **Save your work and close games first.** A driver reset also reaches other programs. Rarely, one of them crashes, or
 >   Windows needs a sign-out or a restart afterwards.
 > - **If the PC freezes,** the app remembers the setting it was testing and never tries it again.
+> - **If the screen or the console stops updating but the mouse still moves,** give the run a few minutes: a program that
+>   draws with the GPU can freeze while the run goes on. Every line is also in `%ProgramData%\GpuAutoOptimizer\run.log`, and
+>   a run says so when it starts. If nothing responds for several minutes, restart the PC: the app remembers the setting
+>   it was testing.
 > - **Abort run** stops a run at any time. The card goes back to stock, or to your saved tune if that was on before. Nothing the run found is kept: your saved tune stays as it was.
 >
 > Every value the app writes is read back and checked, and anything that fails ends at stock. Even so, every card has its
@@ -568,6 +572,9 @@ flowchart LR
 A run (`--optimize`, `--undervolt`, `--retest`) does not start next to other programs that use the card; add `--busy-ok` as
 the last argument to go on anyway. Ctrl+C during `--optimize` restores stock. A fan tool (FanControl, Argus Monitor) does
 not stop a run, but the run warns that its numbers can then depend on that tool's fan curve: close it for a clean result.
+
+Start long runs from the classic console (`conhost.exe`), not from Windows Terminal: Windows Terminal draws with the GPU
+and can stop updating during a run. `run.log` has every line.
 
 ## Building from source
 
