@@ -94,6 +94,7 @@ private:
     // A set_fan_auto that was refused (no connection) or did not succeed: the
     // fans may still be at a manual speed. Recover delivers it.
     bool fan_auto_owed_ = false;
+    unsigned fan_generation_ = 0;    // GpuControl::fan_generation
 };
 
 }

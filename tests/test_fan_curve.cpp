@@ -253,9 +253,11 @@ struct FakeFans {
     int writes = 0;
     bool fail_writes = false;
     int stall_below = 0;   // a manual target below this measures 0 %, like the reference card below 50 %
+    unsigned generation = 0;   // moves on with a reconnect
     GpuControl gpu() {
         GpuControl g;
         g.fan_min_pct = 30;
+        g.fan_generation = [this] { return generation; };
         g.set_fan_pct = [this](int pct) {
             ++writes;
             if (fail_writes) return false;
@@ -334,6 +336,50 @@ TEST_CASE("a failed write hands the fans back and stops") {
     CHECK(d.tick(60, 20, t).mode == FanMode::Failed);
     CHECK_FALSE(f.manual);
     CHECK(d.tick(70, 20, t).mode == FanMode::Failed);
+    CHECK(f.writes == 1);
+}
+
+TEST_CASE("after a reconnect a failed fan write gets the curve back") {
+    FakeFans f;
+    f.fail_writes = true;
+    const GpuControl g = f.gpu();
+    FanDriver d(g, simple(), 90);
+    const auto t = Clock::now();
+    CHECK(d.tick(60, 20, t).mode == FanMode::Failed);
+    f.fail_writes = false;
+    CHECK(d.tick(60, 20, t).mode == FanMode::Failed);   // the same connection: it stays stopped
+    CHECK(f.writes == 1);
+    ++f.generation;
+    CHECK(d.tick(60, 20, t).mode == FanMode::Curve);
+    CHECK(f.manual);
+    CHECK(f.target == 60);
+}
+
+TEST_CASE("a fan write that fails on the new connection stops until the next one") {
+    FakeFans f;
+    f.fail_writes = true;
+    const GpuControl g = f.gpu();
+    FanDriver d(g, simple(), 90);
+    const auto t = Clock::now();
+    d.tick(60, 20, t);
+    ++f.generation;
+    CHECK(d.tick(60, 20, t).mode == FanMode::Failed);
+    CHECK(f.writes == 2);
+    CHECK(d.tick(60, 20, t).mode == FanMode::Failed);
+    CHECK(f.writes == 2);
+}
+
+TEST_CASE("a control that never reconnects keeps a failed fan write stopped") {
+    FakeFans f;
+    f.fail_writes = true;
+    GpuControl g = f.gpu();
+    g.fan_generation = {};
+    FanDriver d(g, simple(), 90);
+    const auto t = Clock::now();
+    d.tick(60, 20, t);
+    f.fail_writes = false;
+    ++f.generation;
+    CHECK(d.tick(60, 20, t).mode == FanMode::Failed);
     CHECK(f.writes == 1);
 }
 
@@ -453,6 +499,10 @@ TEST_CASE("fans that stall even at 70 % go back to the driver") {
     t += seconds(4);
     CHECK(d.tick(35, 20, t).mode == FanMode::Failed);
     CHECK_FALSE(f.manual);
+    const int writes = f.writes;
+    ++f.generation;                                 // a reconnect does not make these fans spin
+    CHECK(d.tick(35, 20, t).mode == FanMode::Failed);
+    CHECK(f.writes == writes);
 }
 
 TEST_CASE("who has the fans, for the label next to the fan speed") {

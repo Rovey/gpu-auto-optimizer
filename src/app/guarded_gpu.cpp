@@ -205,7 +205,13 @@ bool GuardedGpu::Init(std::string* why) {
         outer_.set_fan_pct = [this](int pct) {
             return Call(false, [this, pct] { return inner_.set_fan_pct && inner_.set_fan_pct(pct); });
         };
-    if (in.set_fan_auto) outer_.set_fan_auto = [this] { return FanAuto(); };
+    if (in.set_fan_auto) {
+        outer_.set_fan_auto = [this] { return FanAuto(); };
+        outer_.fan_generation = [this] {
+            const std::lock_guard<std::mutex> lock(mutex_);
+            return fan_generation_;
+        };
+    }
     if (in.read_fan)
         outer_.read_fan = [this] {
             return Call(std::optional<FanReading>(), [this] {
@@ -281,6 +287,7 @@ bool GuardedGpu::Recover() {
         } else if (!DeliverFanAuto()) {
             why = "handing the fans back to the driver faulted";
         } else {
+            if (!fan_auto_owed_) ++fan_generation_;   // the fans are the driver's: a curve that failed may take them again
             return true;
         }
         Disconnect();   // not back yet; never reuse a half-initialised library

@@ -160,6 +160,7 @@ void FanDriver::fail() {
     written_.reset();
     written_at_.reset();
     state_ = {FanMode::Failed, 0, min_pct_};
+    failed_on_ = gpu_.fan_generation ? std::optional<unsigned>(gpu_.fan_generation()) : std::nullopt;
 }
 
 void FanDriver::release() {
@@ -171,6 +172,12 @@ void FanDriver::release() {
 
 FanState FanDriver::tick(const int temp_c, const int power_w, const std::chrono::steady_clock::time_point now,
                          const int power_limit_w) {
+    // A fan call fails while the driver resets. On the connection made after
+    // it the fans are the driver's and the curve can take them again.
+    if (state_.mode == FanMode::Failed && failed_on_ && gpu_.fan_generation && gpu_.fan_generation() != *failed_on_) {
+        failed_on_.reset();
+        state_ = {FanMode::Driver, 0, min_pct_};
+    }
     if (state_.mode == FanMode::Failed || state_.mode == FanMode::Foreign) return state_;
     if (!gpu_.set_fan_pct || !gpu_.set_fan_auto || !gpu_.read_fan) return state_;
     // What does the driver have? Policy back to automatic without us: a driver
@@ -188,7 +195,11 @@ FanState FanDriver::tick(const int temp_c, const int power_w, const std::chrono:
         } else if (seen->speed_pct == 0 && written_at_ && now - *written_at_ >= kFanStallGrace) {
             // Stalled at our own speed: this card's real minimum is higher.
             min_pct_ = std::max(min_pct_, *written_) + kFanStallStep;
-            if (min_pct_ > kFanStallMax) { fail(); return state_; }
+            if (min_pct_ > kFanStallMax) {
+                fail();
+                failed_on_.reset();   // fans that do not spin: a new connection does not change that
+                return state_;
+            }
             ctrl_.set_min_pct(min_pct_);
         }
     } else if (const auto seen = gpu_.read_fan(); seen && seen->manual) {
