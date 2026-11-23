@@ -1,7 +1,15 @@
 # Telemetry: design and API contract
 
-**Status: design (phase A). Nothing here is in the app yet, and nothing is sent.** The database migration is in
-`supabase/migrations/`. No backend is deployed.
+**Status: backend implemented and tested locally (phase B). Nothing here is in the app yet, nothing is sent, and no
+backend is deployed.**
+
+| Stage | State |
+|---|---|
+| Implemented | Migrations in `supabase/migrations/`, Edge Functions in `supabase/functions/` |
+| Tested locally | Yes, on 2026-11-23: see section 9 |
+| Tested against a real Supabase development project | **No** |
+| Verified in Frankfurt | **No** |
+| Approved for production | **No**: see section 12 |
 
 The goal is to learn from real runs on cards we do not have: which cards and drivers work, where runs fail, and what
 they gain. Telemetry is off unless the user switches it on. It never decides anything about a tune.
@@ -20,7 +28,7 @@ The first plan assumed a few things the run code does not do. These choices foll
 | A result that was not kept | `UndervoltOutcome::not_kept` exists. The "slower than stock" rule of the clock search only leaves a sentence | Add `OptimizeResult::not_kept`, set where that rule fires. It changes no decision |
 | The stock measurement of a refused run | `measure_stock` has the numbers, `fail()` drops them | Keep them in the outcome, so a card that is too hot at stock is reported with its temperature |
 | The "before" of an undervolt on a saved tune | `result.baseline` is the **overclock** there, not stock | `on_saved_tune` is true and `stock_measurements` is null. Such a run is never compared with stock |
-| Stop | There is one way to stop a run (`hooks.aborted`): the button, Ctrl+C and closing the window | The client sends `cancelled`. `aborted` stays in the enumeration, unused in schema version 1 |
+| Stop | There is one way to stop a run (`hooks.aborted`): the button, Ctrl+C and closing the window | The client sends `cancelled`. `aborted` is refused as a run outcome in schema version 1. It stays a **measurement** verdict, because `Verdict::Aborted` is a real `StabilityResult` value |
 | Card identity | NVML is not asked for PCI IDs, memory size or architecture yet | Read-only NVML calls, made at `started`, while the card is known to be healthy. The PCI bus ID is never stored or sent |
 | Interrupted runs | A crash can happen between writing the event and clearing the marker | `event_id` is generated at the start and kept in the marker. A normal and an interrupted event of one run share it, so only one can ever count |
 
@@ -145,6 +153,23 @@ The values are an example. A measurement is one `StabilityResult`. The `counted_
 last half, filled only for a run that covered its full length, and are what an undervolt was judged on. Compare two
 runs on the same basis only.
 
+What the event builder must do, because the server refuses anything else:
+
+- **Every key is present.** A value that is not known is an explicit `null`. A missing key and an unknown key are both
+  refused.
+- **A measurement that never ran is `null`.** `StabilityResult` starts as `Stable` with `seconds` 0, so sending it would
+  claim a stable run. A `stable` measurement needs `seconds` above 0.
+- **`counted_*` are all `null`** unless `counted.seconds` is above 0, which only a `stable` measurement has.
+- **Whole numbers** stay whole: watts, MHz, temperatures, fan percentages and the tune. `undervolt_mv` is `volt_uv / 1000`
+  and `undervolt_mhz` is `freq_khz / 1000`. Without an undervolt both are `null`.
+- **A reading outside its range is sent as `null`** (the ranges are in the migration). Otherwise one bad sensor loses the
+  whole event.
+- `gpu.architecture` is `Pascal`, `Volta`, `Turing`, `Ampere`, `Ada` or `Blackwell`, otherwise `null`. `gpu.name` holds only
+  letters, digits, spaces and `._+()-`, otherwise `null`.
+- `application.channel` is `prerelease` exactly when the version has a suffix (`0.5.0-rc1`).
+- `event_id`, `run_id` and `installation_id` are random version 4 UUIDs in lower case. `occurred_at` is UTC in the form
+  `2026-11-23T18:30:00Z`.
+
 | Field | Comes from |
 |---|---|
 | `measurements.stock` | `OptimizeOutcome::stock`, `UndervoltOutcome::before` (else the stock measurement that was kept), `AllInOneOutcome::stock`; null for a retest and on a saved tune |
@@ -161,7 +186,7 @@ The first row that fits decides the outcome.
 | Outcome | When |
 |---|---|
 | `success` | A result is applied **and** saved (`ok`, or `ran && result.ok && saved`) |
-| `cancelled` | `hooks.aborted()` is true at the end and no result was kept |
+| `cancelled` | `hooks.aborted()` is true at the end. A retest can end this way with a lower step saved |
 | `no_result` | The run finished but saved nothing: `not_kept`, or a result that could not be saved |
 | `failed` | Every other run that started |
 | `interrupted` | Built at the next start from a marker |
@@ -174,6 +199,7 @@ The first row that fits decides the outcome.
 | `GPU_UNREACHABLE` | The existing `gpu_unreachable()` |
 | `STOCK_RESTORE_FAILED` | `stock_restored` is false |
 | `NOT_KEPT` | `not_kept` |
+| `SAVE_FAILED` | The result could not be saved |
 | `TOO_HOT` | The deciding measurement ended `TooHot` |
 | `DRIVER_RESET` | It ended `DeviceLost` |
 | `STABILITY_CHECK_FAILED` | It ended `WrongResult` or `Stalled` |
@@ -181,11 +207,27 @@ The first row that fits decides the outcome.
 | `FAN_CONTROL_FAILED` | All in one stopped in its fan step |
 | `UNCLASSIFIED` | None of these. Counted, so that this list can be improved |
 
-`TOO_HOT`, `NOT_KEPT` and `UNCLASSIFIED` are additions to the first plan. A card that is too hot is the open question
-of #84, and a code that claims a cause the app did not establish would make the data worse.
+`TOO_HOT`, `NOT_KEPT`, `SAVE_FAILED` and `UNCLASSIFIED` are additions to the first plan. A card that is too hot is the
+open question of #84, and a code that claims a cause the app did not establish would make the data worse.
 
 `failed_stage` is `stock`, `search`, `soak`, `undervolt`, `fan_tune`, `final_test` or `retest`, or null when it is not
 known. `stock_restored` is null for a run that kept its result.
+
+The database enforces what each outcome may say:
+
+| Outcome | `error_code` | Also |
+|---|---|---|
+| `success` | null | `tune_saved` true, a tune, a `stable` result, no stage, `stock_restored` null |
+| `cancelled` | null, `INTERNAL_ERROR`, `GPU_UNREACHABLE`, `STOCK_RESTORE_FAILED` | No stage: a stop blames nothing |
+| `no_result` | `NOT_KEPT`, `SAVE_FAILED`, `GPU_UNREACHABLE`, `STOCK_RESTORE_FAILED` | `NOT_KEPT` is a reason, not a technical failure |
+| `failed` | Any code except `NOT_KEPT` and `SAVE_FAILED` | |
+| `interrupted` | null | Only what the marker holds. No duration, resets, measurements, tune, steps, stage or stock state |
+
+- `tune_saved` is true only on `success`, or on a `failed` or `cancelled` **retest** that saved a lower step.
+- `GPU_UNREACHABLE` and `STOCK_RESTORE_FAILED` need `stock_restored` false. `stock_restored` false needs one of those, or
+  `INTERNAL_ERROR`, which comes first in the order above.
+- `FAN_CONTROL_FAILED` is All in one only, with the stage `fan_tune` or `final_test`.
+- A run that is not `interrupted` always has `duration_ms`, `driver_resets` and `tune_saved`.
 
 ## 6. HTTP API
 
@@ -208,50 +250,153 @@ Body: one event, at most 16 KB.
 | 429 | `{"accepted":false,"error":"RATE_LIMITED"}` | Keeps it, stops for this session |
 | 5xx, or no answer | | Keeps it, counts an attempt, stops for this session |
 
-Limits, without storing an IP address: 60 events per installation per 24 hours, and 1000 events per hour in total. The
-second one caps cost and damage when someone rotates IDs. `occurred_at` must lie between 30 days ago and 5 minutes from
-now. Errors never contain database text. Function logs never contain a request body.
+A request that is not `POST` gets 405. A body that is not JSON, or has another content type, gets 400. There are no CORS
+headers: a browser is not a client. A 500 is `{"accepted":false,"error":"UNAVAILABLE"}`.
+
+Limits, enforced in the database, without storing an IP address: 60 new events per installation per UTC day, and 1000
+new events per UTC hour in total. A duplicate takes no hit, so a client can always clear its outbox. An event the
+database refuses does take one. `occurred_at` must lie between 30 days ago and 5 minutes from now. Errors never contain
+database text. Function logs never contain a request body or an ID.
 
 ### `POST /functions/v1/delete-telemetry`
 
-Body: `{"installation_id":"<uuid>"}`. Deletes every record of that installation. The answer is
-`{"deleted":true}` whether or not there were any, so the endpoint does not reveal which IDs exist. The random ID is the
-only proof of ownership. It is readable by users of the same PC.
+Body: exactly `{"installation_id":"<uuid>"}`. Deletes every record of that installation.
+
+| Status | Body | Client does |
+|---|---|---|
+| 200 | `{"deleted":true}`, whether or not there were records | Removes the ID and the local files |
+| 400 | `{"deleted":false,"error":"INVALID_REQUEST"}` | Keeps the ID, tells the user |
+| 413 | `{"deleted":false,"error":"TOO_LARGE"}` | Keeps the ID, tells the user |
+| 429 | `{"deleted":false,"error":"RATE_LIMITED"}` | Keeps the ID, tries again later |
+| 5xx, or no answer | | Keeps the ID, tries again later |
+
+Limits: 10 requests per installation per UTC day, and 600 per UTC hour in total. They count whether or not the ID exists.
+
+**Ownership.** The random ID is the only proof. Whoever holds it can delete that installation's records or submit in its
+name. It cannot read anything, because no endpoint returns data. It is readable by other users of the same PC
+(`%ProgramData%`). The worst case is the loss or pollution of one PC's diagnostics, which is not worth accounts or a
+second secret, so the design stays as it is. Keep the ID out of logs and support requests.
 
 ## 7. Database
 
 `public.telemetry_runs`, one row per run. `id` is the `event_id`, `run_id` is unique, and constraints enforce the
-enumerations, the ranges and the shape of the JSON. A run that was interrupted cannot claim a duration, a result or a
-tune. Row level security is on with no policies, and `anon` and `authenticated` have no rights on the table or its
-functions. Only the Edge Functions write, with the service role, from Supabase secrets.
+enumerations, the ranges, the shape of the JSON and the rules of section 5. Row level security is on with no policies.
+`anon` and `authenticated` have no rights on the tables or functions. The service role can read, insert and delete runs,
+never update or truncate them. It can read and raise the counters, never delete them, and it cannot run the purge.
 
-Records are deleted after 12 months by a scheduled job (phase B).
+`public.telemetry_rate_limits` holds a counter per bucket and time window. An installation appears there as the SHA-256
+of its ID, for about two days, also after its records were deleted.
+
+**Retention.** `telemetry_purge_expired()` deletes runs received more than 12 months ago and counters older than two
+days. It takes no argument, so no caller can move the boundary. Only its owner can run it: the `pg_cron` job
+`telemetry-retention`, daily at 03:17 UTC. Provider backups are outside this job; how long they keep deleted rows must be
+checked (section 12).
 
 ## 8. Privacy boundaries
+
+The data is **pseudonymous, not anonymous**.
 
 **Sent:** only the fields of section 4.
 
 **Never sent or stored:** user or computer name, card UUID, serial number or PCI bus ID, program names, file paths, any
-free text from a run, logs, IP addresses in application tables.
+free text from a run, exception text, logs, IP addresses in application tables.
 
-The hosting provider can see source IP addresses in its own network logs. Its retention must be reviewed before
-production.
-
-**Before production:** a published privacy policy naming the data controller, Supabase as processor (DPA and
-subprocessors reviewed), the legal basis (consent is the intended one), withdrawal, retention, and how to ask for
-deletion.
+**IP addresses are processed by the provider.** The application does not read or store them, but a request reaches
+Supabase's network. Its documentation lists the client IP (`cf_connecting_ip`) in API gateway logs, kept 1 day on Free and
+7 days on Pro. Whether Edge Function invocation logs hold it was not established. The privacy policy must not say that no
+IP address is processed.
 
 ## 9. Validation
 
-- **Normal CI:** unit tests with a fake transport. No live backend.
-- **Backend:** valid, failed, duplicate and invalid events, rate limits, deletion, and direct anonymous access denied,
-  against a development project.
-- **Hardware:** on the test PC (GTX 1060). Crashes and interruptions are simulated, never provoked for this. A run on the
-  reference RTX 4070 happens only on the owner's explicit word.
+Run on 2026-11-23. No GPU took part: all events are synthetic.
+
+| Check | How | Result |
+|---|---|---|
+| Repository CI | `cmake --workflow --preset ci` | 547 test cases, 12047 assertions passed, 0 warnings |
+| Schema and endpoints | `deno test --no-lock --allow-read --allow-env --allow-sys supabase/tests/`, on PostgreSQL 17 in process (PGlite). No Docker or network at run time, apart from fetching the npm package once | 178 passed |
+| The real local stack | One-off script against `supabase start` (CLI 3.3.0, Postgres 17.12, PostgREST, Edge Runtime 1.79.3, `pg_cron`): functions without a key, role tokens refused by the database (`42501`) with `service_role` as control, the scheduler running the purge | 43 passed |
+| Concurrency | The same stack: 90 events of one installation in parallel batches gave 60 rows, 60 hits and 30 answers of 429. One event sent 10 times at once gave 1 row | Passed |
+
+`pg_cron` and PostgREST exist only in the local stack run, so that row is not repeated by the `deno test` command.
+
+**Not tested:** a hosted Supabase project, its gateway and secret keys, the region header, and the Windows client, which
+does not exist yet.
+
+**Hardware:** the client check belongs on the test PC (GTX 1060). Crashes and interruptions are simulated, never provoked.
+The RTX 4070 takes no part.
 
 ## 10. Open decisions for the owner
 
 1. Who is named as data controller, with which public contact address.
 2. Pay for Supabase Pro in production (about $25 a month). A Free project is paused after a week of low activity, and
    would lose incoming reports while paused.
-3. Whether the hardware check of this feature stays on the test PC, or also runs on the RTX 4070.
+3. The global limit. A row measured 2.9 KB with its indexes, so someone sending 1000 valid events an hour adds about
+   70 MB a day: the 500 MB of Free in about a week. A lower limit reduces this, and also the number of real events that
+   can arrive in a busy hour.
+
+## 11. Backend setup
+
+**Secrets.** Nothing is set by hand. Supabase injects `SUPABASE_URL` and `SUPABASE_SECRET_KEYS`, and the function uses the
+key named `default`, falling back to the legacy `SUPABASE_SERVICE_ROLE_KEY`. A service key never goes into the Windows
+application, the repository or a response.
+
+**Local development** needs Docker:
+
+```powershell
+npx supabase@3.3.0 start -x gotrue,realtime,storage-api,imgproxy,mailpit,studio,postgres-meta,logflare,vector,supavisor
+# functions: http://127.0.0.1:54321/functions/v1/submit-telemetry
+npx supabase@3.3.0 stop --no-backup
+```
+
+**Deploying to a development project.** Only with a project the owner named for this. These steps have not been run:
+
+```powershell
+npx supabase@3.3.0 link --project-ref <ref>
+npx supabase@3.3.0 db push
+npx supabase@3.3.0 functions deploy submit-telemetry
+npx supabase@3.3.0 functions deploy delete-telemetry
+```
+
+**Verifying Frankfurt.** A setting or a successful deployment proves nothing. An empty event is refused and writes nothing,
+so it is a safe probe:
+
+```bash
+curl -si -X POST "https://<ref>.supabase.co/functions/v1/submit-telemetry" \
+  -H "content-type: application/json" -H "x-region: eu-central-1" -d "{}" | grep -i x-sb-edge-region
+```
+
+The answer must be `eu-central-1`. Check as well that the project's database region is `eu-central-1` (`supabase projects
+list`), and record both results in this document. If `x-region` cannot pin to that region, the design of section 6 has to
+change.
+
+**Monitoring retention and size:**
+
+```sql
+select d.status, d.start_time, d.return_message
+from cron.job_run_details d join cron.job j using (jobid)
+where j.jobname = 'telemetry-retention' order by d.start_time desc limit 7;
+
+select count(*) from public.telemetry_runs where received_at < now() - interval '12 months 2 days';  -- must be 0
+select pg_size_pretty(pg_total_relation_size('public.telemetry_runs'));
+```
+
+**Known limitations**
+
+- Anyone can submit valid-looking events: the client is open source. The limits bound the damage, they do not prevent it.
+- A flood can use up the global limit. Real events then get 429 and wait in the outbox.
+- A `duplicate` answer confirms that an `event_id` or `run_id` exists to someone who already holds that random UUID.
+- A deletion takes slightly longer when there are rows. This was not measured, and using it needs a guessed random UUID.
+- An event sent after a deletion creates a new record, so the client clears its outbox first.
+
+## 12. Before production
+
+None of these is done:
+
+1. The owner names the data controller and a public contact address (section 10). No details are to be invented.
+2. A published privacy policy: controller, Supabase as processor, legal basis (consent is the intended one), withdrawal,
+   retention, deletion, and what the provider's logs hold.
+3. Supabase's DPA, subprocessors, log contents and backup retention reviewed.
+4. A development project deployed and these checks repeated against it.
+5. Frankfurt verified for both the function and the database.
+6. The plan chosen (section 10). Free is for development and testing only.
+7. The Windows client built and tested (later phases). Telemetry stays off until then.

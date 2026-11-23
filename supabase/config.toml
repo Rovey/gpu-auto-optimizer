@@ -13,3 +13,10 @@ enabled = false
 
 [auth]
 enabled = false
+
+# Public endpoints: the client has no account and no key.
+[functions.submit-telemetry]
+verify_jwt = false
+
+[functions.delete-telemetry]
+verify_jwt = false
