@@ -54,7 +54,7 @@ const hits = (bucket, unit) => number(`select coalesce(sum(hits), 0) from public
 const idBucket = (action, id) => `public.telemetry_id_bucket('${action}', '${id}')`;
 const clearCounters = () => sql('delete from public.telemetry_rate_limits');
 
-let fn;
+let fn, apiUrl, anonToken;
 // A role's token, signed with the local stack's own secret, straight to PostgREST
 // from inside the stack's network: Kong's key handling is not what is under test.
 let rest;
@@ -63,6 +63,7 @@ function connect() {
   const status = JSON.parse(cli('status', '-o', 'json'));
   const api = status.API_URL;
   if (!/^http:\/\/(127\.0\.0\.1|localhost):/.test(api ?? '')) throw new Error(`not a local API URL: ${api}`);
+  apiUrl = api;
   fn = async (name, body) => {
     const r = await fetch(`${api}/functions/v1/${name}`, {
       method: 'POST',
@@ -88,6 +89,7 @@ function connect() {
     const claims = b64(JSON.stringify({ role, iss: 'supabase-demo', iat: at - 10, exp: at + 3600 }));
     return `${head}.${claims}.${createHmac('sha256', secret).update(`${head}.${claims}`).digest('base64url')}`;
   };
+  anonToken = token('anon');
   rest = (role, method, path, body) => {
     const args = ['exec', db, 'curl', '-s', '-X', method, '-w', '\n%{http_code}', '-H', `Authorization: Bearer ${token(role)}`,
       '-H', 'Content-Type: application/json', `http://${container('rest')}:3000/${path}`];
@@ -115,6 +117,39 @@ function checkMigrations() {
   check('cron job scheduled', sql(`select schedule || ' | ' || command || ' | ' || active from cron.job where jobname = 'telemetry-retention'`),
     '17 3 * * * | select public.telemetry_purge_expired() | true');
   check('one scheduled job in total', number('select count(*) from cron.job'), 1);
+}
+
+// The tool for a real development project, on this stack, so that it cannot rot.
+function checkRemoteVerifier() {
+  let out = '', code = 0;
+  try {
+    out = execFileSync(process.execPath, [`${root}supabase/tests/remote/verify.mjs`, '--local', '--api', apiUrl],
+      { encoding: 'utf8', env: { ...process.env, VERIFY_PUBLIC_KEY: anonToken }, stdio: ['ignore', 'pipe', 'pipe'] });
+  } catch (e) {
+    code = e.status;
+    out = `${e.stdout}${e.stderr}`;
+  }
+  if (code !== 0) console.log(out);
+  check('remote verifier passes on the local stack', code, 0);
+  check('... and leaves nothing behind', rows('true'), 0);
+  // It refuses a backend that already holds data, before writing anything.
+  const held = event();
+  sql(`insert into public.telemetry_runs select * from jsonb_populate_record(null::public.telemetry_runs, '${JSON.stringify({
+    id: held.event_id, installation_id: held.installation_id, run_id: held.run_id, schema_version: 1, occurred_at: held.occurred_at,
+    app_version: '0.5.0', app_channel: 'stable', optimization_type: 'quiet', profile: 'quiet', outcome: 'interrupted',
+    additional_error_codes: [], on_saved_tune: false, measurement_disturbed: false, received_at: new Date().toISOString(),
+  })}'::jsonb)`);
+  let refused = 0;
+  try {
+    execFileSync(process.execPath, [`${root}supabase/tests/remote/verify.mjs`, '--local', '--api', apiUrl],
+      { env: { ...process.env, VERIFY_PUBLIC_KEY: anonToken }, stdio: 'ignore' });
+  } catch (e) {
+    refused = e.status;
+  }
+  check('remote verifier refuses a table with data', refused, 2);
+  check('... and did not touch it', rows(`id = '${held.event_id}'`), 1);
+  sql(`delete from public.telemetry_runs where id = '${held.event_id}'`);
+  clearCounters();
 }
 
 async function checkEndpoints() {
@@ -287,6 +322,7 @@ try {
   cli('start', '-x', EXCLUDED);
   connect();
   checkMigrations();
+  checkRemoteVerifier();
   await checkEndpoints();
   await checkConcurrency();
   await checkRetention();

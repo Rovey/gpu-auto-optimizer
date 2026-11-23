@@ -1,5 +1,5 @@
 // The two endpoints through to the database, with synthetic events.
-import { handleDelete, handleSubmit, MAX_BODY_BYTES, restRpc, serviceKey } from "../functions/_shared/telemetry.ts";
+import { handleDelete, handleSubmit, MAX_BODY_BYTES, restRpc, serviceKey, toRow } from "../functions/_shared/telemetry.ts";
 import { assert, assertEq, count, docExample, freshDb, migrationFiles, newId, readMigration, type Row, serviceRpc } from "./helpers.ts";
 
 const db = await freshDb();
@@ -398,6 +398,47 @@ Deno.test("an internal error cannot hide a failed reset to stock", async () => {
   });
   assertEq(await submit(hidden), invalid);
   assertEq(await count(db, "id = $1", [hidden.event_id]), 0);
+  await clearLimits();
+});
+// Values Postgres cannot store in jsonb: they must be a 400, or a client keeps retrying.
+Deno.test("text a database cannot hold is refused, not a server error", async () => {
+  await clearLimits();
+  const bad: ((e: Event) => void)[] = [
+    (e) => (e.gpu.name = "NVIDIA\u0000 GeForce"),
+    (e) => (e.gpu.name = "NVIDIA \ud800"),
+    (e) => (e.gpu.name = "NVIDIA GeForce\u00e9"),
+    (e) => ((e.driver as Row).version = "581\u0000.80"),
+    (e) => (e.optimization.error_code = "\u0000"),
+    (e) => (e.optimization.additional_error_codes = ["\ud83d"]),
+    (e) => ((e.measurements.stock as Row).verdict = "stable\u0000"),
+    (e) => ((e.application as Row).channel = "\u0000"),
+  ];
+  for (const change of bad) assertEq(await submit(event(change)), invalid);
+  await clearLimits();
+});
+Deno.test("a body that breaks off or nests deeply is refused, not a server error", async () => {
+  const broken = new ReadableStream<Uint8Array>({
+    start(c) {
+      c.enqueue(new TextEncoder().encode('{"schema_version":'));
+    },
+    pull(c) {
+      c.error(new Error("connection lost, secret detail"));
+    },
+  });
+  const r = await handleSubmit(new Request("http://localhost/fn", { method: "POST", headers: { "content-type": "application/json" }, body: broken }), rpc, now);
+  assertEq({ status: r.status, body: await r.json() }, invalid);
+  for (const deep of ["[".repeat(16000), '{"a":'.repeat(3000), "[".repeat(5000) + "]".repeat(5000)]) {
+    const d = await handleSubmit(post(deep), rpc, now);
+    assertEq({ status: d.status, body: await d.json() }, invalid);
+  }
+});
+Deno.test("the server decides when a record was received", async () => {
+  await clearLimits();
+  const e = event();
+  const row = { ...toRow(e), received_at: "2020-01-01T00:00:00Z" };
+  assertEq(await rpc("telemetry_submit", { p_row: row }), "accepted");
+  const r = await db.query<{ recent: boolean }>("select received_at > now() - interval '1 minute' as recent from public.telemetry_runs where id = $1", [e.event_id]);
+  assertEq(r.rows[0].recent, true);
   await clearLimits();
 });
 // 13

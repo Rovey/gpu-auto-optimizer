@@ -24,7 +24,8 @@ select format('%s on %s for %s', a.privilege_type, r.relname, a.grantee::regrole
 from rels r, aclexplode(coalesce(r.relacl, acldefault('r', r.relowner))) a
 where a.grantee <> r.relowner
 union all
-select 'search_path not empty: ' || proname from funcs where not coalesce(proconfig = array['search_path=""'], false)
+-- pg_temp last: left out, it is searched first for types.
+select 'search_path not safe: ' || proname from funcs where not coalesce(proconfig = array['search_path=pg_catalog, pg_temp'], false)
 union all
 select 'SECURITY DEFINER: ' || proname from funcs where prosecdef and not is_entry
 union all

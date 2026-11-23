@@ -4,8 +4,8 @@
 -- The service role can execute telemetry_submit and telemetry_delete and has no
 -- other right here. Those two are SECURITY DEFINER for that reason, so a leaked
 -- service key cannot read the data or get past the limits. They take typed
--- arguments, run no dynamic SQL, name every object with its schema and have an
--- empty search_path.
+-- arguments, run no dynamic SQL, name every object with its schema, and search
+-- pg_catalog before pg_temp (see the first migration).
 
 -- Counters per fixed time window. An installation appears only as a SHA-256 of
 -- its ID. A counter is removed once its window has ended.
@@ -25,7 +25,7 @@ revoke all on table public.telemetry_rate_limits from public, anon, authenticate
 create function public.telemetry_take(p_bucket text, p_window timestamptz, p_limit integer)
 returns boolean
 language plpgsql
-set search_path = ''
+set search_path = pg_catalog, pg_temp
 as $$
 begin
   insert into public.telemetry_rate_limits as r (bucket, window_start, hits)
@@ -39,7 +39,7 @@ create function public.telemetry_id_bucket(p_action text, p_installation uuid)
 returns text
 language sql
 immutable
-set search_path = ''
+set search_path = pg_catalog, pg_temp
 as $$
   select p_action || ':' || encode(sha256(convert_to(p_installation::text, 'UTF8')), 'hex')
 $$;
@@ -59,7 +59,7 @@ $$;
 create function public.telemetry_admit(p_action text, p_installation uuid, p_per_day integer, p_per_hour integer)
 returns boolean
 language plpgsql
-set search_path = ''
+set search_path = pg_catalog, pg_temp
 as $$
 declare
   v_mine text := public.telemetry_id_bucket(p_action, p_installation);
@@ -96,7 +96,7 @@ create function public.telemetry_submit(p_row jsonb)
 returns text
 language plpgsql
 security definer
-set search_path = ''
+set search_path = pg_catalog, pg_temp
 as $$
 declare
   v_id uuid;
@@ -156,7 +156,7 @@ create function public.telemetry_delete(p_installation uuid)
 returns text
 language plpgsql
 security definer
-set search_path = ''
+set search_path = pg_catalog, pg_temp
 as $$
 begin
   if p_installation is null then
@@ -176,7 +176,7 @@ $$;
 create function public.telemetry_purge_expired()
 returns integer
 language plpgsql
-set search_path = ''
+set search_path = pg_catalog, pg_temp
 as $$
 declare
   v_removed integer;

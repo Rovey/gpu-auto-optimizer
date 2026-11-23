@@ -6,13 +6,17 @@
 -- cast or a key lookup must not run on a value of the wrong JSON type. A CHECK
 -- passes on NULL, so every test of a key that must be there reads as false
 -- when it is missing.
+--
+-- Every function sets search_path to pg_catalog, pg_temp. An empty search_path is
+-- not enough: pg_temp is then searched FIRST for types, so a caller's temporary
+-- domain named `uuid` or `text` would run its CHECK with the owner's rights.
 
 -- A JSON value that is absent, null, or a number in [lo, hi].
 create function public.telemetry_number_in(v jsonb, lo numeric, hi numeric)
 returns boolean
 language sql
 immutable
-set search_path = ''
+set search_path = pg_catalog, pg_temp
 as $$
   select case
     when v is null or jsonb_typeof(v) = 'null' then true
@@ -26,7 +30,7 @@ create function public.telemetry_int_in(v jsonb, lo numeric, hi numeric)
 returns boolean
 language sql
 immutable
-set search_path = ''
+set search_path = pg_catalog, pg_temp
 as $$
   select case
     when v is null or jsonb_typeof(v) = 'null' then true
@@ -43,7 +47,7 @@ create function public.telemetry_valid_measurement(m jsonb)
 returns boolean
 language sql
 immutable
-set search_path = ''
+set search_path = pg_catalog, pg_temp
 as $$
   select case
     when m is null then true
@@ -86,7 +90,7 @@ create function public.telemetry_valid_tune(t jsonb)
 returns boolean
 language sql
 immutable
-set search_path = ''
+set search_path = pg_catalog, pg_temp
 as $$
   select case
     when t is null then true
@@ -114,7 +118,7 @@ create function public.telemetry_valid_steps(s jsonb)
 returns boolean
 language sql
 immutable
-set search_path = ''
+set search_path = pg_catalog, pg_temp
 as $$
   select case
     when s is null then true
@@ -137,7 +141,7 @@ create function public.telemetry_error_codes()
 returns text[]
 language sql
 immutable
-set search_path = ''
+set search_path = pg_catalog, pg_temp
 as $$
   select array['GPU_UNREACHABLE', 'STOCK_RESTORE_FAILED', 'INTERNAL_ERROR', 'TOO_HOT', 'DRIVER_RESET',
                'STABILITY_CHECK_FAILED', 'MEASUREMENT_FAILED', 'FAN_CONTROL_FAILED', 'UNCLASSIFIED',
@@ -149,7 +153,7 @@ create function public.telemetry_all_errors(p_code text, p_more text[])
 returns text[]
 language sql
 immutable
-set search_path = ''
+set search_path = pg_catalog, pg_temp
 as $$
   select case when p_code is null then p_more else array_prepend(p_code, p_more) end
 $$;
@@ -160,7 +164,7 @@ create function public.telemetry_valid_more_errors(p_code text, p_more text[])
 returns boolean
 language sql
 immutable
-set search_path = ''
+set search_path = pg_catalog, pg_temp
 as $$
   select case
     when p_more is null then false
@@ -183,13 +187,14 @@ create table public.telemetry_runs (
   occurred_at         timestamptz not null check (occurred_at >= '2026-01-01'),
   received_at         timestamptz not null default now(),
 
-  app_version         text not null check (app_version ~ '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}(-[A-Za-z0-9.]{1,24})?$'),
+  app_version         text not null check (app_version ~ '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}(-(rc|check|test|dev)[0-9]{1,4})?$'),
   app_channel         text not null check (app_channel in ('stable', 'prerelease')),
-  windows_version     text check (windows_version ~ '^Windows [A-Za-z0-9 .]{1,24}$'),
+  windows_version     text check (windows_version ~ '^Windows (10|11|Server 20[0-9]{2})$'),
   windows_build       integer check (windows_build between 1 and 1000000),
 
-  -- As the driver names the card. No character a path or an address needs.
-  gpu_name            text check (gpu_name ~ '^[A-Za-z0-9 ._+()-]{1,128}$'),
+  -- As the driver names the card: a product family, then the model. No character
+  -- a path or an address needs.
+  gpu_name            text check (gpu_name ~ '^(NVIDIA|GeForce|Quadro|TITAN|Tesla) [A-Za-z0-9 ._+()-]{1,56}$'),
   architecture        text check (architecture in ('Pascal', 'Volta', 'Turing', 'Ampere', 'Ada', 'Blackwell')),
   vendor_id           integer check (vendor_id = 4318),  -- 0x10DE, NVIDIA
   device_id           integer check (device_id between 0 and 65535),

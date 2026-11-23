@@ -1,13 +1,13 @@
 # Telemetry: design and API contract
 
-**Status: backend implemented and tested locally (phase B). Nothing here is in the app yet, nothing is sent, and no
+**Status: backend implemented, reviewed and tested locally (phases B and C). Nothing here is in the app yet, nothing is sent, and no
 backend is deployed.**
 
 | Stage | State |
 |---|---|
 | Implemented | Migrations in `supabase/migrations/`, Edge Functions in `supabase/functions/` |
 | Tested locally | Yes, on 2026-11-23: see section 9 |
-| Tested against a real Supabase development project | **No** |
+| Tested against a real Supabase development project | **No**: the procedure is in `docs/telemetry-dev-verification.md` |
 | Verified in Frankfurt | **No** |
 | Approved for production | **No**: see section 12 |
 
@@ -165,9 +165,13 @@ What the event builder must do, because the server refuses anything else:
   and `undervolt_mhz` is `freq_khz / 1000`. Without an undervolt both are `null`.
 - **A reading outside its range is sent as `null`** (the ranges are in the migration). Otherwise one bad sensor loses the
   whole event.
-- `gpu.architecture` is `Pascal`, `Volta`, `Turing`, `Ampere`, `Ada` or `Blackwell`, otherwise `null`. `gpu.name` holds only
-  letters, digits, spaces and `._+()-`, otherwise `null`.
-- `application.channel` is `prerelease` exactly when the version has a suffix (`0.5.0-rc1`).
+- `gpu.architecture` is `Pascal`, `Volta`, `Turing`, `Ampere`, `Ada` or `Blackwell`, otherwise `null`. `gpu.name` starts with
+  `NVIDIA`, `GeForce`, `Quadro`, `TITAN` or `Tesla`, then a space and at most 56 letters, digits, spaces and `._+()-`,
+  otherwise `null`. A name of any other form could hold free text.
+- `system.windows_version` is `Windows 10`, `Windows 11` or `Windows Server 20xx`, otherwise `null`.
+- `application.version` is `x.y.z`, optionally with `-rc`, `-check`, `-test` or `-dev` and a number.
+  `application.channel` is `prerelease` exactly when it has that suffix (`0.5.0-rc1`).
+- Every text value is printable ASCII.
 - `event_id`, `run_id` and `installation_id` are random version 4 UUIDs in lower case. `occurred_at` is UTC in the form
   `2026-11-23T18:30:00Z`.
 
@@ -239,6 +243,12 @@ The database enforces what each outcome may say:
 - `stock_restored` false needs `GPU_UNREACHABLE` or `STOCK_RESTORE_FAILED` as `error_code`, and those two need
   `stock_restored` false. They exclude each other and never appear in `additional_error_codes`.
 - `stock_restored` null means **not known**, which is what a run that threw must send today (see below).
+
+**Known application limitation (follow-up F1 in `docs/planned.md`).** Following an exception, the result of the reset to
+stock is currently discarded, and `UndervoltResult::stock_restored` defaults to `true`, so such a run may incorrectly read
+as "restored". Until the application code is corrected, telemetry **must send `null`** for the uncertain restoration status
+of any run that threw. An unverified restoration is never reported as successful.
+
 - `UNCLASSIFIED` can follow only a failed reset to stock, and be followed only by `SAVE_FAILED`.
 - `FAN_CONTROL_FAILED` is All in one only, with the stage `fan_tune` or `final_test`.
 - A run that is not `interrupted` always has `duration_ms`, `driver_resets` and `tune_saved`.
@@ -277,11 +287,18 @@ Body: one event, at most 16 KB.
 A request that is not `POST` gets 405. A body that is not JSON, or has another content type, gets 400. There are no CORS
 headers: a browser is not a client. A 500 is `{"accepted":false,"error":"UNAVAILABLE"}`.
 
-Limits, enforced in the database, without storing an IP address: 60 new events per installation per UTC day, and 1000
-new events per UTC hour in total. These are fixed windows, so one installation can send 60 just before midnight UTC and 60
-just after. A duplicate takes no hit, also when it arrives at the same moment as the original, so a client can always
-clear its outbox. An event the database refuses does take one. `occurred_at` must lie between 30 days ago and 5 minutes from now. Errors never contain
-database text. Function logs never contain a request body or an ID.
+Limits, enforced in the database, without storing an IP address:
+
+- **60 events per installation per UTC calendar day.**
+- **1,000 events per UTC hour globally**, over all installations.
+
+These are **fixed UTC windows, not rolling 24-hour windows**: a counter starts at zero at 00:00 UTC, or at the start of the
+UTC hour. An installation may therefore send **up to 120 events across a UTC midnight boundary**, 60 just before it and 60
+just after.
+
+A duplicate takes no hit, also when it arrives at the same moment as the original, so a client can always clear its
+outbox. An event the database refuses does take one. `occurred_at` must lie between 30 days ago and 5 minutes from now.
+Errors never contain database text. Function logs never contain a request body or an ID.
 
 ### `POST /functions/v1/delete-telemetry`
 
@@ -295,7 +312,7 @@ Body: exactly `{"installation_id":"<uuid>"}`. Deletes every record of that insta
 | 429 | `{"deleted":false,"error":"RATE_LIMITED"}` | Keeps the ID, tries again later |
 | 5xx, or no answer | | Keeps the ID, tries again later |
 
-Limits: 10 requests per installation per UTC day, and 600 per UTC hour in total. They count whether or not the ID exists.
+Limits: 10 requests per installation per UTC calendar day, and 600 per UTC hour globally, in the same fixed UTC windows. They count whether or not the ID exists.
 
 **Ownership.** The random ID is the only proof. Whoever holds it can delete that installation's records or submit in its
 name. It cannot read anything, because no endpoint returns data. It is readable by other users of the same PC
@@ -311,7 +328,9 @@ enumerations, the ranges, the shape of the JSON and the rules of section 5.
 `anon` and `authenticated` can execute nothing. The service role can execute `telemetry_submit` and `telemetry_delete`
 and nothing else, so a leaked service key can neither read the data, nor write past the limits and the constraints, nor run
 the purge. Those two functions are `SECURITY DEFINER` for that reason: they take typed arguments, run no dynamic SQL, name
-every object with its schema and have an empty `search_path`. `supabase/tests/audit.sql` checks all of this in the catalog.
+every object with its schema and search `pg_catalog, pg_temp`. An empty `search_path` is not enough: PostgreSQL then searches
+`pg_temp` first for types, and a caller's temporary domain named `uuid` or `text` would run its check as the owner.
+`supabase/tests/audit.sql` checks all of this in the catalog.
 
 **Rate-limit counters.** `public.telemetry_rate_limits` holds a counter per bucket and time window. An installation appears
 there as the SHA-256 of its ID, also after its records were deleted, until the counter is removed.
@@ -347,14 +366,14 @@ IP address is processed.
 
 ## 9. Validation
 
-Run on 2026-11-23, on Windows. No GPU took part: all events are synthetic. **All of this is local.** No hosted Supabase
+Run on 2026-11-23 from a clean checkout, on Windows and on Linux (both backend commands, in containers on the Docker engine of the same PC). No GPU took part: all events are synthetic. **All of this is local.** No hosted Supabase
 project was used, and nothing here says anything about Frankfurt.
 
 | Check | Command | Result |
 |---|---|---|
 | Repository CI | `cmake --workflow --preset ci` | 2 of 2 test programs: 610 test cases, 12424 assertions passed, 0 warnings |
-| Schema, endpoints, limits, error sets, catalog audit | `deno test --no-lock --allow-read --allow-env --allow-sys supabase/tests/`, on PostgreSQL 17 in process (PGlite). No Docker, and no network once the npm package is cached | 238 passed |
-| The real local stack: migrations from empty volumes, catalog audit, role tokens refused by the database (`42501`) with `service_role` as control, concurrency, cleanup under load, the scheduler running the purge | `node supabase/tests/stack/run.mjs` | 100 passed |
+| Schema, endpoints, limits, error sets, catalog audit | `deno test --no-lock --allow-read --allow-env --allow-sys supabase/tests/`, on PostgreSQL 17 in process (PGlite). No Docker, and no network once the npm package is cached | 274 passed |
+| The real local stack: migrations from empty volumes, catalog audit, role tokens refused by the database (`42501`) with `service_role` as control, concurrency, cleanup under load, the scheduler running the purge | `node supabase/tests/stack/run.mjs` | 104 passed |
 
 The concurrency part of the stack check: 90 events of one installation gave 60 rows, 60 hits and 30 answers of 429, with
 the global counter also at exactly 60. One event sent 10 times at once gave 1 row and 1 hit. The last 10 global hits, raced
@@ -362,7 +381,7 @@ by 30 installations, went to exactly 10. Rotating IDs on a full hour added no co
 
 **In GitHub Actions**, the `backend` job of `.github/workflows/ci.yml` runs both backend commands. It needs no secret and no
 Supabase project, and it has no path filter or `continue-on-error`, so a failure fails the workflow. A test marked `ignore`
-or `only` fails it too. **That job has not run on GitHub yet**, because this branch has not been pushed.
+or `only` fails it too. **That job has not run on GitHub yet**, because this branch has not been pushed. Its Linux commands were run by hand as described above, not on a GitHub runner.
 
 **Not tested:** a hosted Supabase project, its gateway and secret keys, the region header, and the Windows client, which
 does not exist yet.
@@ -411,26 +430,8 @@ npx supabase@3.3.0 start -x gotrue,realtime,storage-api,imgproxy,mailpit,studio,
 npx supabase@3.3.0 stop --no-backup
 ```
 
-**Deploying to a development project.** Only with a project the owner named for this. These steps have not been run:
-
-```powershell
-npx supabase@3.3.0 link --project-ref <ref>
-npx supabase@3.3.0 db push
-npx supabase@3.3.0 functions deploy submit-telemetry
-npx supabase@3.3.0 functions deploy delete-telemetry
-```
-
-**Verifying Frankfurt.** A setting or a successful deployment proves nothing. An empty event is refused and writes nothing,
-so it is a safe probe:
-
-```bash
-curl -si -X POST "https://<ref>.supabase.co/functions/v1/submit-telemetry" \
-  -H "content-type: application/json" -H "x-region: eu-central-1" -d "{}" | grep -i x-sb-edge-region
-```
-
-The answer must be `eu-central-1`. Check as well that the project's database region is `eu-central-1` (`supabase projects
-list`), and record both results in this document. If `x-region` cannot pin to that region, the design of section 6 has to
-change.
+**Deploying to a development project** and verifying the database and function regions separately:
+`docs/telemetry-dev-verification.md`. None of it has been run.
 
 **Monitoring retention and size:**
 
@@ -447,20 +448,45 @@ select pg_size_pretty(pg_total_relation_size('public.telemetry_runs'));
 
 - Anyone can submit valid-looking events: the client is open source. The limits bound the damage, they do not prevent it.
 - A flood can use up the global limit. Real events then get 429 and wait in the outbox.
-- The limits are fixed UTC windows: an installation can send twice its daily limit around midnight UTC.
+- The limits are fixed UTC windows, not rolling ones: an installation may send up to 120 events across a UTC midnight
+  boundary.
+- A request refused with 429 still counts as a function invocation. The limits protect the database, not the provider's
+  invocation and egress quotas.
 - A `duplicate` answer confirms that an `event_id` or `run_id` exists to someone who already holds that random UUID.
 - A deletion takes slightly longer when there are rows. This was not measured, and using it needs a guessed random UUID.
 - An event sent after a deletion creates a new record, so the client clears its outbox first.
 
-## 12. Before production
+## 12. Privacy and operational readiness
 
-None of these is done:
+**This is a checklist, not a statement of GDPR compliance.** Nothing here is legal advice, and no item is approved.
 
-1. The owner names the data controller and a public contact address (section 10). No details are to be invented.
-2. A published privacy policy: controller, Supabase as processor, legal basis (consent is the intended one), withdrawal,
-   retention, deletion, and what the provider's logs hold.
-3. Supabase's DPA, subprocessors, log contents and backup retention reviewed.
-4. A development project deployed and these checks repeated against it.
-5. Frankfurt verified for both the function and the database.
-6. The plan chosen (section 10). Free is for development and testing only.
-7. The Windows client built and tested (later phases). Telemetry stays off until then.
+- **Provider docs:** read in Supabase's public documentation on 2026-11-23. Not measured on a project of ours.
+- **Owner:** a decision only the owner can take.
+- **Confirm:** still to be confirmed with the provider or measured on a development project.
+
+| Item | What is known | Status |
+|---|---|---|
+| Data controller and public contact | Not decided. No details are to be invented | **Owner** |
+| Privacy policy and consent wording | A draft of the switch is in section 2. No policy exists. It must name the controller, Supabase as processor, the legal basis (consent is the intended one), withdrawal, retention, deletion, and what the provider's logs hold | **Owner** |
+| Supabase DPA | A DPA is published. It allows processing wherever Supabase or its subprocessors have facilities, so a Frankfurt region alone does not keep all processing in the EU | Provider docs. **Owner** reviews it |
+| Subprocessors | The list of 2026-10-12 includes AWS, Google, Cloudflare, Vercel, Sentry, OpenAI and HubSpot, mostly in the US. Which of them touch this data is not established | Provider docs. **Confirm** |
+| API gateway IP logging | The client IP (`cf_connecting_ip`) is in API gateway logs. API and database logs are kept 1 day on Free, 7 on Pro, 28 on Team, 90 on Enterprise | Provider docs |
+| Edge Function logs | Whether invocation logs hold the client IP is not stated | **Confirm** |
+| Database backups | Daily backups on Pro (7 days), Team (14) and Enterprise (up to 30). None listed for Free. How long a deleted row stays in a backup is not stated. A backup taken before a deletion presumably holds the row until it expires | Provider docs. **Confirm** |
+| Retention job | Implemented, and ran on the local stack. Its real execution on a hosted project is not shown | **Confirm** on a development project |
+| Deletion | Tested locally. Backups and provider logs are outside it | **Confirm** on a development project |
+| Storage and growth | A row is about 2.9 KB with indexes: 12,000 runs a year is about 35 MB. The ceiling at the global limit is about 70 MB a day, so 500 MB in about a week | Measured locally |
+| Free or Pro | Free: 500 MB per project, 500,000 function invocations a month, 5 GB egress per organization, paused after a week of low activity, no daily backups. Pro is about $25 a month, and usage above its quota is charged | Provider docs. **Owner** |
+| Cost under a flood | Refused requests still count as invocations and egress. Whether a spend cap is on must be checked before any paid plan is used | **Owner**, **Confirm** |
+| Database and function region | Neither verified | **Confirm**: `docs/telemetry-dev-verification.md` |
+| Windows client | Not built. Telemetry stays off until later phases | Open |
+
+Sources: [Data Processing Addendum](https://supabase.com/legal/customer-resources/data-processing-addendum),
+[subprocessors](https://supabase.com/legal/subprocessor-list/October-12-2026.pdf),
+[logs](https://supabase.com/docs/guides/telemetry/logs),
+[API errors in logs](https://supabase.com/docs/guides/troubleshooting/discovering-and-interpreting-api-errors-in-the-logs-7xREI9),
+[backups](https://supabase.com/docs/guides/platform/backups),
+[regional invocations](https://supabase.com/docs/guides/functions/regional-invocation),
+[billing](https://supabase.com/docs/guides/platform/billing-on-supabase),
+[pricing](https://supabase.com/pricing),
+[project pausing](https://supabase.com/kb/faqs/platform/free-project-pausing).

@@ -445,3 +445,18 @@ By the owner, 2026-11-14:
   keep/discard rule". The tolerances are provisional and fixed by check 1.
 - **A cool card and a hot card:** "What changes per card".
 - **The hardware checks:** "Hardware checks that would prove it" (checks 111 and 112).
+
+## Follow-up F1: the reset to stock after an exception
+
+**Open. Application code, not changed by the telemetry work. Fix before the telemetry client is built.**
+
+When a run throws, `run_optimize` and `run_undervolt` call `reset_to_stock()` in their `catch`
+(`src/app/common_optimize.cpp`, lines 132 and 355) and discard the result. `UndervoltResult::stock_restored` defaults to
+`true` (`src/core/undervolt.hpp`, line 96), so a run whose reset failed may read as restored. `OptimizeResult` defaults to
+`false` (`src/core/search.hpp`, line 265), so the two runs disagree.
+
+To do: keep the result of that reset in the outcome, and make the default of both fields say "not known" or `false`, with a
+unit test for a throwing run whose reset fails. Check what the window and the CLI show for such a run.
+
+Until then, telemetry must send `stock_restored: null` for a run that threw (`docs/telemetry.md`, section 5). An
+unverified restoration is never reported as successful.

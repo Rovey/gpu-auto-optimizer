@@ -15,7 +15,8 @@ type Check = (v: unknown) => boolean;
 type Obj = Record<string, unknown>;
 
 const isObject = (v: unknown): v is Obj => typeof v === "object" && v !== null && !Array.isArray(v);
-const text: Check = (v) => typeof v === "string" && v.length <= 128;
+// Printable ASCII: every text field is, and NUL or a lone surrogate cannot go into jsonb.
+const text: Check = (v) => typeof v === "string" && v.length <= 128 && /^[\x20-\x7e]*$/.test(v);
 const int: Check = (v) => Number.isSafeInteger(v);
 const num: Check = (v) => typeof v === "number" && Number.isFinite(v);
 const bool: Check = (v) => typeof v === "boolean";
@@ -162,15 +163,19 @@ async function readBody(req: Request): Promise<{ text?: string; tooLarge?: boole
   const reader = req.body.getReader();
   const chunks: Uint8Array[] = [];
   let size = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    size += value.length;
-    if (size > MAX_BODY_BYTES) {
-      await reader.cancel();
-      return { tooLarge: true };
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.length;
+      if (size > MAX_BODY_BYTES) {
+        await reader.cancel();
+        return { tooLarge: true };
+      }
+      chunks.push(value);
     }
-    chunks.push(value);
+  } catch {
+    return { text: "" };   // the connection broke off: fails as JSON below
   }
   const all = new Uint8Array(size);
   let at = 0;

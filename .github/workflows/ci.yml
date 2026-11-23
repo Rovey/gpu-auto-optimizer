@@ -46,7 +46,7 @@ jobs:
 
       - name: No backend test is switched off
         run: |
-          if grep -rnE 'Deno\.test\.(ignore|only)|(ignore|only): *true' supabase/tests; then
+          if grep -rnE 'Deno\.test\.(ignore|only)|\b(ignore|only) *:' supabase/tests; then
             echo "::error::a backend test is marked ignore or only"
             exit 1
           fi

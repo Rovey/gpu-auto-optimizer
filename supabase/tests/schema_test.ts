@@ -107,6 +107,7 @@ refused("a finished run with unknown resets", () => fresh({ ...failed, driver_re
 refused("a finished run with tune_saved unknown", () => fresh({ ...failed, tune_saved: null }), "telemetry_finished_run_is_known");
 refused("restore failed without its code", () => fresh({ ...failed, stock_restored: false }), "telemetry_stock_failure_has_code");
 refused("its code without the restore failing", () => fresh({ ...failed, error_code: "GPU_UNREACHABLE" }), "telemetry_stock_failure_has_code");
+accepted("a run that threw, its reset to stock not known", () => fresh({ ...failed, error_code: "INTERNAL_ERROR", stock_restored: null }));
 accepted("GPU unreachable", () => fresh({ ...failed, error_code: "GPU_UNREACHABLE", stock_restored: false, driver_resets: 1 }));
 
 // ---- an interrupted run knows nothing it could not have known
@@ -196,6 +197,24 @@ refused("a failed reset with an ordinary code", () => fresh({ ...cancelled, stoc
 accepted("All in one, fan failure in the final test", () => fresh(aioFailed));
 accepted("All in one, fan failure in the fan step", () => fresh({ ...aioFailed, failed_stage: "fan_tune" }));
 refused("fan failure with no stage", () => fresh({ ...aioFailed, failed_stage: null }), "telemetry_fan_failure_in_fan_step");
+
+// ---- no free text in the fields that are text
+for (const name of ["NVIDIA GeForce RTX 4070", "GeForce GTX 1060 6GB", "NVIDIA TITAN Xp", "TITAN X (Pascal)", "Quadro P2000", "Tesla P100", "NVIDIA RTX A4000", "NVIDIA GeForce RTX 4080 SUPER Laptop GPU"]) {
+  accepted(`card name: ${name}`, () => fresh({ gpu_name: name }));
+}
+for (const name of ["Jan de Vries", "DESKTOP-EXAMPLE", "my computer", "GPU-1234", "NVIDIA", `NVIDIA ${"x".repeat(60)}`]) {
+  refused(`not a card name: ${name}`, () => fresh({ gpu_name: name }));
+}
+for (const v of ["Windows 10", "Windows 11", "Windows Server 2022"]) accepted(`Windows version: ${v}`, () => fresh({ windows_version: v }));
+for (const v of ["Windows Jan de Vries", "Windows 11 of Jan", "Windows 12345", "Windows 11\n"]) {
+  refused(`not a Windows version: ${v}`, () => fresh({ windows_version: v }));
+}
+for (const v of ["0.5.0-rc1", "0.4.10-check112", "0.5.0-test2", "0.5.0-dev1"]) {
+  accepted(`version: ${v}`, () => fresh({ app_version: v, app_channel: "prerelease" }));
+}
+for (const v of ["0.5.0-janDeVries", "0.5.0-rc", "0.5.0-C.Users.jan", "0.5.0-rc1\n"]) {
+  refused(`not a version: ${v}`, () => fresh({ app_version: v, app_channel: "prerelease" }));
+}
 
 // ---- several failures in one run
 const more = (error_code: string | null, ...additional_error_codes: string[]) => ({ error_code, additional_error_codes });
@@ -324,6 +343,27 @@ Deno.test("the service role can call the two entry points", async () => {
     ));
   assertEq(r.rows[0], { s: "invalid", d: "deleted" });
 });
+// With an empty search_path, pg_temp is searched first for types. A caller's
+// temporary domain named like a built-in type would then run its CHECK as the owner.
+for (const type of ["uuid", "text", "timestamptz"]) {
+  Deno.test(`a caller's temporary ${type} cannot run code in an entry point`, async () => {
+    const row = JSON.stringify(fresh());
+    let error = "";
+    await db.exec(`set role service_role;
+      create function pg_temp.spy(v pg_catalog.text) returns boolean language plpgsql as $f$
+        begin raise exception 'ran as %', current_user; end $f$;
+      create domain pg_temp.${type} as pg_catalog.${type} check (pg_temp.spy(value::pg_catalog.text));`);
+    try {
+      await db.query("select public.telemetry_submit($1::pg_catalog.jsonb)", [row]);
+      await db.query("select public.telemetry_delete('00000000-0000-4000-8000-0000000000bb'::pg_catalog.uuid)");
+    } catch (e) {
+      error = (e as Error).message;
+    } finally {
+      await db.exec(`drop domain pg_temp.${type}; drop function pg_temp.spy(pg_catalog.text); reset role`);
+    }
+    assertEq(error, "");
+  });
+}
 Deno.test("the access model holds in the catalog", async () => {
   const r = await db.query<{ problem: string }>(auditSql());
   assertEq(r.rows.map((x) => x.problem), []);
@@ -335,7 +375,7 @@ Deno.test("the audit sees what it is there to find", async () => {
     ["alter table public.telemetry_runs disable row level security", "alter table public.telemetry_runs enable row level security", "no row level security: telemetry_runs"],
     ["create policy p on public.telemetry_runs using (true)", "drop policy p on public.telemetry_runs", "a policy on telemetry_runs: p"],
     ["alter function public.telemetry_purge_expired() security definer", "alter function public.telemetry_purge_expired() security invoker", "SECURITY DEFINER: telemetry_purge_expired"],
-    ["alter function public.telemetry_submit(jsonb) reset search_path", "alter function public.telemetry_submit(jsonb) set search_path = ''", "search_path not empty: telemetry_submit"],
+    ["alter function public.telemetry_submit(jsonb) set search_path = ''", "alter function public.telemetry_submit(jsonb) set search_path = pg_catalog, pg_temp", "search_path not safe: telemetry_submit"],
     ["grant execute on function public.telemetry_take(text, timestamptz, integer) to service_role", "revoke execute on function public.telemetry_take(text, timestamptz, integer) from service_role", "EXECUTE on function telemetry_take for service_role"],
     ["grant execute on function public.telemetry_submit(jsonb) to anon", "revoke execute on function public.telemetry_submit(jsonb) from anon", "EXECUTE on function telemetry_submit for anon"],
   ];
