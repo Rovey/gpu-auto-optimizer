@@ -39,6 +39,9 @@ export async function freshDb(): Promise<PGlite> {
   return db;
 }
 
+// The access model, from the catalog. The same query runs in the stack check.
+export const auditSql = () => Deno.readTextFileSync(new URL("tests/audit.sql", supabaseDir));
+
 export async function asRole<T>(db: PGlite, role: string, f: () => Promise<T>): Promise<T> {
   await db.exec(`set role ${role}`);
   try {

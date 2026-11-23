@@ -1,6 +1,6 @@
 -- One row per top-level optimization run. The contract is docs/telemetry.md.
--- Clients never reach this table: the submit-telemetry Edge Function is the
--- only writer, with the service role.
+-- Clients never reach this table: the Edge Functions call telemetry_submit and
+-- telemetry_delete with the service role, which has no right on the table itself.
 --
 -- The validators use CASE because SQL does not promise the order of AND: a
 -- cast or a key lookup must not run on a value of the wrong JSON type. A CHECK
@@ -129,6 +129,52 @@ as $$
   end
 $$;
 
+-- The error codes, most important first. A run can fail in several ways at
+-- once: `error_code` is the first that applies, and `additional_error_codes`
+-- holds the others in this same order, so one set of causes has one spelling.
+-- What leaves the card in a wrong state comes first and cannot be hidden.
+create function public.telemetry_error_codes()
+returns text[]
+language sql
+immutable
+set search_path = ''
+as $$
+  select array['GPU_UNREACHABLE', 'STOCK_RESTORE_FAILED', 'INTERNAL_ERROR', 'TOO_HOT', 'DRIVER_RESET',
+               'STABILITY_CHECK_FAILED', 'MEASUREMENT_FAILED', 'FAN_CONTROL_FAILED', 'UNCLASSIFIED',
+               'NOT_KEPT', 'SAVE_FAILED']::text[]
+$$;
+
+-- Every code of a run, the first one included.
+create function public.telemetry_all_errors(p_code text, p_more text[])
+returns text[]
+language sql
+immutable
+set search_path = ''
+as $$
+  select case when p_code is null then p_more else array_prepend(p_code, p_more) end
+$$;
+
+-- The additional codes: known, without repeats, in order, all after the first
+-- code. Without a first code there are none.
+create function public.telemetry_valid_more_errors(p_code text, p_more text[])
+returns boolean
+language sql
+immutable
+set search_path = ''
+as $$
+  select case
+    when p_more is null then false
+    when cardinality(p_more) = 0 then true
+    when p_code is null then false
+    else coalesce(
+      array_position(o.codes, p_code) < array_position(o.codes, p_more[1])
+      and p_more = (select array_agg(k.c order by array_position(o.codes, k.c))
+                    from (select distinct u.c from unnest(p_more) as u(c) where u.c = any(o.codes)) as k(c)),
+      false)
+  end
+  from (select public.telemetry_error_codes() as codes) as o
+$$;
+
 create table public.telemetry_runs (
   id                  uuid primary key,                 -- event_id: a retry cannot create a second row
   installation_id     uuid not null,
@@ -161,9 +207,8 @@ create table public.telemetry_runs (
   duration_ms         bigint check (duration_ms between 0 and 86400000),
   outcome             text not null check (outcome in ('success', 'failed', 'no_result', 'cancelled', 'interrupted')),
   failed_stage        text check (failed_stage in ('stock', 'search', 'soak', 'undervolt', 'fan_tune', 'final_test', 'retest')),
-  error_code          text check (error_code in
-                        ('STABILITY_CHECK_FAILED', 'DRIVER_RESET', 'GPU_UNREACHABLE', 'STOCK_RESTORE_FAILED', 'FAN_CONTROL_FAILED',
-                         'MEASUREMENT_FAILED', 'TOO_HOT', 'NOT_KEPT', 'SAVE_FAILED', 'INTERNAL_ERROR', 'UNCLASSIFIED')),
+  error_code          text check (error_code = any (public.telemetry_error_codes())),
+  additional_error_codes text[] not null default '{}',  -- the other causes of this run, never free text
   driver_resets       integer check (driver_resets between 0 and 100),
   stock_restored      boolean,                          -- null: the run did not have to, or it is not known
   tune_saved          boolean,                          -- null: not known (interrupted)
@@ -174,6 +219,7 @@ create table public.telemetry_runs (
   tune                jsonb check (public.telemetry_valid_tune(tune)),
   steps               jsonb check (public.telemetry_valid_steps(steps)),
 
+  constraint telemetry_error_set check (public.telemetry_valid_more_errors(error_code, additional_error_codes)),
   constraint telemetry_channel_fits_version check ((app_version like '%-%') = (app_channel = 'prerelease')),
 
   -- What each outcome may say.
@@ -183,15 +229,21 @@ create table public.telemetry_runs (
                              and coalesce(result_measurements ->> 'verdict' = 'stable', false))
   ),
   constraint telemetry_failed_has_code check (
-    outcome <> 'failed' or (error_code is not null and error_code not in ('NOT_KEPT', 'SAVE_FAILED'))
+    outcome <> 'failed' or (error_code is not null and error_code not in ('NOT_KEPT', 'SAVE_FAILED')
+                            and not 'NOT_KEPT' = any (additional_error_codes))
   ),
   -- A result that was not kept is a reason, not a technical failure.
   constraint telemetry_no_result_has_reason check (
-    outcome <> 'no_result' or coalesce(error_code in ('NOT_KEPT', 'SAVE_FAILED', 'GPU_UNREACHABLE', 'STOCK_RESTORE_FAILED'), false)
+    outcome <> 'no_result' or (
+      public.telemetry_all_errors(error_code, additional_error_codes)
+        <@ array['GPU_UNREACHABLE', 'STOCK_RESTORE_FAILED', 'NOT_KEPT', 'SAVE_FAILED']::text[]
+      and public.telemetry_all_errors(error_code, additional_error_codes) && array['NOT_KEPT', 'SAVE_FAILED']::text[]
+    )
   ),
   constraint telemetry_cancelled_blames_nothing check (
     outcome <> 'cancelled' or (failed_stage is null
-                               and (error_code is null or error_code in ('INTERNAL_ERROR', 'GPU_UNREACHABLE', 'STOCK_RESTORE_FAILED')))
+                               and public.telemetry_all_errors(error_code, additional_error_codes)
+                                   <@ array['INTERNAL_ERROR', 'GPU_UNREACHABLE', 'STOCK_RESTORE_FAILED', 'SAVE_FAILED']::text[])
   ),
   constraint telemetry_interrupted_claims_nothing check (
     outcome <> 'interrupted' or (duration_ms is null and driver_resets is null and stock_restored is null and tune_saved is null
@@ -207,11 +259,20 @@ create table public.telemetry_runs (
     tune_saved is not true or outcome = 'success' or (optimization_type = 'saved_tune_retest' and outcome in ('failed', 'cancelled'))
   ),
   constraint telemetry_tune_only_when_saved check (tune is null or tune_saved is true),
-  -- INTERNAL_ERROR comes first in the order of the codes, so it can stand for a
-  -- run whose reset to stock failed too.
+  -- A failed reset to stock is always the first code, whatever else went wrong.
+  -- GPU_UNREACHABLE is that same failure after a driver reset: one or the other.
   constraint telemetry_stock_failure_has_code check (
-    (stock_restored is not false or coalesce(error_code in ('INTERNAL_ERROR', 'GPU_UNREACHABLE', 'STOCK_RESTORE_FAILED'), false))
+    (stock_restored is not false or coalesce(error_code in ('GPU_UNREACHABLE', 'STOCK_RESTORE_FAILED'), false))
     and (error_code is null or error_code not in ('GPU_UNREACHABLE', 'STOCK_RESTORE_FAILED') or stock_restored is false)
+    and not additional_error_codes && array['GPU_UNREACHABLE', 'STOCK_RESTORE_FAILED']::text[]
+  ),
+  -- A write that failed kept nothing of this run as its result.
+  constraint telemetry_save_failure_saved_nothing check (
+    not 'SAVE_FAILED' = any (public.telemetry_all_errors(error_code, additional_error_codes)) or tune_saved is false
+  ),
+  -- "None of the known causes" says nothing next to a known cause.
+  constraint telemetry_unclassified_is_alone check (
+    not 'UNCLASSIFIED' = any (additional_error_codes) or error_code in ('GPU_UNREACHABLE', 'STOCK_RESTORE_FAILED')
   ),
 
   -- What each kind of run can have.
@@ -222,9 +283,11 @@ create table public.telemetry_runs (
   constraint telemetry_retest_has_no_stock check (optimization_type <> 'saved_tune_retest' or stock_measurements is null),
   constraint telemetry_steps_only_all_in_one check (steps is null or optimization_type = 'all_in_one'),
   constraint telemetry_all_in_one_has_steps check (optimization_type <> 'all_in_one' or outcome = 'interrupted' or steps is not null),
-  constraint telemetry_not_kept_not_retest check (error_code is distinct from 'NOT_KEPT' or optimization_type <> 'saved_tune_retest'),
+  constraint telemetry_not_kept_not_retest check (
+    not 'NOT_KEPT' = any (public.telemetry_all_errors(error_code, additional_error_codes)) or optimization_type <> 'saved_tune_retest'
+  ),
   constraint telemetry_fan_failure_in_fan_step check (
-    error_code is distinct from 'FAN_CONTROL_FAILED'
+    not 'FAN_CONTROL_FAILED' = any (public.telemetry_all_errors(error_code, additional_error_codes))
     or (optimization_type = 'all_in_one' and coalesce(failed_stage in ('fan_tune', 'final_test'), false))
   ),
   constraint telemetry_stage_fits_type check (
@@ -246,18 +309,16 @@ create index telemetry_runs_installation_idx on public.telemetry_runs (installat
 -- No policies: with RLS on, a role without BYPASSRLS sees and writes nothing.
 -- The explicit revokes are needed too: Supabase's default privileges grant new
 -- objects in `public` to anon, authenticated and service_role, TRUNCATE and
--- UPDATE included. The table is append-only for the service role.
+-- UPDATE included. No role but the owner has any right on this table: the
+-- service role reaches it only through telemetry_submit and telemetry_delete.
 alter table public.telemetry_runs enable row level security;
 revoke all on table public.telemetry_runs from public, anon, authenticated, service_role;
-grant select, insert, delete on table public.telemetry_runs to service_role;
 
-revoke all on function public.telemetry_number_in(jsonb, numeric, numeric) from public, anon, authenticated;
-revoke all on function public.telemetry_int_in(jsonb, numeric, numeric) from public, anon, authenticated;
-revoke all on function public.telemetry_valid_measurement(jsonb) from public, anon, authenticated;
-revoke all on function public.telemetry_valid_tune(jsonb) from public, anon, authenticated;
-revoke all on function public.telemetry_valid_steps(jsonb) from public, anon, authenticated;
-grant execute on function public.telemetry_number_in(jsonb, numeric, numeric) to service_role;
-grant execute on function public.telemetry_int_in(jsonb, numeric, numeric) to service_role;
-grant execute on function public.telemetry_valid_measurement(jsonb) to service_role;
-grant execute on function public.telemetry_valid_tune(jsonb) to service_role;
-grant execute on function public.telemetry_valid_steps(jsonb) to service_role;
+revoke all on function public.telemetry_number_in(jsonb, numeric, numeric) from public, anon, authenticated, service_role;
+revoke all on function public.telemetry_int_in(jsonb, numeric, numeric) from public, anon, authenticated, service_role;
+revoke all on function public.telemetry_valid_measurement(jsonb) from public, anon, authenticated, service_role;
+revoke all on function public.telemetry_valid_tune(jsonb) from public, anon, authenticated, service_role;
+revoke all on function public.telemetry_valid_steps(jsonb) from public, anon, authenticated, service_role;
+revoke all on function public.telemetry_error_codes() from public, anon, authenticated, service_role;
+revoke all on function public.telemetry_all_errors(text, text[]) from public, anon, authenticated, service_role;
+revoke all on function public.telemetry_valid_more_errors(text, text[]) from public, anon, authenticated, service_role;

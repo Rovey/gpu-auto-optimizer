@@ -120,6 +120,7 @@ and a score of 0, become `null`. Unknown fields are refused by the server.
     "outcome": "success",
     "failed_stage": null,
     "error_code": null,
+    "additional_error_codes": [],
     "driver_resets": 0,
     "stock_restored": null,
     "tune_saved": true,
@@ -176,6 +177,7 @@ What the event builder must do, because the server refuses anything else:
 | `measurements.result` | `result.soak`, `UndervoltOutcome::after` (else `result.after`), `AllInOneOutcome::now`, `RetestResult::test` |
 | `driver_resets` | The existing `driver_resets()` of each outcome |
 | `measurement_disturbed` | `busy_note` or `disturbed` not empty. Only the fact, never the text |
+| `error_code`, `additional_error_codes` | Section 5 |
 | `tune` | The saved `Profile`, when `tune_saved` |
 | `steps` | All in one only: what became of its four steps |
 
@@ -191,43 +193,65 @@ The first row that fits decides the outcome.
 | `failed` | Every other run that started |
 | `interrupted` | Built at the next start from a marker |
 
-`error_code` is the first that fits:
+A run can fail in several ways at once: a search that throws and then cannot reset the card, or a retest that fails and
+cannot save its lower step. One code cannot hold that, so an event has two fields:
 
-| Code | When |
-|---|---|
-| `INTERNAL_ERROR` | The caller caught an exception |
-| `GPU_UNREACHABLE` | The existing `gpu_unreachable()` |
-| `STOCK_RESTORE_FAILED` | `stock_restored` is false |
-| `NOT_KEPT` | `not_kept` |
-| `SAVE_FAILED` | The result could not be saved |
-| `TOO_HOT` | The deciding measurement ended `TooHot` |
-| `DRIVER_RESET` | It ended `DeviceLost` |
-| `STABILITY_CHECK_FAILED` | It ended `WrongResult` or `Stalled` |
-| `MEASUREMENT_FAILED` | It ended `NoTelemetry` |
-| `FAN_CONTROL_FAILED` | All in one stopped in its fan step |
-| `UNCLASSIFIED` | None of these. Counted, so that this list can be improved |
+- **`error_code`** is the first code in the table below that applies to the run.
+- **`additional_error_codes`** holds every other code that applies, in the order of the table. It is `[]` when there are
+  none, and it is always present. The list is closed: no other value and no free text is accepted.
 
-`TOO_HOT`, `NOT_KEPT`, `SAVE_FAILED` and `UNCLASSIFIED` are additions to the first plan. A card that is too hot is the
-open question of #84, and a code that claims a cause the app did not establish would make the data worse.
+One set of causes therefore has exactly one spelling, and the server refuses any other.
+
+| Order | Code | When |
+|---|---|---|
+| 1 | `GPU_UNREACHABLE` | The existing `gpu_unreachable()`: the reset to stock failed after a driver reset |
+| 2 | `STOCK_RESTORE_FAILED` | `stock_restored` is false, without a driver reset |
+| 3 | `INTERNAL_ERROR` | The caller caught an exception, or the search ended in an access violation |
+| 4 | `TOO_HOT` | The deciding measurement ended `TooHot` |
+| 5 | `DRIVER_RESET` | It ended `DeviceLost` |
+| 6 | `STABILITY_CHECK_FAILED` | It ended `WrongResult` or `Stalled` |
+| 7 | `MEASUREMENT_FAILED` | It ended `NoTelemetry` |
+| 8 | `FAN_CONTROL_FAILED` | All in one stopped in its fan step |
+| 9 | `UNCLASSIFIED` | No known cause. Counted, so that this list can be improved |
+| 10 | `NOT_KEPT` | `not_kept` |
+| 11 | `SAVE_FAILED` | A write of the saved tune failed: the result or a lower step could not be saved, or All in one could not put the tune from before the run back |
+
+The state of the card comes first because it is what a user must act on: **a failed reset to stock is always `error_code`
+and can never be hidden behind `INTERNAL_ERROR`.** The cause of the run stays visible next to it. `TOO_HOT`, `NOT_KEPT`,
+`SAVE_FAILED` and `UNCLASSIFIED` are additions to the first plan. A card that is too hot is the open question of #84, and
+a code that claims a cause the app did not establish would make the data worse.
 
 `failed_stage` is `stock`, `search`, `soak`, `undervolt`, `fan_tune`, `final_test` or `retest`, or null when it is not
 known. `stock_restored` is null for a run that kept its result.
 
 The database enforces what each outcome may say:
 
-| Outcome | `error_code` | Also |
+| Outcome | Codes it can have | Also |
 |---|---|---|
-| `success` | null | `tune_saved` true, a tune, a `stable` result, no stage, `stock_restored` null |
-| `cancelled` | null, `INTERNAL_ERROR`, `GPU_UNREACHABLE`, `STOCK_RESTORE_FAILED` | No stage: a stop blames nothing |
-| `no_result` | `NOT_KEPT`, `SAVE_FAILED`, `GPU_UNREACHABLE`, `STOCK_RESTORE_FAILED` | `NOT_KEPT` is a reason, not a technical failure |
-| `failed` | Any code except `NOT_KEPT` and `SAVE_FAILED` | |
-| `interrupted` | null | Only what the marker holds. No duration, resets, measurements, tune, steps, stage or stock state |
+| `success` | None | `tune_saved` true, a tune, a `stable` result, no stage, `stock_restored` null |
+| `cancelled` | None, or any of `GPU_UNREACHABLE`, `STOCK_RESTORE_FAILED`, `INTERNAL_ERROR`, `SAVE_FAILED` | No stage: a stop blames nothing |
+| `no_result` | `NOT_KEPT` or `SAVE_FAILED`, optionally with `GPU_UNREACHABLE` or `STOCK_RESTORE_FAILED` | `NOT_KEPT` is a reason, not a technical failure |
+| `failed` | A first code other than `NOT_KEPT` and `SAVE_FAILED`. `SAVE_FAILED` can follow it, `NOT_KEPT` cannot | |
+| `interrupted` | None | Only what the marker holds. No duration, resets, measurements, tune, steps, stage or stock state |
 
 - `tune_saved` is true only on `success`, or on a `failed` or `cancelled` **retest** that saved a lower step.
-- `GPU_UNREACHABLE` and `STOCK_RESTORE_FAILED` need `stock_restored` false. `stock_restored` false needs one of those, or
-  `INTERNAL_ERROR`, which comes first in the order above.
+- `SAVE_FAILED` needs `tune_saved` false.
+- `stock_restored` false needs `GPU_UNREACHABLE` or `STOCK_RESTORE_FAILED` as `error_code`, and those two need
+  `stock_restored` false. They exclude each other and never appear in `additional_error_codes`.
+- `stock_restored` null means **not known**, which is what a run that threw must send today (see below).
+- `UNCLASSIFIED` can follow only a failed reset to stock, and be followed only by `SAVE_FAILED`.
 - `FAN_CONTROL_FAILED` is All in one only, with the stage `fan_tune` or `final_test`.
 - A run that is not `interrupted` always has `duration_ms`, `driver_resets` and `tune_saved`.
+
+**What the client must add in the next phase.** The run code holds some of these facts only as text, and no text may be
+sent. Without these changes the events stay valid but say less:
+
+| Fact | Today | Needed |
+|---|---|---|
+| The reset after an exception | `run_optimize` and `run_undervolt` call `reset_to_stock()` in their `catch` and drop the answer. The default of `stock_restored` then differs: `false` in `OptimizeResult`, `true` in `UndervoltResult` | Keep the answer. Until then send `null`. Never read `stock_restored` from an outcome that threw: the `true` would hide a failed reset |
+| An access violation in the search | Only a sentence in `reason` | A flag on the outcome, or it reports as `UNCLASSIFIED` |
+| How All in one and a retest left the card | Only the end of `error` (`stock_end`). A step's own `stock_restored` can be false while the retry after it succeeded | A field with the final state |
+| All in one could not put the old tune back | Only a sentence appended to `error` | A flag, reported as `SAVE_FAILED` |
 
 ## 6. HTTP API
 
@@ -254,8 +278,9 @@ A request that is not `POST` gets 405. A body that is not JSON, or has another c
 headers: a browser is not a client. A 500 is `{"accepted":false,"error":"UNAVAILABLE"}`.
 
 Limits, enforced in the database, without storing an IP address: 60 new events per installation per UTC day, and 1000
-new events per UTC hour in total. A duplicate takes no hit, so a client can always clear its outbox. An event the
-database refuses does take one. `occurred_at` must lie between 30 days ago and 5 minutes from now. Errors never contain
+new events per UTC hour in total. These are fixed windows, so one installation can send 60 just before midnight UTC and 60
+just after. A duplicate takes no hit, also when it arrives at the same moment as the original, so a client can always
+clear its outbox. An event the database refuses does take one. `occurred_at` must lie between 30 days ago and 5 minutes from now. Errors never contain
 database text. Function logs never contain a request body or an ID.
 
 ### `POST /functions/v1/delete-telemetry`
@@ -280,15 +305,29 @@ second secret, so the design stays as it is. Keep the ID out of logs and support
 ## 7. Database
 
 `public.telemetry_runs`, one row per run. `id` is the `event_id`, `run_id` is unique, and constraints enforce the
-enumerations, the ranges, the shape of the JSON and the rules of section 5. Row level security is on with no policies.
-`anon` and `authenticated` have no rights on the tables or functions. The service role can read, insert and delete runs,
-never update or truncate them. It can read and raise the counters, never delete them, and it cannot run the purge.
+enumerations, the ranges, the shape of the JSON and the rules of section 5.
 
-`public.telemetry_rate_limits` holds a counter per bucket and time window. An installation appears there as the SHA-256
-of its ID, for about two days, also after its records were deleted.
+**Access.** Row level security is on for both tables, with no policies, and no role but the owner has any right on them.
+`anon` and `authenticated` can execute nothing. The service role can execute `telemetry_submit` and `telemetry_delete`
+and nothing else, so a leaked service key can neither read the data, nor write past the limits and the constraints, nor run
+the purge. Those two functions are `SECURITY DEFINER` for that reason: they take typed arguments, run no dynamic SQL, name
+every object with its schema and have an empty `search_path`. `supabase/tests/audit.sql` checks all of this in the catalog.
 
-**Retention.** `telemetry_purge_expired()` deletes runs received more than 12 months ago and counters older than two
-days. It takes no argument, so no caller can move the boundary. Only its owner can run it: the `pg_cron` job
+**Rate-limit counters.** `public.telemetry_rate_limits` holds a counter per bucket and time window. An installation appears
+there as the SHA-256 of its ID, also after its records were deleted, until the counter is removed.
+
+The table cannot grow without bound when clients rotate installation IDs:
+
+- A new counter is only created for a request the global limit let in. Once the hour is full, a new ID writes nothing.
+- That bounds a UTC day to 38,400 installation counters (24 hours of 1000 submissions and 600 deletions).
+- Every admitted request removes up to 10 counters of ended windows and adds at most one, so the table drains by itself,
+  also if the scheduled job stops. Together with the job, at most two days of counters exist: 76,800 rows, about 19 MB
+  with their indexes.
+- A counter is only removed after its window has ended. Windows last at most a UTC day and are aligned to it, so a counter
+  of an earlier day is over and an active one cannot be removed, which would reset a limit.
+
+**Retention.** `telemetry_purge_expired()` deletes runs received more than 12 months ago and all counters of ended windows.
+It takes no argument, so no caller can move the boundary. Only its owner can run it: the `pg_cron` job
 `telemetry-retention`, daily at 03:17 UTC. Provider backups are outside this job; how long they keep deleted rows must be
 checked (section 12).
 
@@ -308,16 +347,22 @@ IP address is processed.
 
 ## 9. Validation
 
-Run on 2026-11-23. No GPU took part: all events are synthetic.
+Run on 2026-11-23, on Windows. No GPU took part: all events are synthetic. **All of this is local.** No hosted Supabase
+project was used, and nothing here says anything about Frankfurt.
 
-| Check | How | Result |
+| Check | Command | Result |
 |---|---|---|
-| Repository CI | `cmake --workflow --preset ci` | 547 test cases, 12047 assertions passed, 0 warnings |
-| Schema and endpoints | `deno test --no-lock --allow-read --allow-env --allow-sys supabase/tests/`, on PostgreSQL 17 in process (PGlite). No Docker or network at run time, apart from fetching the npm package once | 178 passed |
-| The real local stack | One-off script against `supabase start` (CLI 3.3.0, Postgres 17.12, PostgREST, Edge Runtime 1.79.3, `pg_cron`): functions without a key, role tokens refused by the database (`42501`) with `service_role` as control, the scheduler running the purge | 43 passed |
-| Concurrency | The same stack: 90 events of one installation in parallel batches gave 60 rows, 60 hits and 30 answers of 429. One event sent 10 times at once gave 1 row | Passed |
+| Repository CI | `cmake --workflow --preset ci` | 2 of 2 test programs: 610 test cases, 12424 assertions passed, 0 warnings |
+| Schema, endpoints, limits, error sets, catalog audit | `deno test --no-lock --allow-read --allow-env --allow-sys supabase/tests/`, on PostgreSQL 17 in process (PGlite). No Docker, and no network once the npm package is cached | 238 passed |
+| The real local stack: migrations from empty volumes, catalog audit, role tokens refused by the database (`42501`) with `service_role` as control, concurrency, cleanup under load, the scheduler running the purge | `node supabase/tests/stack/run.mjs` | 100 passed |
 
-`pg_cron` and PostgREST exist only in the local stack run, so that row is not repeated by the `deno test` command.
+The concurrency part of the stack check: 90 events of one installation gave 60 rows, 60 hits and 30 answers of 429, with
+the global counter also at exactly 60. One event sent 10 times at once gave 1 row and 1 hit. The last 10 global hits, raced
+by 30 installations, went to exactly 10. Rotating IDs on a full hour added no counter.
+
+**In GitHub Actions**, the `backend` job of `.github/workflows/ci.yml` runs both backend commands. It needs no secret and no
+Supabase project, and it has no path filter or `continue-on-error`, so a failure fails the workflow. A test marked `ignore`
+or `only` fails it too. **That job has not run on GitHub yet**, because this branch has not been pushed.
 
 **Not tested:** a hosted Supabase project, its gateway and secret keys, the region header, and the Windows client, which
 does not exist yet.
@@ -339,6 +384,24 @@ The RTX 4070 takes no part.
 **Secrets.** Nothing is set by hand. Supabase injects `SUPABASE_URL` and `SUPABASE_SECRET_KEYS`, and the function uses the
 key named `default`, falling back to the legacy `SUPABASE_SERVICE_ROLE_KEY`. A service key never goes into the Windows
 application, the repository or a response.
+
+**Running the tests from a clean checkout:**
+
+```powershell
+deno test --no-lock --allow-read --allow-env --allow-sys supabase/tests/   # Deno 2.9.6
+node supabase/tests/stack/run.mjs                                          # Node 20 or later, Docker running
+```
+
+The stack check starts its own stack from empty volumes and removes it again, which takes a few minutes. It refuses a
+checkout linked to a hosted project and any API that is not local, and it fails if an image differs from this list, which
+is what Supabase CLI 3.3.0 starts:
+
+| Service | Image |
+|---|---|
+| Database (with `pg_cron`) | `public.ecr.aws/supabase/postgres:17.12.0.002` |
+| PostgREST | `public.ecr.aws/supabase/postgrest:v16.6` |
+| Gateway | `public.ecr.aws/supabase/kong:2.8.1` |
+| Edge Functions | `public.ecr.aws/supabase/edge-runtime:v1.79.3` |
 
 **Local development** needs Docker:
 
@@ -384,6 +447,7 @@ select pg_size_pretty(pg_total_relation_size('public.telemetry_runs'));
 
 - Anyone can submit valid-looking events: the client is open source. The limits bound the damage, they do not prevent it.
 - A flood can use up the global limit. Real events then get 429 and wait in the outbox.
+- The limits are fixed UTC windows: an installation can send twice its daily limit around midnight UTC.
 - A `duplicate` answer confirms that an `event_id` or `run_id` exists to someone who already holds that random UUID.
 - A deletion takes slightly longer when there are rows. This was not measured, and using it needs a guessed random UUID.
 - An event sent after a deletion creates a new record, so the client clears its outbox first.

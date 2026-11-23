@@ -2,13 +2,14 @@
 // first review (phase A) come first; they are kept, with a whole `steps` object
 // where the validator now requires one.
 import { toRow } from "../functions/_shared/telemetry.ts";
-import { asRole, assert, assertEq, docExample, freshDb, newId, type Row } from "./helpers.ts";
+import { asRole, assert, assertEq, auditSql, docExample, freshDb, newId, type Row } from "./helpers.ts";
 
 const db = await freshDb();
 const example = toRow(docExample());
 const jsonCols = new Set(["stock_measurements", "result_measurements", "tune", "steps"]);
 
-async function insert(r: Row, role = "service_role") {
+// As the owner, which is who telemetry_submit runs as.
+async function insert(r: Row, role = "postgres") {
   const keys = Object.keys(r);
   const vals = keys.map((k) => (jsonCols.has(k) && r[k] !== null ? JSON.stringify(r[k]) : r[k]));
   const ph = keys.map((k, i) => `$${i + 1}${jsonCols.has(k) ? "::jsonb" : ""}`);
@@ -90,7 +91,7 @@ refused("cancelled blames the card", () => fresh({ ...cancelled, error_code: "TO
 refused("cancelled names a stage", () => fresh({ ...cancelled, failed_stage: "search" }), "telemetry_cancelled_blames_nothing");
 refused("cancelled claims a saved tune", () => fresh({ ...cancelled, tune_saved: true, tune }));
 accepted("no_result, could not be saved", () => fresh({ ...noResult, error_code: "SAVE_FAILED", stock_restored: null }));
-accepted("not kept and the reset to stock failed", () => fresh({ ...noResult, error_code: "STOCK_RESTORE_FAILED", stock_restored: false }));
+accepted("not kept and the reset to stock failed", () => fresh({ ...noResult, error_code: "STOCK_RESTORE_FAILED", additional_error_codes: ["NOT_KEPT"], stock_restored: false }));
 refused("no_result without a reason", () => fresh({ ...noResult, error_code: null }), "telemetry_no_result_has_reason");
 refused("no_result with a technical code", () => fresh({ ...noResult, error_code: "DRIVER_RESET" }), "telemetry_no_result_has_reason");
 refused("NOT_KEPT is not a failure", () => fresh({ ...failed, error_code: "NOT_KEPT" }), "telemetry_failed_has_code");
@@ -132,7 +133,7 @@ refused("JSON null as a measurement object", () => ({ ...fresh(), stock_measurem
 Deno.test("refused: JSON null stored as a value in a jsonb column", async () => {
   let error = "";
   try {
-    await asRole(db, "service_role", () =>
+    await asRole(db, "postgres", () =>
       db.query(
         `insert into public.telemetry_runs (id, installation_id, run_id, schema_version, occurred_at, app_version, app_channel,
            optimization_type, profile, outcome, stock_measurements)
@@ -188,13 +189,65 @@ refused("stable with unknown time", () => fresh({ stock_measurements: { verdict:
 refused("a counted part on a run that did not hold", () => fresh({ ...failed, stock_measurements: { verdict: "too_hot", seconds: 30, counted_seconds: 15 } }));
 accepted("a failed retest that saved a lower step", () => fresh({ ...failed, ...retest, failed_stage: "retest", tune_saved: true, tune }));
 accepted("a stopped retest that saved a lower step", () => fresh({ ...cancelled, ...retest, tune_saved: true, tune, stock_restored: null }));
-refused("no_result claims a saved retest", () => fresh({ ...noResult, ...retest, error_code: "SAVE_FAILED", stock_restored: null, tune_saved: true, tune }), "telemetry_saved_means_success");
-accepted("internal error with a failed reset to stock", () => fresh({ ...failed, error_code: "INTERNAL_ERROR", stock_restored: false }));
+refused("no_result claims a saved retest", () => fresh({ ...noResult, ...retest, error_code: "SAVE_FAILED", stock_restored: null, tune_saved: true, tune }), "telemetry_save_failure_saved_nothing");
+refused("no_result claims a saved tune", () => fresh({ ...noResult, tune_saved: true, tune }), "telemetry_saved_means_success");
 accepted("cancelled with an internal error", () => fresh({ ...cancelled, error_code: "INTERNAL_ERROR" }));
 refused("a failed reset with an ordinary code", () => fresh({ ...cancelled, stock_restored: false }), "telemetry_stock_failure_has_code");
 accepted("All in one, fan failure in the final test", () => fresh(aioFailed));
 accepted("All in one, fan failure in the fan step", () => fresh({ ...aioFailed, failed_stage: "fan_tune" }));
 refused("fan failure with no stage", () => fresh({ ...aioFailed, failed_stage: null }), "telemetry_fan_failure_in_fan_step");
+
+// ---- several failures in one run
+const more = (error_code: string | null, ...additional_error_codes: string[]) => ({ error_code, additional_error_codes });
+const stockFailed = { ...failed, stock_restored: false };
+
+accepted("exception and failed reset: the reset comes first", () => fresh({ ...stockFailed, ...more("STOCK_RESTORE_FAILED", "INTERNAL_ERROR") }));
+refused("exception hides a failed reset", () => fresh({ ...stockFailed, ...more("INTERNAL_ERROR") }), "telemetry_stock_failure_has_code");
+refused("exception first, failed reset second", () => fresh({ ...stockFailed, ...more("INTERNAL_ERROR", "STOCK_RESTORE_FAILED") }));
+refused("a failed reset only in the additional codes", () => fresh({ ...failed, ...more("TOO_HOT", "STOCK_RESTORE_FAILED") }));
+refused("a failed reset claimed while the card is at stock", () => fresh({ ...failed, ...more("STOCK_RESTORE_FAILED", "TOO_HOT") }), "telemetry_stock_failure_has_code");
+refused("unreachable and reset failed together", () => fresh({ ...stockFailed, ...more("GPU_UNREACHABLE", "STOCK_RESTORE_FAILED") }), "telemetry_stock_failure_has_code");
+accepted("exception with the reset state unknown", () => fresh({ ...failed, stock_restored: null, ...more("INTERNAL_ERROR") }));
+accepted("unreachable keeps the cause of the run", () => fresh({ ...stockFailed, driver_resets: 1, ...more("GPU_UNREACHABLE", "DRIVER_RESET") }));
+accepted("every cause at once, in order", () =>
+  fresh({ ...stockFailed, ...more("STOCK_RESTORE_FAILED", "INTERNAL_ERROR", "TOO_HOT", "DRIVER_RESET", "STABILITY_CHECK_FAILED", "MEASUREMENT_FAILED", "SAVE_FAILED") }));
+
+accepted("failed, and its lower step could not be saved", () => fresh({ ...failed, ...retest, failed_stage: "retest", ...more("TOO_HOT", "SAVE_FAILED") }));
+accepted("cancelled, and the old tune could not be put back", () => fresh({ ...cancelled, ...more("SAVE_FAILED") }));
+accepted("cancelled, failed reset and a failed save", () => fresh({ ...cancelled, stock_restored: false, ...more("STOCK_RESTORE_FAILED", "SAVE_FAILED") }));
+accepted("no_result: failed save and failed reset", () => fresh({ ...noResult, stock_restored: false, ...more("STOCK_RESTORE_FAILED", "SAVE_FAILED") }));
+accepted("no_result: unreachable and a failed save", () => fresh({ ...noResult, stock_restored: false, driver_resets: 1, ...more("GPU_UNREACHABLE", "SAVE_FAILED") }));
+refused("no_result with only a failed reset", () => fresh({ ...noResult, stock_restored: false, ...more("STOCK_RESTORE_FAILED") }), "telemetry_no_result_has_reason");
+refused("no_result with a technical cause next to its reason", () => fresh({ ...noResult, ...more("TOO_HOT", "SAVE_FAILED") }), "telemetry_no_result_has_reason");
+refused("SAVE_FAILED on a run that saved", () => fresh({ ...failed, ...retest, failed_stage: "retest", tune_saved: true, tune, ...more("TOO_HOT", "SAVE_FAILED") }), "telemetry_save_failure_saved_nothing");
+refused("SAVE_FAILED as the code of a failed run", () => fresh({ ...failed, ...more("SAVE_FAILED") }), "telemetry_failed_has_code");
+refused("NOT_KEPT next to a failure", () => fresh({ ...failed, ...more("TOO_HOT", "NOT_KEPT") }), "telemetry_failed_has_code");
+refused("NOT_KEPT next to a retest's reset", () => fresh({ ...noResult, ...retest, stock_restored: false, ...more("STOCK_RESTORE_FAILED", "NOT_KEPT") }), "telemetry_not_kept_not_retest");
+refused("cancelled blames the card in an additional code", () => fresh({ ...cancelled, ...more("INTERNAL_ERROR", "TOO_HOT") }), "telemetry_cancelled_blames_nothing");
+refused("a fan failure outside All in one, as an additional code", () => fresh({ ...failed, ...more("TOO_HOT", "FAN_CONTROL_FAILED") }), "telemetry_fan_failure_in_fan_step");
+accepted("All in one: hot and a fan failure", () => fresh({ ...aioFailed, ...more("TOO_HOT", "FAN_CONTROL_FAILED") }));
+
+refused("additional codes without a first code", () => fresh({ ...cancelled, ...more(null, "SAVE_FAILED") }), "telemetry_error_set");
+refused("additional codes on a success", () => fresh(more(null, "SAVE_FAILED")), "telemetry_error_set");
+refused("additional codes on an interrupted run", () => fresh({ ...interrupted, ...more(null, "UNCLASSIFIED") }), "telemetry_error_set");
+refused("a code twice", () => fresh({ ...failed, ...more("TOO_HOT", "DRIVER_RESET", "DRIVER_RESET") }), "telemetry_error_set");
+refused("the first code repeated", () => fresh({ ...failed, ...more("TOO_HOT", "TOO_HOT") }), "telemetry_error_set");
+refused("additional codes out of order", () => fresh({ ...failed, ...more("TOO_HOT", "MEASUREMENT_FAILED", "DRIVER_RESET") }), "telemetry_error_set");
+refused("a first code below an additional one", () => fresh({ ...failed, ...more("DRIVER_RESET", "TOO_HOT") }), "telemetry_error_set");
+refused("an unknown additional code", () => fresh({ ...failed, ...more("TOO_HOT", "C:/Users/someone") }), "telemetry_error_set");
+refused("free text as an additional code", () => fresh({ ...failed, ...more("TOO_HOT", "unexpected error: boom") }), "telemetry_error_set");
+refused("a null additional code", () => fresh({ ...failed, error_code: "TOO_HOT", additional_error_codes: ["DRIVER_RESET", null] }), "telemetry_error_set");
+refused("no additional codes value", () => fresh({ ...failed, additional_error_codes: null }));
+refused("UNCLASSIFIED next to a known cause", () => fresh({ ...failed, ...more("TOO_HOT", "UNCLASSIFIED") }), "telemetry_unclassified_is_alone");
+accepted("UNCLASSIFIED next to a failed reset", () => fresh({ ...stockFailed, ...more("STOCK_RESTORE_FAILED", "UNCLASSIFIED") }));
+accepted("UNCLASSIFIED with a failed save", () => fresh({ ...failed, ...more("UNCLASSIFIED", "SAVE_FAILED") }));
+
+Deno.test("the order of the codes puts the state of the card first", async () => {
+  const r = await db.query<{ c: string[] }>("select public.telemetry_error_codes() as c");
+  assertEq(r.rows[0].c.slice(0, 3), ["GPU_UNREACHABLE", "STOCK_RESTORE_FAILED", "INTERNAL_ERROR"]);
+  assertEq(r.rows[0].c.length, 11);
+  assertEq(new Set(r.rows[0].c).size, 11);
+});
 
 // ---- access
 for (const role of ["anon", "authenticated"]) {
@@ -233,13 +286,25 @@ for (const role of ["anon", "authenticated"]) {
     });
   }
 }
+// A leaked service key can call the two entry points and nothing else.
 for (
   const q of [
+    "select * from public.telemetry_runs",
+    "insert into public.telemetry_runs (id) values ('00000000-0000-4000-8000-000000000001')",
     "update public.telemetry_runs set gpu_name = 'x'",
+    "delete from public.telemetry_runs",
     "truncate public.telemetry_runs",
+    "select * from public.telemetry_rate_limits",
+    "insert into public.telemetry_rate_limits values ('submit:global', now(), 1)",
+    "update public.telemetry_rate_limits set hits = 0",
     "truncate public.telemetry_rate_limits",
     "delete from public.telemetry_rate_limits",
     "select public.telemetry_purge_expired()",
+    "select public.telemetry_take('submit:global', now(), 10)",
+    "select public.telemetry_admit('submit', '00000000-0000-4000-8000-000000000001', 60, 1000)",
+    "select public.telemetry_id_bucket('submit', '00000000-0000-4000-8000-000000000001')",
+    "select public.telemetry_valid_tune('{}')",
+    "select public.telemetry_error_codes()",
   ]
 ) {
   Deno.test(`denied: service_role: ${q}`, async () => {
@@ -252,9 +317,35 @@ for (
     assert(error.includes("permission denied"), `got: ${error}`);
   });
 }
-Deno.test("service role reads the table", async () => {
-  const r = await asRole(db, "service_role", () => db.query<{ c: number }>("select count(*)::int as c from public.telemetry_runs"));
-  assert(r.rows[0].c > 0, "no rows");
+Deno.test("the service role can call the two entry points", async () => {
+  const r = await asRole(db, "service_role", () =>
+    db.query<{ s: string; d: string }>(
+      "select public.telemetry_submit('{}') as s, public.telemetry_delete('00000000-0000-4000-8000-0000000000aa') as d",
+    ));
+  assertEq(r.rows[0], { s: "invalid", d: "deleted" });
+});
+Deno.test("the access model holds in the catalog", async () => {
+  const r = await db.query<{ problem: string }>(auditSql());
+  assertEq(r.rows.map((x) => x.problem), []);
+});
+Deno.test("the audit sees what it is there to find", async () => {
+  const breaks: [string, string, string][] = [
+    ["grant select on public.telemetry_runs to anon", "revoke select on public.telemetry_runs from anon", "SELECT on telemetry_runs for anon"],
+    ["grant update on public.telemetry_rate_limits to service_role", "revoke update on public.telemetry_rate_limits from service_role", "UPDATE on telemetry_rate_limits for service_role"],
+    ["alter table public.telemetry_runs disable row level security", "alter table public.telemetry_runs enable row level security", "no row level security: telemetry_runs"],
+    ["create policy p on public.telemetry_runs using (true)", "drop policy p on public.telemetry_runs", "a policy on telemetry_runs: p"],
+    ["alter function public.telemetry_purge_expired() security definer", "alter function public.telemetry_purge_expired() security invoker", "SECURITY DEFINER: telemetry_purge_expired"],
+    ["alter function public.telemetry_submit(jsonb) reset search_path", "alter function public.telemetry_submit(jsonb) set search_path = ''", "search_path not empty: telemetry_submit"],
+    ["grant execute on function public.telemetry_take(text, timestamptz, integer) to service_role", "revoke execute on function public.telemetry_take(text, timestamptz, integer) from service_role", "EXECUTE on function telemetry_take for service_role"],
+    ["grant execute on function public.telemetry_submit(jsonb) to anon", "revoke execute on function public.telemetry_submit(jsonb) from anon", "EXECUTE on function telemetry_submit for anon"],
+  ];
+  for (const [breakIt, undo, expected] of breaks) {
+    await db.exec(breakIt);
+    const r = await db.query<{ problem: string }>(auditSql());
+    await db.exec(undo);
+    assert(r.rows.some((x) => x.problem === expected), `"${expected}" not in ${JSON.stringify(r.rows)}`);
+  }
+  assertEq((await db.query(auditSql())).rows, [], "everything undone");
 });
 Deno.test("row level security is on, without a policy", async () => {
   const r = await db.query<{ relname: string; relrowsecurity: boolean }>(

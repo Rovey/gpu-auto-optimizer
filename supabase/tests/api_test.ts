@@ -273,6 +273,133 @@ Deno.test("counters do not hold the installation ID", async () => {
   for (const row of r.rows) assert(!row.bucket.includes(e.installation_id as string), "raw ID in a counter");
   await clearLimits();
 });
+// ---- the counters stay bounded
+const counters = async (where = "true") =>
+  (await db.query<{ c: number }>(`select count(*)::int as c from public.telemetry_rate_limits where ${where}`)).rows[0].c;
+const hitsOf = async (bucket: string, window: string) =>
+  (await db.query<{ hits: number }>(
+    `select hits from public.telemetry_rate_limits where bucket = ${bucket} and window_start = date_trunc('${window}', now(), 'UTC')`,
+  )).rows[0]?.hits;
+const hash = (n: number) => n.toString(16).padStart(64, "0");
+// Counters of a window that has ended, or of one that has not.
+const seed = (n: number, start: string, first = 1) =>
+  db.exec(`insert into public.telemetry_rate_limits
+    select 'submit:' || lpad(to_hex(i), 64, '0'), ${start}, 1 from generate_series(${first}, ${first + n - 1}) as i`);
+const yesterday = "date_trunc('day', now(), 'UTC') - interval '1 day'";
+const today = "date_trunc('day', now(), 'UTC')";
+
+Deno.test("rotating installation IDs add no counter once the hour is full", async () => {
+  await clearLimits();
+  await db.exec(`insert into public.telemetry_rate_limits values
+    ('submit:global', date_trunc('hour', now(), 'UTC'), 1000), ('delete:global', date_trunc('hour', now(), 'UTC'), 600)`);
+  for (let i = 0; i < 25; i++) {
+    assertEq(await submit(event()), limited);
+    assertEq((await remove(newId())).status, 429);
+  }
+  assertEq(await counters(), 2, "only the two global counters");
+  assertEq(await hitsOf("'submit:global'", "hour"), 1000);
+  assertEq(await hitsOf("'delete:global'", "hour"), 600);
+  await clearLimits();
+});
+Deno.test("an installation at its limit does not use up the global limit", async () => {
+  await clearLimits();
+  const id = newId();
+  await db.query(
+    `insert into public.telemetry_rate_limits values (public.telemetry_id_bucket('submit', $1), date_trunc('day', now(), 'UTC'), 60)`,
+    [id],
+  );
+  for (let i = 0; i < 20; i++) assertEq(await submit(event((e) => (e.installation_id = id))), limited);
+  assertEq(await hitsOf("'submit:global'", "hour"), undefined, "no global hit taken");
+  await clearLimits();
+});
+Deno.test("each admitted request removes ended counters, never active ones", async () => {
+  await clearLimits();
+  await seed(25, yesterday);
+  await seed(5, today, 1000);
+  assertEq(await submit(event()), accepted);
+  assertEq(await counters(`window_start < ${today}`), 15, "ten ended counters gone");
+  assertEq(await counters(`window_start >= ${today} and bucket like 'submit:0000000000%'`), 5, "active counters stay");
+  assertEq(await submit(event()), accepted);
+  assertEq(await submit(event()), accepted);
+  assertEq(await counters(`window_start < ${today}`), 0, "drained");
+  assertEq(await counters(`window_start >= ${today} and bucket like 'submit:0000000000%'`), 5, "active counters still there");
+  await clearLimits();
+});
+Deno.test("a refused request removes nothing and adds nothing", async () => {
+  await clearLimits();
+  await seed(5, yesterday);
+  await db.exec(`insert into public.telemetry_rate_limits values ('submit:global', date_trunc('hour', now(), 'UTC'), 1000)`);
+  const before = await counters();
+  assertEq(await submit(event()), limited);
+  assertEq(await counters(), before);
+  await clearLimits();
+});
+Deno.test("the boundary of a counter is the end of its window", async () => {
+  await clearLimits();
+  const mine = newId();
+  const bucket = `public.telemetry_id_bucket('submit', '${mine}')`;
+  await db.exec(`insert into public.telemetry_rate_limits values
+    ('submit:${hash(1)}', ${today} - interval '1 microsecond', 1),
+    ('submit:${hash(2)}', ${today}, 1),
+    ('delete:global', ${today} - interval '1 hour', 1),
+    ('delete:global', date_trunc('hour', now(), 'UTC'), 1),
+    (${bucket}, ${today}, 59)`);
+  await db.exec("select public.telemetry_purge_expired()");
+  assertEq(await counters(`bucket = 'submit:${hash(1)}'`), 0, "ended just before today");
+  assertEq(await counters(`bucket = 'submit:${hash(2)}'`), 1, "started at the start of today");
+  assertEq(await counters(`bucket = 'delete:global' and window_start < ${today}`), 0, "an hour of yesterday");
+  assertEq(await counters(`bucket = 'delete:global' and window_start >= ${today}`), 1, "the current hour");
+  // The installation's count survives the cleanup, so the cleanup cannot reset its limit.
+  assertEq(await submit(event((e) => (e.installation_id = mine))), accepted);
+  assertEq(await submit(event((e) => (e.installation_id = mine))), limited, "60 today, also after the purge");
+  await clearLimits();
+});
+Deno.test("the purge removes every ended counter at once", async () => {
+  await clearLimits();
+  await seed(500, yesterday);
+  await db.exec("select public.telemetry_purge_expired()");
+  assertEq(await counters(), 0);
+});
+// ---- several failures, through the endpoint
+Deno.test("simultaneous failures arrive in full and in order", async () => {
+  await clearLimits();
+  const e = event((x) => {
+    asFailed(x);
+    Object.assign(x.optimization, {
+      stock_restored: false, error_code: "STOCK_RESTORE_FAILED", additional_error_codes: ["INTERNAL_ERROR", "TOO_HOT", "SAVE_FAILED"],
+    });
+  });
+  assertEq(await submit(e), accepted);
+  const r = await db.query<{ error_code: string; additional_error_codes: string[] }>(
+    "select error_code, additional_error_codes from public.telemetry_runs where id = $1",
+    [e.event_id],
+  );
+  assertEq(r.rows[0], { error_code: "STOCK_RESTORE_FAILED", additional_error_codes: ["INTERNAL_ERROR", "TOO_HOT", "SAVE_FAILED"] });
+  await clearLimits();
+});
+Deno.test("additional codes are refused unless they are a list of known codes", async () => {
+  await clearLimits();
+  const withCodes = (v: unknown) => event((x) => {
+    asFailed(x);
+    x.optimization.additional_error_codes = v;
+  });
+  for (const bad of [null, "SAVE_FAILED", {}, [1], [null], ["free text"], ["SAVE_FAILED", "SAVE_FAILED"], Array(11).fill("SAVE_FAILED"), ["x".repeat(129)]]) {
+    assertEq(await submit(withCodes(bad)), invalid, JSON.stringify(bad));
+  }
+  assertEq(await submit(event((x) => delete x.optimization.additional_error_codes)), invalid, "the key is required");
+  assertEq(await submit(withCodes(["SAVE_FAILED"])), accepted);
+  await clearLimits();
+});
+Deno.test("an internal error cannot hide a failed reset to stock", async () => {
+  await clearLimits();
+  const hidden = event((x) => {
+    asFailed(x);
+    Object.assign(x.optimization, { stock_restored: false, error_code: "INTERNAL_ERROR" });
+  });
+  assertEq(await submit(hidden), invalid);
+  assertEq(await count(db, "id = $1", [hidden.event_id]), 0);
+  await clearLimits();
+});
 // 13
 Deno.test("an oversized request is refused", async () => {
   const big = JSON.stringify({ ...event(), padding: "x".repeat(MAX_BODY_BYTES) });
@@ -430,14 +557,14 @@ Deno.test("retention removes what is older than 12 months and nothing else", asy
   const justInside = await insertAt("now() - interval '12 months' + interval '1 minute'");
   const recent = await insertAt("now()");
   await db.exec(`insert into public.telemetry_rate_limits values
-    ('submit:global', now() - interval '3 days', 5), ('delete:global', now() - interval '1 hour', 5)`);
+    ('submit:global', now() - interval '3 days', 5), ('delete:global', date_trunc('hour', now(), 'UTC'), 5)`);
   const removed = await db.query<{ n: number }>("select public.telemetry_purge_expired() as n");
   assert(removed.rows[0].n >= 1, "nothing removed");
   assertEq(await count(db, "id = $1", [expired]), 0, "expired");
   assertEq(await count(db, "id = $1", [justInside]), 1, "one minute inside the period");
   assertEq(await count(db, "id = $1", [recent]), 1, "recent");
   const old = await db.query<{ c: number }>(
-    "select count(*)::int as c from public.telemetry_rate_limits where window_start < now() - interval '2 days'",
+    "select count(*)::int as c from public.telemetry_rate_limits where window_start < date_trunc('day', now(), 'UTC')",
   );
   assertEq(old.rows[0].c, 0, "old counters");
   const kept = await db.query<{ c: number }>("select count(*)::int as c from public.telemetry_rate_limits where bucket = 'delete:global'");

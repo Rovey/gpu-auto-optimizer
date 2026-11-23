@@ -29,6 +29,34 @@ jobs:
       - name: Build and test
         run: cmake --workflow --preset ci
 
+  # The telemetry backend, on a throwaway local Supabase stack. No secret and no
+  # hosted project. No path filter: a backend test is never skipped.
+  backend:
+    name: Telemetry backend (local only)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed # v2.0.5
+        with:
+          deno-version: 2.9.6
+
+      - name: No backend test is switched off
+        run: |
+          if grep -rnE 'Deno\.test\.(ignore|only)|(ignore|only): *true' supabase/tests; then
+            echo "::error::a backend test is marked ignore or only"
+            exit 1
+          fi
+
+      - name: Schema, endpoints and limits
+        run: deno test --no-lock --allow-read --allow-env --allow-sys supabase/tests/
+
+      - name: Local Supabase stack
+        run: node supabase/tests/stack/run.mjs
+
   asan:
     name: Unit tests under AddressSanitizer
     runs-on: windows-2025
