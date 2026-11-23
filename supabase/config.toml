@@ -1,0 +1,22 @@
+# Local development of the telemetry backend (docs/telemetry.md). Only the
+# database and the Edge Functions are used.
+project_id = "gpu-auto-optimizer-telemetry"
+
+[db]
+major_version = 17
+
+[storage]
+enabled = false
+
+[realtime]
+enabled = false
+
+[auth]
+enabled = false
+
+# Public endpoints: the client has no account and no key.
+[functions.submit-telemetry]
+verify_jwt = false
+
+[functions.delete-telemetry]
+verify_jwt = false
