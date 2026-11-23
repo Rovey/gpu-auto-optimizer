@@ -1,0 +1,15 @@
+# Local development of the telemetry backend (docs/telemetry.md). Only the
+# database and the Edge Functions are used.
+project_id = "gpu-auto-optimizer-telemetry"
+
+[db]
+major_version = 17
+
+[storage]
+enabled = false
+
+[realtime]
+enabled = false
+
+[auth]
+enabled = false
